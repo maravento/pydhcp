@@ -1361,7 +1361,7 @@ class DHCPServer:
         is_own_ip = existing_lease and existing_lease.ip == offered_ip
 
         def _send_offer():
-            xid_hex = pkt["xid"].hex()
+            xid_hex = (pkt["xid"].hex(), mac)
             with self._pending_lock:
                 self._pending[xid_hex] = offered_ip
                 if len(self._pending) > 1024:
@@ -1412,7 +1412,7 @@ class DHCPServer:
 
         requested = pkt["requested_ip"]
         ciaddr    = pkt["ciaddr"]
-        xid_key   = pkt["xid"].hex()
+        xid_key   = (pkt["xid"].hex(), mac)
 
         if requested and requested != "0.0.0.0":
             target_ip = requested

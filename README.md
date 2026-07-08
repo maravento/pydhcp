@@ -74,7 +74,7 @@
 
 > **Note:** DHCP (RFC 2131) inherits its minimum packet format from BOOTP (RFC 951); pydhcpd pads packets to that minimum for protocol compliance. This does not imply support for BOOTP clients or PXE boot.
 >
-> **Nota:** Nota: DHCP (RFC 2131) hereda el formato mínimo de paquete de BOOTP (RFC 951); pydhcpd rellena los paquetes a ese mínimo por cumplimiento del protocolo. Esto no implica soporte para clientes BOOTP ni arranque PXE.
+> **Nota:** DHCP (RFC 2131) hereda el formato mínimo de paquete de BOOTP (RFC 951); pydhcpd rellena los paquetes a ese mínimo por cumplimiento del protocolo. Esto no implica soporte para clientes BOOTP ni arranque PXE.
 
 ## Repository Structure
 
@@ -285,7 +285,7 @@ sudo bash tools/pyleases.sh
 >
 > **Primera corrida**: pyleases.sh inicia un setup interactivo que pregunta IP del servidor DHCP, máscara, rango del pool de bloqueo y DNS, y escribe `/etc/pydhcp/tools/pyleases.env`. Elimine ese archivo para volver a ejecutar el setup. Algunas preguntas se solapan con `pyinstall.sh` — responda consistentemente.
 
-##### Supported directives / Directivas soportadas
+##### Supported directives
 
 | Directive | Description | Descripción |
 |-----------|-------------|-------------|
@@ -305,7 +305,7 @@ sudo bash tools/pyleases.sh
 | `min-lease-time`, `default-lease-time`, `max-lease-time` | Lease duration controls | Control de duración de leases |
 | `option routers`, `option subnet-mask`, `option broadcast-address`, `option domain-name-servers` | Standard DHCP options | Opciones DHCP estándar |
 
-**Warning / Advertencia:**
+**Warning**
 
 <table>
   <tr>
@@ -479,20 +479,28 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
   <tr>
     <td style="width: 50%; vertical-align: top;">
       When <code>authoritative;</code> is set, the server sends NAK to clients that request an IP assigned by a rogue DHCP server on the same network. The rogue may win the OFFER race, but the authoritative server destroys the lease by sending NAK to the REQUEST — forcing the client to rediscover and obtain the correct IP. This behavior is equivalent between isc-dhcp-server and pydhcpd.
+      <br><br>
+      <b>Note:</b> <code>authoritative;</code> does not prevent a rogue DHCP server from reaching clients — <code>DHCPOFFER</code>/<code>DHCPACK</code> go directly to the client, and no DHCP server can block another's packets at the protocol level. It only forces a correction after the fact: the client's <code>REQUEST</code> is broadcast and always reaches the authoritative server, which can NAK it, forcing the client to discard the rogue lease and restart. As a complementary measure, it is recommended to check whether your switch hardware supports <b>DHCP Snooping</b> and, if so, consider enabling it — this blocks rogue DHCP traffic at the network layer, before it ever reaches a client, rather than correcting it afterward like <code>authoritative</code> does.
     </td>
     <td style="width: 50%; vertical-align: top;">
       Cuando se configura <code>authoritative;</code>, el servidor envía NAK a clientes que solicitan una IP asignada por un servidor DHCP no autorizado en la misma red. El rogue puede ganar la carrera del OFFER, pero el servidor autoritativo destruye el arrendamiento enviando NAK al REQUEST — forzando al cliente a redescubrir y obtener la IP correcta. Este comportamiento es equivalente entre isc-dhcp-server y pydhcpd.
+      <br><br>
+      <b>Nota:</b> <code>authoritative;</code> no evita que un servidor DHCP no autorizado le llegue a los clientes — <code>DHCPOFFER</code>/<code>DHCPACK</code> van directo al cliente, y ningún servidor DHCP puede bloquear los paquetes de otro a nivel de protocolo. Solo corrige el resultado después del hecho: el <code>REQUEST</code> del cliente se manda por broadcast y siempre llega al servidor autoritativo, que puede rechazarlo con NAK, forzando al cliente a descartar el lease del rogue y reiniciar. Como medida complementaria, se recomienda verificar si su hardware de switch soporta <b>DHCP Snooping</b> y, de ser así, considerar activarlo — esto bloquea el tráfico DHCP no autorizado a nivel de red, antes de que le llegue al cliente, en vez de corregirlo después como hace <code>authoritative</code>.
     </td>
   </tr>
 </table>
 
-| Event | isc-dhcp-server (rogue) | pydhcpd (authoritative) |
-|-------|-------------------------|-------------------------|
-| Rogue offers IP to client | `DHCPOFFER on 192.168.10.222 to bb:cc:dd:ee:ff:aa (BAR) via enp2s0` | — |
+The table below compares what each daemon's own log would show if it were the **authoritative** server defending against the same rogue, event by event — not a mixed trace of one daemon acting as the rogue.
+
+| Event | isc-dhcp-server (as authoritative) | pydhcpd (as authoritative) |
+|-------|-------------------------------------|-----------------------------|
+| Rogue offers IP to client | *(not observed)* † | *(not observed)* † |
 | Client requests rogue IP | `DHCPREQUEST for 192.168.10.222 (192.168.10.249) from bb:cc:dd:ee:ff:aa (BAR) via enp2s0` | `REQUEST from bb:cc:dd:ee:ff:aa (BAR)` |
-| Rogue acknowledges | `DHCPACK on 192.168.10.222 to bb:cc:dd:ee:ff:aa (BAR) via enp2s0` | — |
-| Authoritative server rejects | — | `NAK → bb:cc:dd:ee:ff:aa` |
+| Rogue acknowledges | *(not observed)* † | *(not observed)* † |
+| **Authoritative server rejects** | `DHCPNAK on 192.168.10.222 to bb:cc:dd:ee:ff:aa via enp2s0` | `NAK → bb:cc:dd:ee:ff:aa` |
 | Client rediscovers | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enp2s0` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)` |
+
+† Neither daemon sees these packets: `DHCPOFFER`/`DHCPACK` are addressed to the client, not to other DHCP servers on the segment.
 
 #### Rate Limiting
 
@@ -522,6 +530,61 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | Project | Version | EOL Date |
 | :-----: | :-----: | :------: |
 | [ISC-DHCP](https://github.com/isc-projects/dhcp) | 4.4.3-P1-4ubuntu2 | 2022 |
+
+## NOTICE
+
+---
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <strong>This repository</strong>
+      <ul>
+        <li>May include third-party components.</li>
+        <li>Does not accept Pull Requests. Changes must be proposed via Issues.</li>
+      </ul>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <strong>Este repositorio</strong>
+      <ul>
+        <li>Puede incluir componentes de terceros.</li>
+        <li>No acepta Pull Requests. Los cambios deben proponerse mediante Issues.</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+## STARGAZERS
+
+---
+
+[![Stargazers](https://bytecrank.com/nastyox/reporoster/php/stargazersSVG.php?user=maravento&repo=pydhcp)](https://github.com/maravento/pydhcp/stargazers)
+
+## SPONSOR THIS PROJECT
+
+---
+
+[![Image](https://raw.githubusercontent.com/maravento/winexternal/master/img/maravento-paypal.png)](https://paypal.me/maravento)
+
+## PROJECT LICENSES
+
+---
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      This project uses a dual-licensing model to balance software freedom with content protection:
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Este proyecto utiliza un modelo de licencia dual para equilibrar la libertad del software con la protección del contenido:
+    </td>
+  </tr>
+</table>
+
+| Content | Licensed Under |
+|---|---|
+|Scripts, Binaries, Infrastructure|[![GPL-3.0](https://img.shields.io/badge/Open_Core-GPLv3-blue.svg?style=for-the-badge&labelWidth=120&logoWidth=20)](https://www.gnu.org/licenses/gpl.txt)|
+|RAG, Workers, Specialized Modules, Docs|[![CC](https://img.shields.io/badge/Core_Engine-CC_BY--NC--ND_4.0-lightgrey.svg?style=for-the-badge&labelWidth=120&logoWidth=20)](https://creativecommons.org/licenses/by-nc-nd/4.0/)|
 
 ## DISCLAIMER
 
