@@ -57,6 +57,7 @@
         <li>DDNS</li>
         <li>Multiple interfaces</li>
         <li>BOOTP / PXE</li>
+        <li>DHCP relay agents (no legitimate use case without multi-segment/multi-interface support — see above)</li>
       </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
@@ -67,6 +68,7 @@
         <li>DDNS</li>
         <li>Múltiples interfaces</li>
         <li>BOOTP / PXE</li>
+        <li>Agentes de relay DHCP (sin caso de uso legítimo sin soporte multi-segmento/multi-interfaz — ver arriba)</li>
       </ul>
     </td>
   </tr>
@@ -218,19 +220,24 @@ sudo systemctl status pydhcpd
 #         CPU: 331ms
 #      CGroup: /system.slice/pydhcpd.service
 #              └─2356158 /usr/bin/python3 /etc/pydhcp/pydhcpd.py
-# jun 09 17:51:49 host python3[2356158]: 2026-06-09 17:51:49,070 [INFO] Config loaded: 10 static hosts, 5 blocked MACs
-# jun 09 17:51:49 host python3[2356158]: 2026-06-09 17:51:49,071 [INFO] Leases loaded: 0 entries
-# jun 09 17:51:49 host python3[2356158]: 2026-06-09 17:51:49,071 [INFO] pydhcpd started (pid 2356158, interface eth0)
-# jun 09 17:51:49 host python3[2356158]: 2026-06-09 17:51:49,072 [INFO] Listening on eth0 (DHCP port 67)
+# jun 09 17:51:49 host systemd[1]: Started pydhcpd.service - pydhcpd - Python DHCP Daemon.
+# jun 09 17:51:49 host python3[1411247]: 2026-06-09 17:51:49,068 [INFO] Attached BPF filter to raw socket (udp dst port 67)
+# jun 09 17:51:49 host python3[1449863]: 2026-06-09 16:20:31,317 [INFO] Config loaded: 158 static hosts, 208 blocked MACs
+# jun 09 17:51:49 host python3[1449863]: 2026-06-09 16:20:31,323 [INFO] Leases loaded: 2 entries
+# jun 09 17:51:49 host python3[1411247]: 2026-06-09 17:51:49,068 [INFO] Listening on enp2s0 (DHCP port 67)
+
+# Other entries...
+# jun 09 17:51:49 host python3[2356158]: 2026-06-09 17:51:49,071 [INFO] pydhcpd started (pid 2356158, interface enp2s0)
+# jun 09 17:51:49 host python3[2356158]: 2026-06-09 17:51:49,072 [INFO] Listening on enp2s0 (DHCP port 67)
 # jun 09 17:51:52 host python3[2356158]: 2026-06-09 17:51:52,316 [INFO] DISCOVER from aa:bb:cc:dd:ee:ff (FooBar)
 # jun 09 17:51:52 host python3[2356158]: 2026-06-09 17:51:52,316 [WARNING] Blocked: aa:bb:cc:dd:ee:ff (deny blockdhcp)
 # jun 09 17:52:02 host python3[2356158]: 2026-06-09 17:52:02,086 [INFO] DISCOVER from bb:cc:dd:ee:ff:aa (<no hostname>)
-# jun 09 17:52:02 host python3[2356158]: 2026-06-09 17:52:02,154 [INFO] OFFER bb:cc:dd:ee:ff:aa → 192.168.10.231
+# jun 09 17:52:02 host python3[2356158]: 2026-06-09 17:52:02,154 [INFO] OFFER bb:cc:dd:ee:ff:aa → 192.168.0.231
 # jun 09 17:52:02 host python3[2356158]: 2026-06-09 17:52:02,264 [INFO] REQUEST from bb:cc:dd:ee:ff:aa (<no hostname>)
-# jun 09 17:52:02 host python3[2356158]: 2026-06-09 17:52:02,283 [INFO] ACK bb:cc:dd:ee:ff:aa → 192.168.10.231 (lease 60s)
+# jun 09 17:52:02 host python3[2356158]: 2026-06-09 17:52:02,283 [INFO] ACK bb:cc:dd:ee:ff:aa → 192.168.0.231 (lease 60s)
 # jun 09 17:52:15 host python3[2356158]: 2026-06-09 17:52:15,391 [INFO] DISCOVER from cc:dd:ee:ff:aa:bb (BazHost)
 # jun 09 17:52:15 host python3[2356158]: 2026-06-09 17:52:15,391 [WARNING] No IP available for cc:dd:ee:ff:aa:bb
-# jun 09 17:53:02 host python3[2356158]: 2026-06-09 17:53:02,173 [INFO] Lease expired: 192.168.10.230
+# jun 09 17:53:02 host python3[2356158]: 2026-06-09 17:53:02,173 [INFO] Lease expired: 192.168.0.230
 
 # View active leases | Ver concesiones activas
 cat /etc/pydhcp/pydhcpd.leases
@@ -248,6 +255,14 @@ sudo journalctl -u pydhcpd -f
 sudo tail -f /var/log/pydhcpd.log
 ```
 
+> **Note:** `pydhcpd` can be managed through three entry points — `systemctl`, the `/etc/init.d/pydhcpd` wrapper, and `pyleases.sh` (which calls `systemctl stop`/`start` internally whenever it regenerates `pydhcpd.conf`). On a `systemd` host (the only supported environment — see [Requirements](#requirements)), the `init.d` wrapper does not start its own process: it detects `systemd` and simply runs the equivalent `systemctl` command, so it and `systemctl` are always in sync, never two independent daemons. The only theoretical race is at the PID-file level (`write_pid()`) if the daemon were ever launched completely outside of `systemd`'s management — not a realistic path on the supported environment, but as a matter of operational hygiene: **use a single entry point at a time.** Don't run `pyleases.sh`, `systemctl`, and the `init.d` wrapper concurrently against the same instance (e.g. don't kick off `pyleases.sh` in one terminal while manually restarting via `systemctl` in another) — let one lifecycle operation finish before starting the next.
+>
+> **Nota:** `pydhcpd` se puede administrar desde tres puntos de entrada — `systemctl`, el wrapper `/etc/init.d/pydhcpd`, y `pyleases.sh` (que llama internamente a `systemctl stop`/`start` cada vez que regenera `pydhcpd.conf`). En un host con `systemd` (el único entorno soportado — ver [Requirements](#requirements)), el wrapper `init.d` no arranca su propio proceso: detecta `systemd` y simplemente ejecuta el `systemctl` equivalente, así que él y `systemctl` siempre están sincronizados, nunca son dos demonios independientes. La única carrera teórica ocurre a nivel del archivo PID (`write_pid()`) si el demonio se lanzara completamente por fuera de la gestión de `systemd` — no es un camino real en el entorno soportado, pero como buena práctica operativa: **usa un solo punto de entrada a la vez.** No corras `pyleases.sh`, `systemctl` y el wrapper `init.d` de forma concurrente sobre la misma instancia (p.ej. no lances `pyleases.sh` en una terminal mientras reiniciás manualmente con `systemctl` en otra) — dejá que termine una operación del ciclo de vida antes de iniciar la siguiente.
+
+> **Note:** if `pydhcpd` crashes or exits with an error (e.g. the configured network interface is not present at startup), `systemd` restarts it automatically — `pydhcpd.service` sets `Restart=on-failure` with `RestartSec=5` (retry every 5 seconds), capped at `StartLimitBurst=10` attempts within a `StartLimitIntervalSec=120` (2 minute) window. If the underlying problem is not resolved within those 10 attempts, `systemd` gives up and leaves the service in a `failed` state — it will **not** keep retrying indefinitely, and `pydhcpd` has no separate alerting mechanism to notify you when this happens. Check with `systemctl status pydhcpd` (a `failed` state needs a manual `systemctl reset-failed pydhcpd` before it can be started again) and watch `/var/log/pydhcpd.log` / `journalctl -u pydhcpd` for the root cause.
+>
+> **Nota:** si `pydhcpd` falla o termina con un error (p.ej. la interfaz de red configurada no existe todavía al arrancar), `systemd` lo reinicia automáticamente — `pydhcpd.service` define `Restart=on-failure` con `RestartSec=5` (reintenta cada 5 segundos), con un tope de `StartLimitBurst=10` intentos dentro de una ventana de `StartLimitIntervalSec=120` (2 minutos). Si el problema de fondo no se resuelve dentro de esos 10 intentos, `systemd` se da por vencido y deja el servicio en estado `failed` — **no** va a seguir reintentando indefinidamente, y `pydhcpd` no tiene un mecanismo de aviso separado que notifique cuando esto pasa. Verifica con `systemctl status pydhcpd` (un estado `failed` necesita un `systemctl reset-failed pydhcpd` manual antes de poder arrancarlo de nuevo) y revisa `/var/log/pydhcpd.log` / `journalctl -u pydhcpd` para encontrar la causa raíz.
+
 > **Note:** `ping-check true` is enabled in the shipped `pydhcpd.conf`. The daemon sends a ping before each OFFER to verify the IP is not already in use. In environments with strict firewall rules blocking ICMP, the ping will always time out silently and `ping-check` will have no effect. To disable it, set `ping-check false;` in `/etc/pydhcp/pydhcpd.conf`. If using `pyleases.sh`, set `PING_CHECK_ENABLED=false` in `pyleases.env` instead — the script regenerates `pydhcpd.conf` on every run.
 >
 > **Nota:** `ping-check true` viene activado en el `pydhcpd.conf` enviado. El demonio envía un ping antes de cada OFFER para verificar que la IP no está en uso. En entornos con reglas de firewall estrictas que bloquean ICMP, el ping siempre expirará sin respuesta y `ping-check` no tendrá ningún efecto. Para desactivarlo, establece `ping-check false;` en `/etc/pydhcp/pydhcpd.conf`. Si usas `pyleases.sh`, establece `PING_CHECK_ENABLED=false` en `pyleases.env` — el script regenera `pydhcpd.conf` en cada ejecución.
@@ -255,6 +270,22 @@ sudo tail -f /var/log/pydhcpd.log
 > **Note:** `cleanup-interval` controls how often (in seconds) the daemon removes expired leases from memory. The default is `60`. If you use a short pool lease-time (e.g. `10` or `30` seconds), set `cleanup-interval` to the same value or lower so that expired leases are freed promptly and the pool does not appear exhausted. When using `pyleases.sh`, set `CLEANUP_INTERVAL` in `pyleases.env` — it is written into `pydhcpd.conf` on every run.
 >
 > **Nota:** `cleanup-interval` controla con qué frecuencia (en segundos) el demonio elimina los arrendamientos expirados de la memoria. El valor por defecto es `60`. Si usas un lease-time corto en el pool (p.ej. `10` o `30` segundos), establece `cleanup-interval` al mismo valor o menor para que los arrendamientos expirados se liberen rápidamente y el pool no parezca agotado. Al usar `pyleases.sh`, define `CLEANUP_INTERVAL` en `pyleases.env` — se escribe en `pydhcpd.conf` en cada ejecución.
+
+> **Note:** the block pool's `min-lease-time` / `default-lease-time` / `max-lease-time` default to **60 seconds**, consistently across every path in this project: the shipped `pydhcpd.conf` template ships with `60` written explicitly in the `pool { }` block, `pyleases.sh` writes `60` (its `CLEANUP_INTERVAL` default) into the pool block on a fresh install, and `pydhcpd.py`'s own built-in fallback is also `60` (used only if a hand-written config omits the pool lease-time lines entirely). This keeps the default consistent with the short-lived, temporary nature of the block pool — unknown/blocked clients get a brief lease that is quickly recycled, unlike `AUTHORIZED_LEASE_TIME` (default `2592000`s / 30 days) used for the subnet-level lease given to authorized/static clients.
+>
+> **To change it:** this is a per-installation choice, not something you edit in the project's code. If you manage `pydhcpd.conf` by hand, edit the `pool { min-lease-time / default-lease-time / max-lease-time }` values directly in your live `/etc/pydhcp/pydhcpd.conf` and restart/reload the daemon. If you use `pyleases.sh`, edit `CLEANUP_INTERVAL` in your `/etc/pydhcp/tools/pyleases.env` and re-run `pyleases.sh` — it rewrites `pydhcpd.conf` from that value on every run.
+>
+> **Nota:** el `min-lease-time` / `default-lease-time` / `max-lease-time` del pool de bloqueo tienen por defecto **60 segundos**, de forma consistente en los tres caminos del proyecto: la plantilla `pydhcpd.conf` incluida trae `60` escrito explícitamente en el bloque `pool { }`, `pyleases.sh` escribe `60` (su valor por defecto de `CLEANUP_INTERVAL`) en el bloque del pool en una instalación nueva, y el respaldo interno propio de `pydhcpd.py` también es `60` (se usa solo si una configuración escrita a mano omite por completo las líneas de lease-time del pool). Esto mantiene el valor por defecto consistente con la naturaleza breve y temporal del pool de bloqueo — los clientes desconocidos/bloqueados reciben un lease corto que se recicla rápido, a diferencia de `AUTHORIZED_LEASE_TIME` (por defecto `2592000`s / 30 días) usado para el lease a nivel de subred que reciben los clientes autorizados/estáticos.
+>
+> **Para cambiarlo:** es una decisión de cada instalación, no algo que se edite en el código del proyecto. Si administras `pydhcpd.conf` a mano, edita los valores de `pool { min-lease-time / default-lease-time / max-lease-time }` directamente en tu `/etc/pydhcp/pydhcpd.conf` real y reinicia/recarga el demonio. Si usas `pyleases.sh`, edita `CLEANUP_INTERVAL` en tu `/etc/pydhcp/tools/pyleases.env` y vuelve a correr `pyleases.sh` — reescribe `pydhcpd.conf` a partir de ese valor en cada ejecución.
+
+> **Note:** when an IP is quarantined — either because a client sent a DHCPDECLINE (ignored by default, see `deny declines;` above) or because `ping-check` detects it is already in use before an OFFER — it is held out of the pool for **60 seconds**, matching the pool lease time so a quarantined address is retried on the same cadence as a normal lease cycle instead of being held far longer than any lease would last.
+>
+> **Nota:** cuando una IP se pone en cuarentena — ya sea porque un cliente envió un DHCPDECLINE (ignorado por defecto, ver `deny declines;` arriba) o porque `ping-check` detecta que ya está en uso antes de un OFFER — se aparta del pool por **60 segundos**, igual que el lease del pool, para que una dirección en cuarentena se reintente con la misma cadencia que un ciclo de lease normal en vez de quedar apartada mucho más tiempo del que dura cualquier lease.
+
+> **Note:** the `pool { range A B; }` directive is capped at **65536 addresses** (a `/16`). The daemon builds the full address set in memory at startup and re-sorts the free set on every allocation, so an oversized range (e.g. a `/8`) would waste memory and CPU proportional to its size. A range larger than the cap is rejected at config load (or `SIGHUP` reload) with a clear error instead of being silently accepted.
+>
+> **Nota:** la directiva `pool { range A B; }` tiene un tope de **65536 direcciones** (un `/16`). El demonio construye el conjunto completo de direcciones en memoria al arrancar y reordena el conjunto libre en cada asignación, por lo que un rango sobredimensionado (p.ej. un `/8`) desperdiciaría memoria y CPU proporcional a su tamaño. Un rango mayor al tope se rechaza al cargar la configuración (o al recargar con `SIGHUP`) con un error claro, en vez de aceptarse en silencio.
 
 ### Tools
 
@@ -290,6 +321,7 @@ sudo bash tools/pyleases.sh
 | Directive | Description | Descripción |
 |-----------|-------------|-------------|
 | `authoritative;` | Server sends NAK to clients with foreign leases | El servidor envía NAK a clientes con leases ajenos |
+| `not authoritative;` | Standard isc-dhcp-server syntax to explicitly disable authoritative mode (equivalent to omitting `authoritative;`) | Sintaxis estándar de isc-dhcp-server para desactivar explícitamente el modo autoritativo (equivalente a omitir `authoritative;`) |
 | `cleanup-interval N;` | How often (seconds) expired leases are removed from memory | Frecuencia (segundos) con que se eliminan leases expirados de memoria |
 | `server-identifier IP;` | IP the server uses to identify itself in DHCP replies | IP con la que el servidor se identifica en las respuestas DHCP |
 | `deny duplicates;` | Reject requests from a MAC that already holds a lease | Rechaza solicitudes de una MAC que ya tiene un lease |
@@ -363,9 +395,9 @@ sudo bash tools/pyleases.sh
   </tr>
 </table>
 
-> **Note**: Android and iOS ignore DHCP option 252. The proxy must be configured manually on those devices.
-> 
-> **Nota**: Android e iOS ignoran la opción DHCP 252. El proxy debe configurarse manualmente en esos dispositivos.
+> **Note:** Android and iOS ignore DHCP option 252. The proxy must be configured manually on those devices.
+>
+> **Nota:** Android e iOS ignoran la opción DHCP 252. El proxy debe configurarse manualmente en esos dispositivos.
 
 #### pywebmin
 
@@ -460,18 +492,20 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | Log rotation | `/etc/logrotate.d/rsyslog` | `/etc/logrotate.d/pydhcpd` |
 | journald | `journalctl -u isc-dhcp-server` | `journalctl -u pydhcpd` |
 
-> **Note**: pydhcpd writes logs directly to `/var/log/pydhcpd.log`. It does not use syslog, therefore no `log-facility` directive is needed or supported.
+> **Note:** pydhcpd writes logs directly to `/var/log/pydhcpd.log`. It does not use syslog, therefore no `log-facility` directive is needed or supported.
 >
-> **Nota**: pydhcpd escribe los logs directamente a `/var/log/pydhcpd.log`. No utiliza syslog, por lo tanto no se necesita ni se soporta la directiva `log-facility`.
+> **Nota:** pydhcpd escribe los logs directamente a `/var/log/pydhcpd.log`. No utiliza syslog, por lo tanto no se necesita ni se soporta la directiva `log-facility`.
 
 #### Scenario
 
 | Scenario | isc-dhcp-server | pydhcpd |
 |----------|-----------------|---------|
-| Authorized client with static IP (renewal) / Cliente autorizado con IP estática (renovación) | `DHCPREQUEST for 192.168.10.50 (192.168.10.2) from aa:bb:cc:dd:ee:ff via enp2s0`<br>`DHCPACK on 192.168.10.50 to aa:bb:cc:dd:ee:ff (FOO) via enp2s0` | `REQUEST from aa:bb:cc:dd:ee:ff (FOO)`<br>`ACK aa:bb:cc:dd:ee:ff → 192.168.10.50 (lease 2592000s)` |
-| Unknown client entering the block pool / Cliente desconocido ingresando al pool de bloqueo | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enp2s0`<br>`DHCPOFFER on 192.168.10.230 to bb:cc:dd:ee:ff:aa (BAR) via enp2s0`<br>`DHCPREQUEST for 192.168.10.230 (192.168.10.2) from bb:cc:dd:ee:ff:aa (BAR) via enp2s0`<br>`DHCPACK on 192.168.10.230 to bb:cc:dd:ee:ff:aa (BAR) via enp2s0` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`OFFER bb:cc:dd:ee:ff:aa → 192.168.10.230`<br>`REQUEST from bb:cc:dd:ee:ff:aa (BAR)`<br>`ACK bb:cc:dd:ee:ff:aa → 192.168.10.230 (lease 60s)` |
-| Pool exhausted / Pool agotado | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enp2s0: network 192.168.10.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`No IP available for bb:cc:dd:ee:ff:aa` |
-| Blocked client / Cliente bloqueado | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enp2s0: network 192.168.10.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`Blocked: bb:cc:dd:ee:ff:aa (deny blockdhcp)` |
+| Authorized client with static IP (renewal) / Cliente autorizado con IP estática (renovación) | `DHCPREQUEST for 192.168.0.50 (192.168.0.2) from aa:bb:cc:dd:ee:ff via enp2s0`<br>`DHCPACK on 192.168.0.50 to aa:bb:cc:dd:ee:ff (FOO) via enp2s0` | `REQUEST from aa:bb:cc:dd:ee:ff (FOO)`<br>`ACK aa:bb:cc:dd:ee:ff → 192.168.0.50 (lease 2592000s)` |
+| Unknown client entering the block pool / Cliente desconocido ingresando al pool de bloqueo | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enp2s0`<br>`DHCPOFFER on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enp2s0`<br>`DHCPREQUEST for 192.168.0.230 (192.168.0.2) from bb:cc:dd:ee:ff:aa (BAR) via enp2s0`<br>`DHCPACK on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enp2s0` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`OFFER bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`REQUEST from bb:cc:dd:ee:ff:aa (BAR)`<br>`ACK bb:cc:dd:ee:ff:aa → 192.168.0.230 (lease 60s)` |
+| Pool exhausted / Pool agotado | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enp2s0: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`No IP available for bb:cc:dd:ee:ff:aa` |
+| Blocked client / Cliente bloqueado | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enp2s0: network 192.168.0.0/24: no free leases` † | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`Blocked: bb:cc:dd:ee:ff:aa (deny blockdhcp)` |
+
+† Not a copy-paste of the row above — this is the actual `isc-dhcp-server` log line for a blocked client too. A `deny members of "blockdhcp"` pool becomes invisible to that class, so from `isc-dhcp-server`'s point of view there is no lease available for it, the same message as a genuinely full pool. It cannot tell the two cases apart in its log; `pydhcpd` can (`Blocked:` vs `No IP available`).
 
 #### Authoritative
 
@@ -488,6 +522,14 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
       <b>Nota:</b> <code>authoritative;</code> no evita que un servidor DHCP no autorizado le llegue a los clientes — <code>DHCPOFFER</code>/<code>DHCPACK</code> van directo al cliente, y ningún servidor DHCP puede bloquear los paquetes de otro a nivel de protocolo. Solo corrige el resultado después del hecho: el <code>REQUEST</code> del cliente se manda por broadcast y siempre llega al servidor autoritativo, que puede rechazarlo con NAK, forzando al cliente a descartar el lease del rogue y reiniciar. Como medida complementaria, se recomienda verificar si su hardware de switch soporta <b>DHCP Snooping</b> y, de ser así, considerar activarlo — esto bloquea el tráfico DHCP no autorizado a nivel de red, antes de que le llegue al cliente, en vez de corregirlo después como hace <code>authoritative</code>.
     </td>
   </tr>
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <b>isc-dhcp-server</b> also accepts the explicit negation <code>not authoritative;</code>, standard <code>dhcpd.conf</code> syntax to mark a scope as non-authoritative (equivalent to omitting <code>authoritative;</code>).
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <b>pydhcpd</b> también acepta <code>not authoritative;</code>, la misma sintaxis estándar de <code>dhcpd.conf</code> (equivalente a omitir <code>authoritative;</code>).
+    </td>
+  </tr>
 </table>
 
 The table below compares what each daemon's own log would show if it were the **authoritative** server defending against the same rogue, event by event — not a mixed trace of one daemon acting as the rogue.
@@ -495,9 +537,9 @@ The table below compares what each daemon's own log would show if it were the **
 | Event | isc-dhcp-server (as authoritative) | pydhcpd (as authoritative) |
 |-------|-------------------------------------|-----------------------------|
 | Rogue offers IP to client | *(not observed)* † | *(not observed)* † |
-| Client requests rogue IP | `DHCPREQUEST for 192.168.10.222 (192.168.10.249) from bb:cc:dd:ee:ff:aa (BAR) via enp2s0` | `REQUEST from bb:cc:dd:ee:ff:aa (BAR)` |
+| Client requests rogue IP | `DHCPREQUEST for 192.168.0.222 (192.168.0.249) from bb:cc:dd:ee:ff:aa (BAR) via enp2s0` | `REQUEST from bb:cc:dd:ee:ff:aa (BAR)` |
 | Rogue acknowledges | *(not observed)* † | *(not observed)* † |
-| **Authoritative server rejects** | `DHCPNAK on 192.168.10.222 to bb:cc:dd:ee:ff:aa via enp2s0` | `NAK → bb:cc:dd:ee:ff:aa` |
+| **Authoritative server rejects** | `DHCPNAK on 192.168.0.222 to bb:cc:dd:ee:ff:aa via enp2s0` | `NAK → bb:cc:dd:ee:ff:aa` |
 | Client rediscovers | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enp2s0` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)` |
 
 † Neither daemon sees these packets: `DHCPOFFER`/`DHCPACK` are addressed to the client, not to other DHCP servers on the segment.
@@ -522,6 +564,10 @@ The table below compares what each daemon's own log would show if it were the **
     </td>
   </tr>
 </table>
+
+> **Note — known limitation, both servers:** neither controls an attacker who rotates MAC addresses to exhaust the pool. `isc-dhcp-server`'s gap is total — it has no per-client throttle at all, so a plain flood from a single MAC already drains the pool, no rotation needed. `pydhcpd`'s gap is narrower: its per-MAC limit stops a single-MAC flood, but is keyed by MAC (`chaddr`), so it only bounds how fast *one* MAC can allocate — it does not cap the total across many different MACs, and an attacker rotating MACs can still drain the pool one new MAC at a time. A global (cross-MAC) rate limit was considered and intentionally left out of `pydhcpd`: it would need careful tuning to avoid rejecting legitimate clients during a normal burst of reconnections (e.g. many devices rejoining after a power outage), and there is no evidence MAC-rotation abuse is a live threat worth that trade-off. Documented here as a known, accepted limitation.
+>
+> **Nota — limitación conocida, en ambos servidores:** ninguno controla a un atacante que rota direcciones MAC para agotar el pool. La brecha de `isc-dhcp-server` es total — no tiene ningún control por cliente, así que una inundación simple desde una sola MAC ya agota el pool, sin necesidad de rotar. La brecha de `pydhcpd` es más acotada: su límite por MAC frena la inundación de una sola MAC, pero está indexado por MAC (`chaddr`), así que solo acota qué tan rápido puede asignar *una* MAC — no limita el total entre muchas MACs distintas, y un atacante que rote MACs igual puede vaciar el pool, una MAC nueva a la vez. Se evaluó un límite global (entre todas las MACs) para `pydhcpd` y se dejó afuera intencionalmente: requeriría un ajuste cuidadoso para no rechazar clientes legítimos durante una ráfaga normal de reconexiones (p.ej. varios dispositivos reconectándose tras un corte de luz), y no hay evidencia de que el abuso por rotación de MAC sea una amenaza activa que justifique ese costo. Se documenta acá como una limitación conocida y aceptada.
 
 ## EOL
 

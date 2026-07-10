@@ -25,6 +25,7 @@ import os
 import sys
 import socket
 import struct
+import ctypes
 import time
 import re
 import signal
@@ -82,6 +83,46 @@ DHCP_CLIENT_PORT = 68
 BROADCAST_ADDR   = "255.255.255.255"
 DHCP_MAGIC       = b"\x63\x82\x53\x63"
 ETH_P_IP         = 0x0800
+
+# SO_ATTACH_FILTER is 26 on every Linux architecture; fall back if the
+# running socket module does not expose the constant.
+SO_ATTACH_FILTER = getattr(socket, "SO_ATTACH_FILTER", 26)
+
+# Classic BPF program equivalent to "ip and udp and dst port 67",
+# compiled for DLT_EN10MB (Ethernet II framing, no VLAN tag).
+# Drops every non-DHCP packet in-kernel before it reaches userspace.
+_BPF_DHCP = [
+    (0x28, 0, 0, 0x0000000c),  # (0) ldh  [12]            ; A = ethertype
+    (0x15, 0, 8, 0x00000800),  # (1) jeq  #0x800  jf ->10 ; not IPv4 -> drop
+    (0x30, 0, 0, 0x00000017),  # (2) ldb  [23]            ; A = IP protocol (14+9)
+    (0x15, 0, 6, 0x00000011),  # (3) jeq  #17     jf ->10 ; not UDP -> drop
+    (0x28, 0, 0, 0x00000014),  # (4) ldh  [20]            ; A = flags+frag offset (14+6)
+    (0x45, 4, 0, 0x00001fff),  # (5) jset #0x1fff jt ->10 ; fragmented -> drop
+    (0xb1, 0, 0, 0x0000000e),  # (6) ldxb 4*([14]&0xf)    ; X = IP header length
+    (0x48, 0, 0, 0x00000010),  # (7) ldh  [x + 16]        ; A = UDP dst port (14+X+2)
+    (0x15, 0, 1, 0x00000043),  # (8) jeq  #67     jf ->10 ; not dst 67 -> drop
+    (0x06, 0, 0, 0x0000ffff),  # (9) ret  #65535          ; accept (snap length)
+    (0x06, 0, 0, 0x00000000),  # (10) ret #0              ; drop
+]
+
+def _attach_dhcp_bpf(sock):
+    """Attach an in-kernel BPF filter so only UDP/dst-port-67 frames wake userspace.
+
+    Best-effort: if the kernel refuses the filter the daemon keeps working
+    through the existing userspace checks, it just loses the early drop.
+    """
+    try:
+        prog  = b"".join(struct.pack("HBBI", *ins) for ins in _BPF_DHCP)
+        buf   = ctypes.create_string_buffer(prog)
+        # struct sock_fprog { unsigned short len; struct sock_filter *filter; };
+        # native alignment pads the pointer to an 8-byte boundary on 64-bit.
+        fprog = struct.pack("HL", len(_BPF_DHCP),
+                            ctypes.cast(buf, ctypes.c_void_p).value)
+        sock.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, fprog)
+        log.info("Attached BPF filter to raw socket (udp dst port 67)")
+    except OSError as e:
+        log.warning("Could not attach BPF filter (%s) — falling back to "
+                    "userspace filtering only", e)
 
 MSG_DISCOVER = 1
 MSG_OFFER    = 2
@@ -192,9 +233,9 @@ class DHCPConfig:
 
         self.pool_range_start = ""
         self.pool_range_end   = ""
-        self.pool_min_lease   = 300
-        self.pool_def_lease   = 7200
-        self.pool_max_lease   = 86400
+        self.pool_min_lease   = 60
+        self.pool_def_lease   = 60
+        self.pool_max_lease   = 60
 
         self.cleanup_interval = 60
 
@@ -220,6 +261,17 @@ class DHCPConfig:
                  len(self.static_hosts), len(self.blocked_macs))
 
     def _validate(self):
+        for label, value in (
+                ("server-identifier", self.server_id),
+                ("subnet netmask", self.netmask),
+                ("option routers", self.routers),
+                ("option broadcast-address", self.broadcast)):
+            if value:
+                try:
+                    ipaddress.IPv4Address(value)
+                except ValueError as err:
+                    raise ConfigError(f"Invalid {label} address {value!r}: {err}") from err
+
         if self.pool_range_start and self.pool_range_end:
             try:
                 s = ipaddress.IPv4Address(self.pool_range_start)
@@ -237,6 +289,11 @@ class DHCPConfig:
                                 f"Static host {h_mac} IP {h_ip} overlaps pool range {s}\u2013{e}")
                     except ValueError:
                         pass
+
+                pool_size = int(e) - int(s) + 1
+                if pool_size > 65536:
+                    raise ConfigError(
+                        f"Pool range {s}–{e} covers {pool_size} addresses; max is 65536")
             except ValueError as err:
                 raise ConfigError(f"Invalid pool range address: {err}") from err
 
@@ -253,6 +310,14 @@ class DHCPConfig:
         if len(self.dns_servers) > 63:
             raise ConfigError(
                 f"{len(self.dns_servers)} DNS servers configured; DHCP option 6 holds at most 63")
+
+        for label, lo, mid, hi in (
+                ("lease-time", self.min_lease, self.default_lease, self.max_lease),
+                ("pool lease-time", self.pool_min_lease, self.pool_def_lease, self.pool_max_lease)):
+            if not (0 < lo <= mid <= hi < 2**32):
+                raise ConfigError(
+                    f"Invalid {label} bounds: min={lo} default={mid} max={hi} "
+                    f"(must satisfy 0 < min <= default <= max < 2**32)")
 
     @staticmethod
     def _balanced_braces(text, start):
@@ -288,7 +353,15 @@ class DHCPConfig:
         if m:
             self.cleanup_interval = max(5, int(m.group(1)))
 
-        self.authoritative   = bool(re.search(r'\bauthoritative\s*;', raw))
+        # "not authoritative;" is standard isc-dhcp-server syntax for explicitly
+        # disabling authoritative mode. It must be checked before the plain
+        # "authoritative;" match, since that regex would otherwise match the
+        # substring "authoritative;" inside "not authoritative;" and silently
+        # invert the admin's intent.
+        if re.search(r'\bnot\s+authoritative\s*;', raw):
+            self.authoritative = False
+        else:
+            self.authoritative = bool(re.search(r'\bauthoritative\s*;', raw))
         self.deny_duplicates = bool(re.search(r'\bdeny\s+duplicates\s*;', raw))
         self.one_per_client  = bool(re.search(r'\bone-lease-per-client\s+true\s*;', raw))
         self.deny_declines   = bool(re.search(r'\bdeny\s+declines\s*;', raw))
@@ -561,7 +634,7 @@ class LeaseManager:
         with self.lock:
             return mac in self.config.blocked_macs
 
-    def quarantine_ip(self, ip, duration=3600):
+    def quarantine_ip(self, ip, duration=60):
         with self.lock:
             self._quarantine[ip] = time.time() + duration
 
@@ -1082,6 +1155,7 @@ class DHCPServer:
             self.raw_sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW,
                                           socket.htons(ETH_P_IP))
             self.raw_sock.bind((self.interface, 0))
+            _attach_dhcp_bpf(self.raw_sock)
             self.raw_sock.settimeout(5.0)
         except OSError as e:
             log.error("Failed to open raw socket on %s: %s", self.interface, e)
@@ -1386,7 +1460,7 @@ class DHCPServer:
                         _ping_inflight.release()
                     if alive:
                         log.warning("PING-CHECK: %s is in use — quarantined", offered_ip)
-                        self.leases.quarantine_ip(offered_ip, duration=3600)
+                        self.leases.quarantine_ip(offered_ip, duration=60)
                         self.leases.release_reservation_owned(mac, offered_ip)
                         return
                     _send_offer()
@@ -1475,7 +1549,16 @@ class DHCPServer:
         offered_ip, lease_time, alloc_reason = self.leases.allocate(mac, hostname, requested_ip=target_ip, src_mac=src_mac)
 
         if not offered_ip:
-            self._send_nak(pkt, mac, alloc_reason or "No address available")
+            if config_auth:
+                self._send_nak(pkt, mac, alloc_reason or "No address available")
+            else:
+                # RFC 2131: a non-authoritative server should not NAK a client
+                # whose requested IP it cannot itself confirm/allocate — the
+                # lease may be valid and issued by another DHCP server on the
+                # segment. Stay silent instead of forcing the client to drop it.
+                log.debug("REQUEST from %s could not be satisfied (%s) — "
+                          "not authoritative, staying silent",
+                          mac, alloc_reason or "no address available")
             return
 
         if old_ip_to_release and old_ip_to_release != offered_ip:

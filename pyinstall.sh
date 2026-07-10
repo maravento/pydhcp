@@ -9,7 +9,7 @@
 #
 # Usage:
 #   sudo bash pyinstall.sh           # install
-#   sudo bash pyinstall.sh --update  # update code only (preserves user config, backs up replaced files to /etc/pydhcp.bak/)
+#   sudo bash pyinstall.sh --update  # update code only (preserves user config, backs up replaced files to /etc/pydhcp/bak/)
 #   sudo bash pyinstall.sh --remove  # uninstall
 #
 ################################################################################
@@ -93,7 +93,7 @@ if [[ "${1:-}" == "--update" ]]; then
         error "No existing installation found in $INSTALL_DIR. Run without --update to install first."
     fi
 
-    BACKUP_DIR="/etc/pydhcp.bak/$(date +%Y%m%d_%H%M%S)"
+    BACKUP_DIR="/etc/pydhcp/bak/$(date +%Y%m%d_%H%M%S)"
     info "Creating backup in $BACKUP_DIR ..."
     mkdir -p "$BACKUP_DIR/tools" "$BACKUP_DIR/init.d"
     for f in pydhcpd.py tools/pyleases.sh tools/pywebmin.sh; do
@@ -267,7 +267,7 @@ fi
 info "Creating $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
 chown root:"$SYSTEM_USER" "$INSTALL_DIR"
-chmod 775 "$INSTALL_DIR"
+chmod 770 "$INSTALL_DIR"
 
 # Deploy daemon and config files
 info "Deploying pydhcpd.py ..."
