@@ -72,6 +72,8 @@ if [[ "${1:-}" == "--remove" ]]; then
     rm -f "$INIT_FILE"
     rm -f "$LOG_FILE"
     rm -f /etc/logrotate.d/pydhcpd
+    rm -f /var/log/pydhcp.log
+    rm -f /etc/logrotate.d/pydhcp
 
     info "Removing $INSTALL_DIR ..."
     [[ "$INSTALL_DIR" == "/etc/pydhcp" ]] || error "Unexpected install dir: $INSTALL_DIR"

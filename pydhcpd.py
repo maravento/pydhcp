@@ -2,18 +2,20 @@
 # pydhcpd.py — Python DHCP Daemon
 # maravento.com
 #
-# Drop-in replacement for isc-dhcp-server.
+# DHCP daemon for those migrating from isc-dhcp-server (EOL 2022), using
+# compatible configuration syntax and lease file format. Not a full
+# replacement — see README Scope section for what is and isn't implemented.
 # Reads /etc/pydhcp/pydhcpd.conf and /etc/pydhcp/default/pydhcpd,
 # writes /etc/pydhcp/pydhcpd.leases and /etc/pydhcp/pydhcpd.pid.
 #
 # Supported dhcpd.conf directives:
 #   authoritative, server-identifier, deny duplicates,
-#   one-lease-per-client, deny declines, deny client-updates,
-#   ping-check, ddns-update-style, log-facility,
+#   one-lease-per-client, deny declines,
+#   ping-check,
 #   host { hardware ethernet; fixed-address; }
 #   class "blockdhcp" { match pick-first-value ... }
 #   subclass "blockdhcp" 1:<mac>;
-#   subnet { option routers, subnet-mask, broadcast-address,
+#   subnet { option routers, broadcast-address,
 #             domain-name-servers, wpad;
 #             min/default/max-lease-time;
 #             pool { deny members of "blockdhcp"; range; } }
@@ -218,7 +220,6 @@ class DHCPConfig:
         self.deny_duplicates  = False
         self.one_per_client   = False
         self.deny_declines    = False
-        self.deny_client_upd  = False
         self.ping_check       = False
 
         self.subnet           = ""
@@ -365,7 +366,6 @@ class DHCPConfig:
         self.deny_duplicates = bool(re.search(r'\bdeny\s+duplicates\s*;', raw))
         self.one_per_client  = bool(re.search(r'\bone-lease-per-client\s+true\s*;', raw))
         self.deny_declines   = bool(re.search(r'\bdeny\s+declines\s*;', raw))
-        self.deny_client_upd = bool(re.search(r'\bdeny\s+client-updates\s*;', raw))
         self.ping_check      = bool(re.search(r'\bping-check\s+true\s*;', raw))
 
         m = re.search(r'\bserver-identifier\s+([\d.]+)\s*;', raw)
@@ -1406,13 +1406,13 @@ class DHCPServer:
             server_ip_snapshot = self.server_ip
             config_deny_duplicates = config_snapshot.deny_duplicates
             config_ping_check = config_snapshot.ping_check
-            config_default_lease = config_snapshot.default_lease
+            config_pool_def_lease = config_snapshot.pool_def_lease
 
         if config_deny_duplicates:
             existing = self.leases.get_by_mac(mac)
             if existing and not self.leases.is_blocked(mac):
                 offered_ip  = existing.ip
-                lease_time  = config_default_lease
+                lease_time  = config_pool_def_lease
                 alloc_reason = None
             else:
                 offered_ip, lease_time, alloc_reason = self.leases.allocate(
@@ -1687,8 +1687,7 @@ def test_config(config_path):
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("-t", "--test"):
-        config_path = sys.argv[2] if len(sys.argv) > 2 else CONF_FILE
-        sys.exit(0 if test_config(config_path) else 1)
+        sys.exit(0 if test_config(CONF_FILE) else 1)
 
     os.makedirs(BASE_DIR, exist_ok=True)
 

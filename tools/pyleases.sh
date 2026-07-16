@@ -45,9 +45,9 @@
 # 4. Set WPAD_ENABLED=true in /etc/pydhcp/tools/pyleases.env
 #
 # NOTE on logging:
-# - Writes to /var/log/pydhcp.log. Rotation is normally deployed by
-#   pyinstall.sh (/etc/logrotate.d/pydhcp); this script just ensures the
-#   config exists in case it runs without a fresh install.
+# - Writes to /var/log/pydhcp.log, a separate log from the daemon's
+#   /var/log/pydhcpd.log. This script creates and owns its own rotation
+#   config (/etc/logrotate.d/pydhcp) below; pyinstall.sh does not deploy it.
 #
 ################################################################################
 
@@ -72,8 +72,7 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-# pyinstall.sh normally deploys this at install time; make sure it exists
-# in case this script runs on its own (e.g. env restored without reinstall).
+# Own logrotate config for pydhcp.log; created here on first run.
 logrotate_conf="/etc/logrotate.d/pydhcp"
 if [ ! -f "$logrotate_conf" ]; then
     cat > "$logrotate_conf" <<'EOF'
@@ -447,9 +446,7 @@ server-identifier $SERV_DHCP;
 deny duplicates;
 one-lease-per-client true;
 deny declines;
-deny client-updates;
 $ping_check_line
-ddns-update-style none;
         " >"$dhcp_conf_temp"
 
         shopt -s nullglob
@@ -506,7 +503,6 @@ class "blockdhcp" {
         echo "subnet $SERV_SUBNET netmask $SERV_MASK {
     $wpad_subnet
     option routers $SERV_DHCP;
-    option subnet-mask $SERV_MASK;
     option broadcast-address $SERV_BROADCAST;
     #option domain-name \"example.org\";
     option domain-name-servers $SERV_DNS;
