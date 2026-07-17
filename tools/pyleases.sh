@@ -118,8 +118,8 @@ local_user=$(who | awk '/\(:0\)/{print $1; exit}')
 [ -z "$local_user" ] && local_user="${SUDO_USER:-}"
 [ -z "$local_user" ] && local_user=$(who | awk 'NR==1{print $1}')
 if [ -z "$local_user" ] || ! id "$local_user" &>/dev/null; then
-    log "ERROR: Cannot determine a valid local user"
-    exit 1
+    log "WARNING: Cannot determine a valid local user — desktop notifications disabled"
+    local_user=""
 fi
 
 setup_env() {
@@ -273,6 +273,7 @@ fi
 
 _notify() {
     local user="$1"; shift
+    [ -z "$user" ] && return 0
     local uid
     uid=$(id -u "$user")
     local bus="unix:path=/run/user/${uid}/bus"

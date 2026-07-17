@@ -62,6 +62,7 @@
         <li>DHCP relay agents (no legitimate use case without multi-segment/multi-interface support — see above)</li>
         <li><code>client-updates</code> / <code>deny client-updates</code> (depends on DDNS + client FQDN option, neither implemented)</li>
         <li><code>option subnet-mask</code> override (the netmask sent to clients always matches the <code>subnet ... netmask ...</code> declaration; no override support)</li>
+        <li>Per-host/per-class option scoping: options declared at the <code>subnet</code> level (e.g. <code>option wpad ...;</code>) apply to every client uniformly. Unlike <code>isc-dhcp-server</code>, there is no way to override or omit a subnet-level option for a specific <code>host</code> or <code>class</code>/<code>subclass</code> — <code>class</code>/<code>subclass</code> here only support the MAC-block use case (see <code>blockdhcp</code> below)</li>
       </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
@@ -75,14 +76,15 @@
         <li>Agentes de relay DHCP (sin caso de uso legítimo sin soporte multi-segmento/multi-interfaz — ver arriba)</li>
         <li><code>client-updates</code> / <code>deny client-updates</code> (depende de DDNS + opción FQDN del cliente, ninguna implementada)</li>
         <li>Override de <code>option subnet-mask</code> (la máscara enviada a los clientes siempre coincide con la declaración <code>subnet ... netmask ...</code>; sin soporte de override)</li>
+        <li>Alcance de opciones por host/clase: las opciones declaradas a nivel <code>subnet</code> (ej. <code>option wpad ...;</code>) aplican a todos los clientes por igual. A diferencia de <code>isc-dhcp-server</code>, no hay forma de sobreescribir u omitir una opción de nivel subnet para un <code>host</code> o <code>class</code>/<code>subclass</code> específico — aquí <code>class</code>/<code>subclass</code> solo soportan el caso de bloqueo por MAC (ver <code>blockdhcp</code> abajo)</li>
       </ul>
     </td>
   </tr>
 </table>
 
-> **Note:** DHCP (RFC 2131) inherits its minimum packet format from BOOTP (RFC 951); pydhcpd pads packets to that minimum for protocol compliance. This does not imply support for BOOTP clients or PXE boot.
+> DHCP (RFC 2131) inherits its minimum packet format from BOOTP (RFC 951); pydhcpd pads packets to that minimum for protocol compliance. This does not imply support for BOOTP clients or PXE boot.
 >
-> **Nota:** DHCP (RFC 2131) hereda el formato mínimo de paquete de BOOTP (RFC 951); pydhcpd rellena los paquetes a ese mínimo por cumplimiento del protocolo. Esto no implica soporte para clientes BOOTP ni arranque PXE.
+> DHCP (RFC 2131) hereda el formato mínimo de paquete de BOOTP (RFC 951); pydhcpd rellena los paquetes a ese mínimo por cumplimiento del protocolo. Esto no implica soporte para clientes BOOTP ni arranque PXE.
 
 ## Repository Structure
 
@@ -253,8 +255,9 @@ cat /etc/pydhcp/pydhcpd.leases
 # Reload config without restart (SIGHUP) | Recargar configuración sin reiniciar (SIGHUP)
 sudo systemctl reload pydhcpd
 
-# Test configuration syntax without starting the daemon
+# Test configuration syntax without starting the daemon (isc-dhcp-server compatible: -t [-cf FILE])
 sudo /etc/pydhcp/pydhcpd.py --test
+sudo /etc/pydhcp/pydhcpd.py -t -cf /path/to/alternate.conf
 
 # View logs (journald) | Ver logs (journald)
 sudo journalctl -u pydhcpd -f
@@ -262,6 +265,25 @@ sudo journalctl -u pydhcpd -f
 # View logs (file) | Ver logs (archivo)
 sudo tail -f /var/log/pydhcpd.log
 ```
+
+#### Supported directives
+
+| Directive | Description | Descripción |
+|-----------|-------------|-------------|
+| `authoritative;` | Server sends NAK to clients with foreign leases | El servidor envía NAK a clientes con leases ajenos |
+| `not authoritative;` | Standard isc-dhcp-server syntax to explicitly disable authoritative mode (equivalent to omitting `authoritative;`) | Sintaxis estándar de isc-dhcp-server para desactivar explícitamente el modo autoritativo (equivalente a omitir `authoritative;`) |
+| `cleanup-interval N;` | How often (seconds) expired leases are removed from memory | Frecuencia (segundos) con que se eliminan leases expirados de memoria |
+| `server-identifier IP;` | IP the server uses to identify itself in DHCP replies | IP con la que el servidor se identifica en las respuestas DHCP |
+| `deny duplicates;` | Reject requests from a MAC that already holds a lease | Rechaza solicitudes de una MAC que ya tiene un lease |
+| `one-lease-per-client true;` | Release old lease before assigning a new one to the same MAC | Libera el lease anterior antes de asignar uno nuevo a la misma MAC |
+| `deny declines;` | Ignore DHCPDECLINE messages | Ignora mensajes DHCPDECLINE |
+| `ping-check true\|false;` | Ping IP before OFFER to detect conflicts (controlled via `PING_CHECK_ENABLED` in `pyleases.env`) | Ping a la IP antes del OFFER para detectar conflictos (controlado via `PING_CHECK_ENABLED` en `pyleases.env`) |
+| `option wpad ...;` | WPAD/PAC proxy auto-configuration (controlled via `WPAD_ENABLED` in `pyleases.env`) | Autoconfiguración de proxy WPAD/PAC (controlado via `WPAD_ENABLED` en `pyleases.env`) |
+| `subnet ... { pool { ... } }` | Subnet declaration with dynamic block pool | Declaración de subred con pool de bloqueo dinámico |
+| `host NAME { hardware ethernet MAC; fixed-address IP; }` | Static host reservation | Reserva estática de host |
+| `class "blockdhcp" { ... }` / `subclass "blockdhcp" ...` | MAC-based DHCP block list | Lista de bloqueo DHCP por MAC |
+| `min-lease-time`, `default-lease-time`, `max-lease-time` | Lease duration controls | Control de duración de leases |
+| `option routers`, `option broadcast-address`, `option domain-name-servers` | Standard DHCP options | Opciones DHCP estándar |
 
 #### Operational Details
 
@@ -303,25 +325,6 @@ sudo bash tools/pyleases.sh
 > **First run**: pyleases.sh launches an interactive setup that asks for DHCP server IP, netmask, block-pool range, and DNS servers, and writes `/etc/pydhcp/tools/pyleases.env`. Delete this file to re-run the setup. Some of these prompts overlap with `pyinstall.sh` — answer consistently.
 >
 > **Primera corrida**: pyleases.sh inicia un setup interactivo que pregunta IP del servidor DHCP, máscara, rango del pool de bloqueo y DNS, y escribe `/etc/pydhcp/tools/pyleases.env`. Elimine ese archivo para volver a ejecutar el setup. Algunas preguntas se solapan con `pyinstall.sh` — responda consistentemente.
-
-##### Supported directives
-
-| Directive | Description | Descripción |
-|-----------|-------------|-------------|
-| `authoritative;` | Server sends NAK to clients with foreign leases | El servidor envía NAK a clientes con leases ajenos |
-| `not authoritative;` | Standard isc-dhcp-server syntax to explicitly disable authoritative mode (equivalent to omitting `authoritative;`) | Sintaxis estándar de isc-dhcp-server para desactivar explícitamente el modo autoritativo (equivalente a omitir `authoritative;`) |
-| `cleanup-interval N;` | How often (seconds) expired leases are removed from memory | Frecuencia (segundos) con que se eliminan leases expirados de memoria |
-| `server-identifier IP;` | IP the server uses to identify itself in DHCP replies | IP con la que el servidor se identifica en las respuestas DHCP |
-| `deny duplicates;` | Reject requests from a MAC that already holds a lease | Rechaza solicitudes de una MAC que ya tiene un lease |
-| `one-lease-per-client true;` | Release old lease before assigning a new one to the same MAC | Libera el lease anterior antes de asignar uno nuevo a la misma MAC |
-| `deny declines;` | Ignore DHCPDECLINE messages | Ignora mensajes DHCPDECLINE |
-| `ping-check true\|false;` | Ping IP before OFFER to detect conflicts (controlled via `PING_CHECK_ENABLED` in `pyleases.env`) | Ping a la IP antes del OFFER para detectar conflictos (controlado via `PING_CHECK_ENABLED` en `pyleases.env`) |
-| `option wpad ...;` | WPAD/PAC proxy auto-configuration (controlled via `WPAD_ENABLED` in `pyleases.env`) | Autoconfiguración de proxy WPAD/PAC (controlado via `WPAD_ENABLED` en `pyleases.env`) |
-| `subnet ... { pool { ... } }` | Subnet declaration with dynamic block pool | Declaración de subred con pool de bloqueo dinámico |
-| `host NAME { hardware ethernet MAC; fixed-address IP; }` | Static host reservation | Reserva estática de host |
-| `class "blockdhcp" { ... }` / `subclass "blockdhcp" ...` | MAC-based DHCP block list | Lista de bloqueo DHCP por MAC |
-| `min-lease-time`, `default-lease-time`, `max-lease-time` | Lease duration controls | Control de duración de leases |
-| `option routers`, `option broadcast-address`, `option domain-name-servers` | Standard DHCP options | Opciones DHCP estándar |
 
 **Warning**
 
@@ -381,9 +384,9 @@ sudo bash tools/pyleases.sh
   </tr>
 </table>
 
-> **Note:** Android and iOS ignore DHCP option 252. The proxy must be configured manually on those devices.
+> Android and iOS ignore DHCP option 252. The proxy must be configured manually on those devices.
 >
-> **Nota:** Android e iOS ignoran la opción DHCP 252. El proxy debe configurarse manualmente en esos dispositivos.
+> Android e iOS ignoran la opción DHCP 252. El proxy debe configurarse manualmente en esos dispositivos.
 
 #### pywebmin
 
@@ -436,10 +439,10 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The following table maps <code>isc-dhcp-server</code> paths to their <code>pydhcp</code> equivalents:
+      The following table maps <code>isc-dhcp-server</code> paths and commands to their <code>pydhcp</code> equivalents:
     </td>
     <td style="width: 50%; vertical-align: top;">
-      La siguiente tabla mapea las rutas de <code>isc-dhcp-server</code> con sus equivalentes en <code>pydhcp</code>:
+      La siguiente tabla mapea las rutas y comandos de <code>isc-dhcp-server</code> con sus equivalentes en <code>pydhcp</code>:
     </td>
   </tr>
 </table>
@@ -454,6 +457,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | `/etc/init.d/isc-dhcp-server` | `/etc/init.d/pydhcpd` |
 | `systemctl start\|stop\|restart\|status isc-dhcp-server` | `systemctl start\|stop\|restart\|status pydhcpd` |
 | `service isc-dhcp-server start\|stop\|restart\|status` | `service pydhcpd start\|stop\|restart\|status` |
+| `dhcpd -t -cf /etc/dhcp/dhcpd.conf` | `pydhcpd.py -t -cf /etc/pydhcp/pydhcpd.conf` |
 
 ### Logs
 
@@ -461,11 +465,11 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
   <tr>
     <td style="width: 50%; vertical-align: top;">
       Log output format differs between servers but the behavior is equivalent. The following examples show the three main scenarios.<br>
-      <em>Note: isc-dhcp-server shows the hostname starting from OFFER; pydhcpd shows it from DISCOVER onward.</em>
+      <em>isc-dhcp-server shows the hostname starting from OFFER; pydhcpd shows it from DISCOVER onward.</em>
     </td>
     <td style="width: 50%; vertical-align: top;">
       El formato de log difiere entre servidores pero el comportamiento es equivalente. Los siguientes ejemplos muestran los tres escenarios principales.<br>
-      <em>Nota: isc-dhcp-server muestra el hostname a partir del OFFER; pydhcpd lo muestra desde el DISCOVER.</em>
+      <em>isc-dhcp-server muestra el hostname a partir del OFFER; pydhcpd lo muestra desde el DISCOVER.</em>
     </td>
   </tr>
 </table>
@@ -478,9 +482,9 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | Log rotation | `/etc/logrotate.d/rsyslog` | `/etc/logrotate.d/pydhcpd` |
 | journald | `journalctl -u isc-dhcp-server` | `journalctl -u pydhcpd` |
 
-> **Note:** pydhcpd writes logs directly to `/var/log/pydhcpd.log`. It does not use syslog, therefore no `log-facility` directive is needed or supported.
+> pydhcpd writes logs directly to `/var/log/pydhcpd.log`. It does not use syslog, therefore no `log-facility` directive is needed or supported.
 >
-> **Nota:** pydhcpd escribe los logs directamente a `/var/log/pydhcpd.log`. No utiliza syslog, por lo tanto no se necesita ni se soporta la directiva `log-facility`.
+> pydhcpd escribe los logs directamente a `/var/log/pydhcpd.log`. No utiliza syslog, por lo tanto no se necesita ni se soporta la directiva `log-facility`.
 
 #### Scenario
 
@@ -500,12 +504,12 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
     <td style="width: 50%; vertical-align: top;">
       When <code>authoritative;</code> is set, the server sends NAK to clients that request an IP assigned by a rogue DHCP server on the same network. The rogue may win the OFFER race, but the authoritative server destroys the lease by sending NAK to the REQUEST — forcing the client to rediscover and obtain the correct IP. This behavior is equivalent between isc-dhcp-server and pydhcpd.
       <br><br>
-      <b>Note:</b> <code>authoritative;</code> does not prevent a rogue DHCP server from reaching clients — <code>DHCPOFFER</code>/<code>DHCPACK</code> go directly to the client, and no DHCP server can block another's packets at the protocol level. It only forces a correction after the fact: the client's <code>REQUEST</code> is broadcast and always reaches the authoritative server, which can NAK it, forcing the client to discard the rogue lease and restart. As a complementary measure, it is recommended to check whether your switch hardware supports <b>DHCP Snooping</b> and, if so, consider enabling it — this blocks rogue DHCP traffic at the network layer, before it ever reaches a client, rather than correcting it afterward like <code>authoritative</code> does.
+      <code>authoritative;</code> does not prevent a rogue DHCP server from reaching clients — <code>DHCPOFFER</code>/<code>DHCPACK</code> go directly to the client, and no DHCP server can block another's packets at the protocol level. It only forces a correction after the fact: the client's <code>REQUEST</code> is broadcast and always reaches the authoritative server, which can NAK it, forcing the client to discard the rogue lease and restart. As a complementary measure, it is recommended to check whether your switch hardware supports <b>DHCP Snooping</b> and, if so, consider enabling it — this blocks rogue DHCP traffic at the network layer, before it ever reaches a client, rather than correcting it afterward like <code>authoritative</code> does.
     </td>
     <td style="width: 50%; vertical-align: top;">
       Cuando se configura <code>authoritative;</code>, el servidor envía NAK a clientes que solicitan una IP asignada por un servidor DHCP no autorizado en la misma red. El rogue puede ganar la carrera del OFFER, pero el servidor autoritativo destruye el arrendamiento enviando NAK al REQUEST — forzando al cliente a redescubrir y obtener la IP correcta. Este comportamiento es equivalente entre isc-dhcp-server y pydhcpd.
       <br><br>
-      <b>Nota:</b> <code>authoritative;</code> no evita que un servidor DHCP no autorizado le llegue a los clientes — <code>DHCPOFFER</code>/<code>DHCPACK</code> van directo al cliente, y ningún servidor DHCP puede bloquear los paquetes de otro a nivel de protocolo. Solo corrige el resultado después del hecho: el <code>REQUEST</code> del cliente se manda por broadcast y siempre llega al servidor autoritativo, que puede rechazarlo con NAK, forzando al cliente a descartar el lease del rogue y reiniciar. Como medida complementaria, se recomienda verificar si su hardware de switch soporta <b>DHCP Snooping</b> y, de ser así, considerar activarlo — esto bloquea el tráfico DHCP no autorizado a nivel de red, antes de que le llegue al cliente, en vez de corregirlo después como hace <code>authoritative</code>.
+      <code>authoritative;</code> no evita que un servidor DHCP no autorizado le llegue a los clientes — <code>DHCPOFFER</code>/<code>DHCPACK</code> van directo al cliente, y ningún servidor DHCP puede bloquear los paquetes de otro a nivel de protocolo. Solo corrige el resultado después del hecho: el <code>REQUEST</code> del cliente se manda por broadcast y siempre llega al servidor autoritativo, que puede rechazarlo con NAK, forzando al cliente a descartar el lease del rogue y reiniciar. Como medida complementaria, se recomienda verificar si su hardware de switch soporta <b>DHCP Snooping</b> y, de ser así, considerar activarlo — esto bloquea el tráfico DHCP no autorizado a nivel de red, antes de que le llegue al cliente, en vez de corregirlo después como hace <code>authoritative</code>.
     </td>
   </tr>
   <tr>
@@ -532,28 +536,23 @@ The table below compares what each daemon's own log would show if it were the **
 
 #### Rate Limiting
 
-<table>
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <b>isc-dhcp-server</b> has no built-in per-client rate-limiting for lease allocation. Abuse mitigation relies on <code>deny duplicates;</code> and <code>one-lease-per-client true;</code>, plus pool exhaustion (once the pool is full, further <code>DHCPDISCOVER</code> messages simply receive no <code>DHCPOFFER</code>). Client identification is based on <code>chaddr</code> (or <code>client-id</code>, option 61) — never on the Ethernet source MAC of the frame, so behavior is identical whether the client is directly attached or behind a relay (<code>giaddr</code> is only used for routing the reply).
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <b>isc-dhcp-server</b> no tiene rate-limiting incorporado por cliente para la asignación de leases. La mitigación de abuso depende de <code>deny duplicates;</code> y <code>one-lease-per-client true;</code>, además del agotamiento del pool (una vez lleno, los <code>DHCPDISCOVER</code> simplemente no reciben <code>DHCPOFFER</code>). La identificación del cliente se basa en <code>chaddr</code> (o <code>client-id</code>, opción 61) — nunca en la MAC Ethernet origen del frame, por lo que el comportamiento es igual si el cliente está conectado directamente o detrás de un relay (<code>giaddr</code> solo se usa para enrutar la respuesta).
-    </td>
-  </tr>
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <b>pydhcpd</b> adds a sliding-window rate limit on lease allocation, keyed by <b>client MAC (<code>chaddr</code>)</b> — the same identifier isc-dhcp-server uses. Each client MAC has its own bucket, so multiple clients behind the same relay are rate-limited independently and do not affect each other. If a single MAC exceeds the allowed number of allocations within the window, further requests are rejected with reason <code>"rate limited"</code> until the window slides forward. This is purely an internal safeguard against allocation storms; it is not configurable via <code>pydhcpd.conf</code> and has no equivalent directive in isc-dhcp-server.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <b>pydhcpd</b> agrega un límite de tasa (sliding window) sobre la asignación de leases, indexado por <b>MAC del cliente (<code>chaddr</code>)</b> — el mismo identificador que usa isc-dhcp-server. Cada MAC de cliente tiene su propio cupo, de modo que varios clientes detrás del mismo relay se limitan de forma independiente y no se afectan entre sí. Si una MAC supera el número de asignaciones permitidas dentro de la ventana, las solicitudes adicionales se rechazan con la razón <code>"rate limited"</code> hasta que la ventana avance. Esto es solo una salvaguarda interna contra ráfagas de asignación; no es configurable desde <code>pydhcpd.conf</code> y no tiene directiva equivalente en isc-dhcp-server.
-    </td>
-  </tr>
-</table>
+| isc-dhcp-server | pydhcpd |
+|---|---|
+| Has no built-in per-client rate-limiting for lease allocation. Abuse mitigation relies on `deny duplicates;` and `one-lease-per-client true;`, plus pool exhaustion (once the pool is full, further `DHCPDISCOVER` messages simply receive no `DHCPOFFER`). Client identification is based on `chaddr` (or `client-id`, option 61) — never on the Ethernet source MAC of the frame, so behavior is identical whether the client is directly attached or behind a relay (`giaddr` is only used for routing the reply).<br><br>No tiene rate-limiting incorporado por cliente para la asignación de leases. La mitigación de abuso depende de `deny duplicates;` y `one-lease-per-client true;`, además del agotamiento del pool (una vez lleno, los `DHCPDISCOVER` simplemente no reciben `DHCPOFFER`). La identificación del cliente se basa en `chaddr` (o `client-id`, opción 61) — nunca en la MAC Ethernet origen del frame, por lo que el comportamiento es igual si el cliente está conectado directamente o detrás de un relay (`giaddr` solo se usa para enrutar la respuesta). | Adds a sliding-window rate limit on lease allocation, keyed by **client MAC (`chaddr`)** — the same identifier isc-dhcp-server uses. Each client MAC has its own bucket, so multiple clients behind the same relay are rate-limited independently and do not affect each other. If a single MAC exceeds the allowed number of allocations within the window, further requests are rejected with reason `"rate limited"` until the window slides forward. This is purely an internal safeguard against allocation storms; it is not configurable via `pydhcpd.conf` and has no equivalent directive in isc-dhcp-server.<br><br>Agrega un límite de tasa (sliding window) sobre la asignación de leases, indexado por **MAC del cliente (`chaddr`)** — el mismo identificador que usa isc-dhcp-server. Cada MAC de cliente tiene su propio cupo, de modo que varios clientes detrás del mismo relay se limitan de forma independiente y no se afectan entre sí. Si una MAC supera el número de asignaciones permitidas dentro de la ventana, las solicitudes adicionales se rechazan con la razón `"rate limited"` hasta que la ventana avance. Esto es solo una salvaguarda interna contra ráfagas de asignación; no es configurable desde `pydhcpd.conf` y no tiene directiva equivalente en isc-dhcp-server. |
 
-> **Note — known limitation, both servers:** neither controls an attacker who rotates MAC addresses to exhaust the pool. `isc-dhcp-server`'s gap is total — it has no per-client throttle at all, so a plain flood from a single MAC already drains the pool, no rotation needed. `pydhcpd`'s gap is narrower: its per-MAC limit stops a single-MAC flood, but is keyed by MAC (`chaddr`), so it only bounds how fast *one* MAC can allocate — it does not cap the total across many different MACs, and an attacker rotating MACs can still drain the pool one new MAC at a time. A global (cross-MAC) rate limit was considered and intentionally left out of `pydhcpd`: it would need careful tuning to avoid rejecting legitimate clients during a normal burst of reconnections (e.g. many devices rejoining after a power outage), and there is no evidence MAC-rotation abuse is a live threat worth that trade-off. Documented here as a known, accepted limitation.
+> **known limitation, both servers:** neither controls an attacker who rotates MAC addresses to exhaust the pool. `isc-dhcp-server`'s gap is total — it has no per-client throttle at all, so a plain flood from a single MAC already drains the pool, no rotation needed. `pydhcpd`'s gap is narrower: its per-MAC limit stops a single-MAC flood, but is keyed by MAC (`chaddr`), so it only bounds how fast *one* MAC can allocate — it does not cap the total across many different MACs, and an attacker rotating MACs can still drain the pool one new MAC at a time. A global (cross-MAC) rate limit was considered and intentionally left out of `pydhcpd`: it would need careful tuning to avoid rejecting legitimate clients during a normal burst of reconnections (e.g. many devices rejoining after a power outage), and there is no evidence MAC-rotation abuse is a live threat worth that trade-off. Documented here as a known, accepted limitation.
 >
-> **Nota — limitación conocida, en ambos servidores:** ninguno controla a un atacante que rota direcciones MAC para agotar el pool. La brecha de `isc-dhcp-server` es total — no tiene ningún control por cliente, así que una inundación simple desde una sola MAC ya agota el pool, sin necesidad de rotar. La brecha de `pydhcpd` es más acotada: su límite por MAC frena la inundación de una sola MAC, pero está indexado por MAC (`chaddr`), así que solo acota qué tan rápido puede asignar *una* MAC — no limita el total entre muchas MACs distintas, y un atacante que rote MACs igual puede vaciar el pool, una MAC nueva a la vez. Se evaluó un límite global (entre todas las MACs) para `pydhcpd` y se dejó afuera intencionalmente: requeriría un ajuste cuidadoso para no rechazar clientes legítimos durante una ráfaga normal de reconexiones (p.ej. varios dispositivos reconectándose tras un corte de luz), y no hay evidencia de que el abuso por rotación de MAC sea una amenaza activa que justifique ese costo. Se documenta acá como una limitación conocida y aceptada.
+> **limitación conocida, en ambos servidores:** ninguno controla a un atacante que rota direcciones MAC para agotar el pool. La brecha de `isc-dhcp-server` es total — no tiene ningún control por cliente, así que una inundación simple desde una sola MAC ya agota el pool, sin necesidad de rotar. La brecha de `pydhcpd` es más acotada: su límite por MAC frena la inundación de una sola MAC, pero está indexado por MAC (`chaddr`), así que solo acota qué tan rápido puede asignar *una* MAC — no limita el total entre muchas MACs distintas, y un atacante que rote MACs igual puede vaciar el pool, una MAC nueva a la vez. Se evaluó un límite global (entre todas las MACs) para `pydhcpd` y se dejó afuera intencionalmente: requeriría un ajuste cuidadoso para no rechazar clientes legítimos durante una ráfaga normal de reconexiones (p.ej. varios dispositivos reconectándose tras un corte de luz), y no hay evidencia de que el abuso por rotación de MAC sea una amenaza activa que justifique ese costo. Se documenta acá como una limitación conocida y aceptada.
+
+#### WPAD/PAC Option Scoping
+
+| isc-dhcp-server | pydhcpd |
+|---|---|
+| Supports scoping any option — including `option wpad` (252) — at multiple levels: `subnet`, `class`/`subclass`, or an individual `host`. A more specific scope overrides a broader one, so an admin can declare WPAD at the `subnet` level for every client and then override or omit it for a specific `class` or `host` (e.g. exclude a group of trusted/unrestricted devices from the PAC).<br><br>Soporta el alcance de cualquier opción — incluyendo `option wpad` (252) — en varios niveles: `subnet`, `class`/`subclass`, o un `host` individual. Un alcance más específico sobreescribe uno más amplio, así que un administrador puede declarar WPAD a nivel `subnet` para todos los clientes y luego sobreescribirlo u omitirlo para una `class` o `host` específico (ej. excluir a un grupo de dispositivos confiables/sin restricción del PAC). | Has no option-scoping mechanism at all — `config.wpad_url` is a single global value read once from the `subnet` block, applied identically to every `OFFER`/`ACK`/`INFORM` it sends. `WPAD_ENABLED` in `pyleases.env` is therefore all-or-nothing: on turns WPAD on for every client, off turns it off for every client. The existing `class "blockdhcp"`/`subclass` mechanism does not generalize to this — it only marks MACs for lease denial, not a scoping construct for arbitrary options like isc-dhcp-server's classes.<br><br>No tiene ningún mecanismo de alcance de opciones — `config.wpad_url` es un único valor global leído una vez del bloque `subnet`, aplicado igual a cada `OFFER`/`ACK`/`INFORM` que envía. `WPAD_ENABLED` en `pyleases.env` es entonces todo-o-nada: activado prende WPAD para todos los clientes, desactivado lo apaga para todos. El mecanismo existente de `class "blockdhcp"`/`subclass` no generaliza a este caso — solo marca MACs para negarles el lease, no un constructo de alcance para opciones arbitrarias como sí lo son las clases de isc-dhcp-server. |
+
+> **Workaround (external to pydhcp):** if `WPAD_ENABLED=true` and some MACs must never see the PAC, block their access to the PAC's port (e.g. 18100) at the firewall. This does not stop `pydhcpd` from sending option 252 to them, but the client can never fetch the PAC file, and the PAC's own `DIRECT` fallback lets it proceed without a proxy. This is a firewall-side workaround, not a `pydhcp` feature — `pydhcp` has no firewall component and does not ship or manage this rule itself.
+>
+> **Workaround (externo a pydhcp):** si `WPAD_ENABLED=true` y algunas MACs nunca deben ver el PAC, bloquee su acceso al puerto del PAC (ej. 18100) en el firewall. Esto no evita que `pydhcpd` les mande la opción 252, pero el cliente nunca podrá descargar el archivo PAC, y el fallback `DIRECT` del propio PAC le permite seguir sin proxy. Este es un workaround del lado del firewall, no una funcionalidad de `pydhcp` — `pydhcp` no tiene componente de firewall y no provee ni gestiona esa regla.
 
 ## EOL
 

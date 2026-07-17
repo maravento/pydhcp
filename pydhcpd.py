@@ -9,9 +9,9 @@
 # writes /etc/pydhcp/pydhcpd.leases and /etc/pydhcp/pydhcpd.pid.
 #
 # Supported dhcpd.conf directives:
-#   authoritative, server-identifier, deny duplicates,
+#   authoritative, not authoritative, server-identifier, deny duplicates,
 #   one-lease-per-client, deny declines,
-#   ping-check,
+#   ping-check, cleanup-interval,
 #   host { hardware ethernet; fixed-address; }
 #   class "blockdhcp" { match pick-first-value ... }
 #   subclass "blockdhcp" 1:<mac>;
@@ -21,7 +21,8 @@
 #             pool { deny members of "blockdhcp"; range; } }
 #
 # Requirements: Python 3.8+, no external dependencies.
-# Run as root. User/group pydhcpd must exist.
+# Runs as a systemd service under the pydhcpd user (AmbientCapabilities
+# CAP_NET_RAW, CAP_NET_BIND_SERVICE). User/group pydhcpd must exist.
 
 import os
 import sys
@@ -1687,7 +1688,12 @@ def test_config(config_path):
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("-t", "--test"):
-        sys.exit(0 if test_config(CONF_FILE) else 1)
+        test_path = CONF_FILE
+        if "-cf" in sys.argv:
+            cf_idx = sys.argv.index("-cf")
+            if cf_idx + 1 < len(sys.argv):
+                test_path = sys.argv[cf_idx + 1]
+        sys.exit(0 if test_config(test_path) else 1)
 
     os.makedirs(BASE_DIR, exist_ok=True)
 
@@ -1727,6 +1733,10 @@ def main():
         server.stop()
 
     def reload_config(signum, frame):
+        for h in logging.getLogger().handlers:
+            if isinstance(h, logging.FileHandler):
+                h.close()
+                h.stream = h._open()
         log.info("SIGHUP received — reloading configuration...")
         try:
             new_config = DHCPConfig()

@@ -226,22 +226,34 @@ info "Broadcast: $BROADCAST"
 # Pool range
 echo ""
 while true; do
-    read -rp "  Enter pool start (last octet, default: 220): " POOL_START
-    POOL_START=$(echo "$POOL_START" | xargs)
-    [[ -z "$POOL_START" ]] && POOL_START="220"
-    if [[ "$POOL_START" =~ ^[0-9]+$ ]] && (( 10#$POOL_START >= 1 && 10#$POOL_START <= 254 )); then
+    while true; do
+        read -rp "  Enter pool start (last octet, default: 220): " POOL_START
+        POOL_START=$(echo "$POOL_START" | xargs)
+        [[ -z "$POOL_START" ]] && POOL_START="220"
+        if [[ "$POOL_START" =~ ^[0-9]+$ ]] && (( 10#$POOL_START >= 1 && 10#$POOL_START <= 254 )); then
+            break
+        fi
+        warn "Invalid value, enter a number between 1 and 254"
+    done
+    while true; do
+        read -rp "  Enter pool end   (last octet, default: 235): " POOL_END
+        POOL_END=$(echo "$POOL_END" | xargs)
+        [[ -z "$POOL_END" ]] && POOL_END="235"
+        if [[ "$POOL_END" =~ ^[0-9]+$ ]] && (( 10#$POOL_END > 10#$POOL_START && 10#$POOL_END <= 254 )); then
+            break
+        fi
+        warn "Pool end must be greater than pool start ($POOL_START) and <= 254"
+    done
+    if python3 -c "
+import ipaddress, sys
+net = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
+start = ipaddress.IPv4Address(f'{sys.argv[3]}.{sys.argv[4]}')
+end = ipaddress.IPv4Address(f'{sys.argv[3]}.{sys.argv[5]}')
+sys.exit(0 if start in net and end in net else 1)
+" "$SUBNET" "$NETMASK" "$NET_BASE" "$POOL_START" "$POOL_END"; then
         break
     fi
-    warn "Invalid value, enter a number between 1 and 254"
-done
-while true; do
-    read -rp "  Enter pool end   (last octet, default: 235): " POOL_END
-    POOL_END=$(echo "$POOL_END" | xargs)
-    [[ -z "$POOL_END" ]] && POOL_END="235"
-    if [[ "$POOL_END" =~ ^[0-9]+$ ]] && (( 10#$POOL_END > 10#$POOL_START && 10#$POOL_END <= 254 )); then
-        break
-    fi
-    warn "Pool end must be greater than pool start ($POOL_START) and <= 254"
+    warn "Pool range ${NET_BASE}.${POOL_START}-${POOL_END} falls outside subnet ${SUBNET}/${NETMASK} — try again"
 done
 info "Pool range: ${NET_BASE}.${POOL_START} → ${NET_BASE}.${POOL_END}"
 
@@ -280,7 +292,7 @@ chmod 755 "$INSTALL_DIR/pydhcpd.py"
 
 # Deploy pydhcpd.conf (preserved on update — never overwritten)
 if [ -f "$INSTALL_DIR/pydhcpd.conf" ]; then
-    warn "pydhcpd.conf already exists in $INSTALL_DIR — skipping (not overwritten)"
+    warn "pydhcpd.conf already exists in $INSTALL_DIR — static hosts and blocked MACs kept, network parameters will be updated with your answers"
 else
     info "Deploying pydhcpd.conf ..."
     verify_source "$SCRIPT_DIR/pydhcpd.conf"
@@ -326,9 +338,8 @@ info "Interface set in default/pydhcpd: $IFACE"
 CONF_TMP=$(mktemp "$INSTALL_DIR/.pydhcpd.conf.XXXXXX")
 cp -f "$INSTALL_DIR/pydhcpd.conf" "$CONF_TMP"
 sed -i "s|^server-identifier .*|server-identifier ${SERVER_IP};|" "$CONF_TMP"
-sed -i "s|subnet [0-9.]* netmask|subnet ${SUBNET} netmask|" "$CONF_TMP"
+sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${SUBNET} netmask ${NETMASK}|" "$CONF_TMP"
 sed -i "s|option routers .*;|option routers ${SERVER_IP};|" "$CONF_TMP"
-sed -i "s|option subnet-mask .*;|option subnet-mask ${NETMASK};|" "$CONF_TMP"
 sed -i "s|option broadcast-address .*;|option broadcast-address ${BROADCAST};|" "$CONF_TMP"
 sed -i "s|range [0-9.]* [0-9.]*;|range ${NET_BASE}.${POOL_START} ${NET_BASE}.${POOL_END};|" "$CONF_TMP"
 # Greedy sed fix: only replace SERVER_IP placeholder, not entire line

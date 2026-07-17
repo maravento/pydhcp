@@ -546,7 +546,7 @@ if ($in{'action'} eq 'save' && defined $in{'conf_content'}) {
             {
                 local *STDOUT = $devnull if $devnull;
                 local *STDERR = $devnull if $devnull;
-                $rc = system($DAEMON_BIN, "--test", $tmpfile);
+                $rc = system($DAEMON_BIN, "-t", "-cf", $tmpfile);
             }
             close($devnull) if $devnull;
             if ($rc != 0) {
@@ -791,7 +791,7 @@ main() {
                 exit 0
                 ;;
             uninstall)
-                uninstall_module
+                uninstall_module || true
                 exit 0
                 ;;
             -h|--help)
@@ -817,7 +817,7 @@ main() {
                 read -p "Press Enter to continue..."
                 ;;
             2)
-                uninstall_module
+                uninstall_module || true
                 echo ""
                 read -p "Press Enter to continue..."
                 ;;
