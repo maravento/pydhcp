@@ -165,7 +165,8 @@ print(net.broadcast_address)
 
     NET_BASE="${SERV_DHCP%.*}"
     while true; do
-        read -rp "Block pool start (last octet, e.g. 230): " POOL_START_OCT
+        read -rp "Block pool start (last octet) [230]: " POOL_START_OCT
+        POOL_START_OCT="${POOL_START_OCT:-230}"
         if [[ "$POOL_START_OCT" =~ ^[0-9]+$ ]] && (( POOL_START_OCT >= 1 && POOL_START_OCT <= 254 )); then
             SERV_INI_RANGE_BLOCK="${NET_BASE}.${POOL_START_OCT}"
             break
@@ -174,7 +175,8 @@ print(net.broadcast_address)
     done
 
     while true; do
-        read -rp "Block pool end (last octet, e.g. 235): " POOL_END_OCT
+        read -rp "Block pool end (last octet) [239]: " POOL_END_OCT
+        POOL_END_OCT="${POOL_END_OCT:-239}"
         if [[ "$POOL_END_OCT" =~ ^[0-9]+$ ]] && (( POOL_END_OCT > POOL_START_OCT && POOL_END_OCT <= 254 )); then
             SERV_END_RANGE_BLOCK="${NET_BASE}.${POOL_END_OCT}"
             break
@@ -183,7 +185,8 @@ print(net.broadcast_address)
     done
 
     while true; do
-        read -rp "DNS servers (e.g. 8.8.8.8,1.1.1.1): " SERV_DNS
+        read -rp "DNS servers [8.8.8.8,1.1.1.1]: " SERV_DNS
+        SERV_DNS="${SERV_DNS:-8.8.8.8,1.1.1.1}"
         validate_dns "$SERV_DNS" && break || log "Invalid DNS format, try again"
     done
 

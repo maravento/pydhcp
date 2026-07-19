@@ -639,7 +639,7 @@ class LeaseManager:
         with self.lock:
             self._quarantine[ip] = time.time() + duration
 
-    def allocate(self, mac, hostname, requested_ip=None, hint_ip=None, src_mac=None,
+    def allocate(self, mac, hostname, requested_ip=None, hint_ip=None,
                  persist=True, provisional=False):
         mac = mac.lower()
         # Rate-limit per client MAC (chaddr) so that multiple clients behind
@@ -1283,10 +1283,10 @@ class DHCPServer:
         log_hostname = hostname if hostname else "<no hostname>"
 
         if msg_type == MSG_DISCOVER:
-            self._handle_discover(pkt, mac, hostname, log_hostname, src_mac)
+            self._handle_discover(pkt, mac, hostname, log_hostname)
 
         elif msg_type == MSG_REQUEST:
-            self._handle_request(pkt, mac, hostname, log_hostname, src_mac)
+            self._handle_request(pkt, mac, hostname, log_hostname)
 
         elif msg_type == MSG_DECLINE:
             with self._config_lock:
@@ -1399,7 +1399,7 @@ class DHCPServer:
         reply = _pad_to_min_bootp(bytes(pkt_buf) + bytes(options))
         self._send(reply, giaddr=pkt.get("giaddr", "0.0.0.0"), ciaddr=pkt.get("ciaddr", "0.0.0.0"))
 
-    def _handle_discover(self, pkt, mac, hostname, log_hostname, src_mac=None):
+    def _handle_discover(self, pkt, mac, hostname, log_hostname):
         log.info("DISCOVER from %s (%s)", mac, log_hostname)
 
         with self._config_lock:
@@ -1417,11 +1417,11 @@ class DHCPServer:
                 alloc_reason = None
             else:
                 offered_ip, lease_time, alloc_reason = self.leases.allocate(
-                    mac, hostname, hint_ip=pkt.get("requested_ip"), src_mac=src_mac,
+                    mac, hostname, hint_ip=pkt.get("requested_ip"),
                     persist=False, provisional=True)
         else:
             offered_ip, lease_time, alloc_reason = self.leases.allocate(
-                mac, hostname, hint_ip=pkt.get("requested_ip"), src_mac=src_mac,
+                mac, hostname, hint_ip=pkt.get("requested_ip"),
                 persist=False, provisional=True)
 
         if not offered_ip:
@@ -1482,7 +1482,7 @@ class DHCPServer:
 
         _send_offer()
 
-    def _handle_request(self, pkt, mac, hostname, log_hostname, src_mac=None):
+    def _handle_request(self, pkt, mac, hostname, log_hostname):
         log.info("REQUEST from %s (%s)", mac, log_hostname)
 
         requested = pkt["requested_ip"]
@@ -1547,7 +1547,7 @@ class DHCPServer:
             if existing and existing.ip != target_ip and not self.leases.is_blocked(mac):
                 old_ip_to_release = existing.ip
 
-        offered_ip, lease_time, alloc_reason = self.leases.allocate(mac, hostname, requested_ip=target_ip, src_mac=src_mac)
+        offered_ip, lease_time, alloc_reason = self.leases.allocate(mac, hostname, requested_ip=target_ip)
 
         if not offered_ip:
             if config_auth:

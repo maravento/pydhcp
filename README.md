@@ -59,7 +59,7 @@
         <li>DDNS</li>
         <li>Multiple interfaces</li>
         <li>BOOTP / PXE</li>
-        <li>DHCP relay agents (no legitimate use case without multi-segment/multi-interface support — see above)</li>
+        <li>DHCP relay agents (no legitimate use case without multi-segment/multi-interface support — see above). The <code>giaddr</code>/<code>hops</code> fields are still parsed, but only to close a spoofing hole, not to offer relay functionality: without any validation, an attacker could set an arbitrary <code>giaddr</code> and get the server to send unsolicited DHCP replies to that IP (reflection). The check requires <code>hops >= 1</code> and <code>giaddr == src_ip</code> (the sender's real IP) — if it doesn't match, the packet is dropped and logged as <code>"Spoofed relay dropped"</code>. This is a hardening measure for a field that must be parsed either way, not relay support a deployment could rely on</li>
         <li><code>client-updates</code> / <code>deny client-updates</code> (depends on DDNS + client FQDN option, neither implemented)</li>
         <li><code>option subnet-mask</code> override (the netmask sent to clients always matches the <code>subnet ... netmask ...</code> declaration; no override support)</li>
         <li>Per-host/per-class option scoping: options declared at the <code>subnet</code> level (e.g. <code>option wpad ...;</code>) apply to every client uniformly. Unlike <code>isc-dhcp-server</code>, there is no way to override or omit a subnet-level option for a specific <code>host</code> or <code>class</code>/<code>subclass</code> — <code>class</code>/<code>subclass</code> here only support the MAC-block use case (see <code>blockdhcp</code> below)</li>
@@ -73,7 +73,7 @@
         <li>DDNS</li>
         <li>Múltiples interfaces</li>
         <li>BOOTP / PXE</li>
-        <li>Agentes de relay DHCP (sin caso de uso legítimo sin soporte multi-segmento/multi-interfaz — ver arriba)</li>
+        <li>Agentes de relay DHCP (sin caso de uso legítimo sin soporte multi-segmento/multi-interfaz — ver arriba). Los campos <code>giaddr</code>/<code>hops</code> igual se parsean, pero solo para cerrar un hueco de spoofing, no para ofrecer funcionalidad de relay: sin ninguna validación, un atacante podría poner cualquier <code>giaddr</code> y lograr que el servidor mande respuestas DHCP no solicitadas a esa IP (reflection). El chequeo exige <code>hops >= 1</code> y que <code>giaddr == src_ip</code> (la IP real de quien envía) — si no coincide, el paquete se descarta y se registra como <code>"Spoofed relay dropped"</code>. Es una medida de hardening sobre un campo que hay que parsear de todas formas, no soporte de relay del que un despliegue pueda depender</li>
         <li><code>client-updates</code> / <code>deny client-updates</code> (depende de DDNS + opción FQDN del cliente, ninguna implementada)</li>
         <li>Override de <code>option subnet-mask</code> (la máscara enviada a los clientes siempre coincide con la declaración <code>subnet ... netmask ...</code>; sin soporte de override)</li>
         <li>Alcance de opciones por host/clase: las opciones declaradas a nivel <code>subnet</code> (ej. <code>option wpad ...;</code>) aplican a todos los clientes por igual. A diferencia de <code>isc-dhcp-server</code>, no hay forma de sobreescribir u omitir una opción de nivel subnet para un <code>host</code> o <code>class</code>/<code>subclass</code> específico — aquí <code>class</code>/<code>subclass</code> solo soportan el caso de bloqueo por MAC (ver <code>blockdhcp</code> abajo)</li>

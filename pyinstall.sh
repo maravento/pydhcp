@@ -151,8 +151,8 @@ if [[ "${1:-}" == "--update" ]]; then
     info "  $INSTALL_DIR/pydhcpd.conf    — unchanged"
     info "  $INSTALL_DIR/default/pydhcpd  — unchanged"
     info "  $INSTALL_DIR/pydhcpd.leases  — unchanged"
-    warn "  NOTE: If you had uncommented the WPAD/option 252 lines in pyleases.sh,"
-    warn "        they have been overwritten. Re-enable them manually if needed."
+    warn "  NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in pyleases.env"
+    warn "        (not by editing pyleases.sh) and is unaffected by this update."
     echo ""
     exit 0
 fi
@@ -227,18 +227,18 @@ info "Broadcast: $BROADCAST"
 echo ""
 while true; do
     while true; do
-        read -rp "  Enter pool start (last octet, default: 220): " POOL_START
+        read -rp "  Enter pool start (last octet, default: 230): " POOL_START
         POOL_START=$(echo "$POOL_START" | xargs)
-        [[ -z "$POOL_START" ]] && POOL_START="220"
+        [[ -z "$POOL_START" ]] && POOL_START="230"
         if [[ "$POOL_START" =~ ^[0-9]+$ ]] && (( 10#$POOL_START >= 1 && 10#$POOL_START <= 254 )); then
             break
         fi
         warn "Invalid value, enter a number between 1 and 254"
     done
     while true; do
-        read -rp "  Enter pool end   (last octet, default: 235): " POOL_END
+        read -rp "  Enter pool end   (last octet, default: 239): " POOL_END
         POOL_END=$(echo "$POOL_END" | xargs)
-        [[ -z "$POOL_END" ]] && POOL_END="235"
+        [[ -z "$POOL_END" ]] && POOL_END="239"
         if [[ "$POOL_END" =~ ^[0-9]+$ ]] && (( 10#$POOL_END > 10#$POOL_START && 10#$POOL_END <= 254 )); then
             break
         fi
@@ -308,6 +308,7 @@ chmod 750 "$INSTALL_DIR/default"
 
 if [ -f "$INSTALL_DIR/default/pydhcpd" ]; then
     warn "default/pydhcpd already exists in $INSTALL_DIR — skipping (not overwritten)"
+    info "Interface NOT changed — still using the value in default/pydhcpd"
 else
     info "Creating default/pydhcpd ..."
     cat > "$INSTALL_DIR/default/pydhcpd" <<DEFEOF
@@ -329,10 +330,10 @@ INTERFACESv4="$IFACE"
 DAEMON_USER="pydhcpd"
 DAEMON_GROUP="pydhcpd"
 DEFEOF
+    info "Interface set in default/pydhcpd: $IFACE"
 fi
 chown root:"$SYSTEM_USER" "$INSTALL_DIR/default/pydhcpd"
 chmod 640 "$INSTALL_DIR/default/pydhcpd"
-info "Interface set in default/pydhcpd: $IFACE"
 
 # Apply network parameters to pydhcpd.conf
 CONF_TMP=$(mktemp "$INSTALL_DIR/.pydhcpd.conf.XXXXXX")
