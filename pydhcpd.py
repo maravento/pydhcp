@@ -321,6 +321,12 @@ class DHCPConfig:
                     f"Invalid {label} bounds: min={lo} default={mid} max={hi} "
                     f"(must satisfy 0 < min <= default <= max < 2**32)")
 
+        if self.cleanup_interval > self.pool_min_lease:
+            log.warning(
+                "cleanup-interval (%d) is greater than pool min-lease-time (%d) — "
+                "expired leases may appear to hold the pool until the next cleanup cycle",
+                self.cleanup_interval, self.pool_min_lease)
+
     @staticmethod
     def _balanced_braces(text, start):
         depth = 1

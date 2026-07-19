@@ -48,8 +48,12 @@ pid_is_pydhcpd() {
     _pid="$1"
     [ -n "$_pid" ] || return 1
     [ -r "/proc/$_pid/cmdline" ] || return 1
-    # cmdline is NUL-separated; translate to spaces for matching.
-    tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null | grep -q "$DAEMON_ARGS"
+    # cmdline is NUL-separated; translate to spaces and split into argv tokens.
+    _cmdline=$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)
+    for _arg in $_cmdline; do
+        [ "$_arg" = "$DAEMON_ARGS" ] && return 0
+    done
+    return 1
 }
 
 read_pid() {

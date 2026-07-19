@@ -6,36 +6,36 @@
 # DHCP Leases & ACL Manager (pydhcpd)
 #
 # DESCRIPTION:
-#   DHCP lease management script for pydhcpd that:
-#   - Parses and cleans /etc/pydhcp/pydhcpd.leases
-#   - Detects unauthorized clients and adds them to the block list
-#   - Dynamically rebuilds /etc/pydhcp/pydhcpd.conf based on ACL sources
-#   - Applies static MAC→IP mappings from ACL files
-#   - Removes duplicates and enforces consistency across data sources
-#   - Safely restarts the pydhcpd service
+# DHCP lease management script for pydhcpd that:
+# - Parses and cleans /etc/pydhcp/pydhcpd.leases
+# - Detects unauthorized clients and adds them to the block list
+# - Dynamically rebuilds /etc/pydhcp/pydhcpd.conf based on ACL sources
+# - Applies static MAC->IP mappings from ACL files
+# - Removes duplicates and enforces consistency across data sources
+# - Safely restarts the pydhcpd service
 #
 # FEATURES:
-#   - Locking mechanism to prevent concurrent executions (flock)
-#   - Lease filtering and selective persistence
-#   - Automatic cleanup and normalization of ACL files
-#   - Duplicate detection with fail-safe abort
-#   - First-run configuration via pyleases.env (auto-generated)
-#   - All paths, ACL files and network settings read from pyleases.env
+# - Locking mechanism to prevent concurrent executions (flock)
+# - Lease filtering and selective persistence
+# - Automatic cleanup and normalization of ACL files
+# - Duplicate detection with fail-safe abort
+# - First-run configuration via pyleases.env (auto-generated)
+# - All paths, ACL files and network settings read from pyleases.env
 #
 # REQUIREMENTS:
-#   - pydhcpd installed and running
-#   - ACL directories and files as defined in pyleases.env
-#   - Root privileges
-#   - python3 (for network calculations on first run)
+# - pydhcpd installed and running
+# - ACL directories and files as defined in pyleases.env
+# - Root privileges
+# - python3 (for network calculations on first run)
 #
 # ACL FORMAT:
-#       a;MAC;IP;HOSTNAME;
+# a;MAC;IP;HOSTNAME;
 #
 # NOTES:
-#   - Designed for environments enforcing DHCP-based access control
-#   - Incorrect ACL data may disrupt IP assignments
-#   - On first run, pyleases.env is created with network/path configuration
-#   - Delete pyleases.env to re-run setup
+# - Designed for environments enforcing DHCP-based access control
+# - Incorrect ACL data may disrupt IP assignments
+# - On first run, pyleases.env is created with network/path configuration
+# - Delete pyleases.env to re-run setup
 #
 # WPAD/PAC OPTION (option 252)
 # If you need WPAD/PAC for proxy auto-configuration:
@@ -46,11 +46,14 @@
 #
 # NOTE on logging:
 # - Writes to /var/log/pydhcp.log, a separate log from the daemon's
-#   /var/log/pydhcpd.log. This script creates and owns its own rotation
-#   config (/etc/logrotate.d/pydhcp) below; pyinstall.sh does not deploy it.
+# /var/log/pydhcpd.log. The log file and its rotation config
+# (/etc/logrotate.d/pydhcp) are created by pyinstall.sh.
 #
 ################################################################################
 
+set -uo pipefail
+
+# PATH for cron
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # logging
@@ -60,43 +63,65 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $msg" | tee -a "$log_file" 2>/dev/null || true
 }
 
-# Delimits where a new run starts in the log — useful with heavy activity
+# Delimits where a new run starts in the log -- useful with heavy activity
 # (dozens of MACs coming and going per run).
-echo "────────────────────────────────────────────────────────────────────────────────" | tee -a "$log_file" 2>/dev/null || true
+echo "--------------------------------------------------------------------------------" | tee -a "$log_file" 2>/dev/null || true
 
-# Start
-log "pyleases start..."
-
+## root check
 if [ "$(id -u)" != "0" ]; then
     log "ERROR: This script must be run as root"
     exit 1
 fi
 
-# Own logrotate config for pydhcp.log; created here on first run.
-logrotate_conf="/etc/logrotate.d/pydhcp"
-if [ ! -f "$logrotate_conf" ]; then
-    cat > "$logrotate_conf" <<'EOF'
-/var/log/pydhcp.log {
-    weekly
-    rotate 4
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 640 root pydhcpd
-}
-EOF
-    chmod 644 "$logrotate_conf"
-    chown root:root "$logrotate_conf"
-    log "Created logrotate config: $logrotate_conf"
-fi
-
+# prevent overlapping runs
 SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
     log "Script $(basename "$0") is already running"
     exit 1
 fi
+
+# LOCAL USER detection
+detect_local_user() {
+    local uid_min uid_max
+    local user uid best_user="" best_uid=999999
+
+    uid_min=$(awk '/^UID_MIN/{print $2}' /etc/login.defs 2>/dev/null)
+    uid_max=$(awk '/^UID_MAX/{print $2}' /etc/login.defs 2>/dev/null)
+    uid_min=${uid_min:-1000}
+    uid_max=${uid_max:-60000}
+
+    while IFS=: read -r user _ uid _ _ _ shell; do
+        [ "$user" = "root" ] && continue
+        [ -z "$uid" ] && continue
+        [ "$uid" -lt "$uid_min" ] && continue
+        [ "$uid" -gt "$uid_max" ] && continue
+
+        case "$shell" in
+            */false|*/nologin) continue ;;
+        esac
+
+        id -nG "$user" 2>/dev/null | grep -qw sudo || continue
+
+        if [ "$uid" -lt "$best_uid" ]; then
+            best_uid="$uid"
+            best_user="$user"
+        fi
+    done </etc/passwd
+
+    [ -n "$best_user" ] || return 1
+    echo "$best_user"
+}
+
+if ! local_user=$(detect_local_user); then
+    log "ERROR: No valid local user found. Create one with sudo access."
+    exit 1
+fi
+log "Using local user: $local_user"
+
+# Start
+log "pyleases start..."
 
 TEMP_FILES_TO_CLEAN=()
 PYDHCPD_NEEDS_RESTART=0
@@ -111,16 +136,6 @@ cleanup_temp() {
     fi
 }
 trap cleanup_temp EXIT
-
-local_user=""
-local_user=$(who | awk '/\(:0\)/{print $1; exit}')
-[ -z "$local_user" ] && local_user=$(logname 2>/dev/null || true)
-[ -z "$local_user" ] && local_user="${SUDO_USER:-}"
-[ -z "$local_user" ] && local_user=$(who | awk 'NR==1{print $1}')
-if [ -z "$local_user" ] || ! id "$local_user" &>/dev/null; then
-    log "WARNING: Cannot determine a valid local user — desktop notifications disabled"
-    local_user=""
-fi
 
 setup_env() {
     local env_file="$1"
@@ -282,10 +297,11 @@ _notify() {
     local bus="unix:path=/run/user/${uid}/bus"
     local xdg_runtime="/run/user/${uid}"
 
+    local session_id
+    session_id=$(loginctl show-user "$user" 2>/dev/null | awk -F'[= ]' '/^Sessions=/{print $2}')
+
     local session_type
-    session_type=$(loginctl show-session \
-        "$(loginctl show-user "$user" 2>/dev/null | awk -F'[= ]' '/^Sessions=/{print $2}')" \
-        -p Type --value 2>/dev/null || echo "x11")
+    session_type=$(loginctl show-session "$session_id" -p Type --value 2>/dev/null || echo "x11")
 
     if [[ "$session_type" == "wayland" ]]; then
         sudo -u "$user" \
@@ -294,8 +310,10 @@ _notify() {
             XDG_RUNTIME_DIR="$xdg_runtime" \
             notify-send "$@" 2>/dev/null || true
     else
+        local display
+        display=$(loginctl show-session "$session_id" -p Display --value 2>/dev/null)
         sudo -u "$user" \
-            DISPLAY=:0 \
+            DISPLAY="${display:-:0}" \
             DBUS_SESSION_BUS_ADDRESS="$bus" \
             XDG_RUNTIME_DIR="$xdg_runtime" \
             notify-send "$@" 2>/dev/null || true
@@ -362,7 +380,7 @@ verify_dhcp_files
 verify_dhcp_config
 verify_directories
 initialize_empty_files
-log "Verification OK — pydhcpd active, paths valid"
+log "Verification OK -- pydhcpd active, paths valid"
 
 function is_pydhcp() {
     dhcpd=/etc/pydhcp/pydhcpd.leases
@@ -402,14 +420,14 @@ function is_pydhcp() {
                         shopt -u nullglob
                         if [ ${#acl_mac_files[@]} -eq 0 ] || ! grep -qi "^a;${mac_address};" "${acl_mac_files[@]}" 2>/dev/null; then
                             if ! grep -qi "^a;${mac_address};" "$ACL_BLOCK_FILE" 2>/dev/null; then
-                                log "read_leases: $mac_address → unknown → blockdhcp (ip=$ip_address host=$host)"
+                                log "read_leases: $mac_address -> unknown -> blockdhcp (ip=$ip_address host=$host)"
                                 echo "$line_lease" >> "$ACL_BLOCK_FILE"
                                 echo "$lease_content" >> "$temp_leases"
                             else
-                                log "read_leases: $mac_address → blocked (lease discarded)"
+                                log "read_leases: $mac_address -> blocked (lease discarded)"
                             fi
                         else
-                            log "read_leases: $mac_address → authoritative (ip=$ip_address)"
+                            log "read_leases: $mac_address -> authoritative (ip=$ip_address)"
                             echo "$lease_content" >> "$temp_leases"
                         fi
                     fi
@@ -433,7 +451,7 @@ function is_pydhcp() {
             # easily mean the parser failed to recognize the format. Either
             # way, silently truncating a non-empty leases file is worse than
             # leaving stale data for pydhcpd's own expiry to clean up.
-            log "read_leases: WARNING — kept 0 leases but $dhcpd was not empty; leaving it untouched to avoid data loss"
+            log "read_leases: WARNING -- kept 0 leases but $dhcpd was not empty; leaving it untouched to avoid data loss"
         else
             : > "$dhcpd"
             chown pydhcpd:pydhcpd "$dhcpd"
@@ -498,7 +516,7 @@ class "blockdhcp" {
         while IFS= read -r line; do
             macs=$(echo "$line" | cut -d ';' -f 2)
             if echo "$macs" | grep -qE '^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$'; then
-                printf '    subclass "blockdhcp" 1:%s;\n' "$macs" >>"$dhcp_conf_temp"
+                printf ' subclass "blockdhcp" 1:%s;\n' "$macs" >>"$dhcp_conf_temp"
             fi
         done < "$ACL_BLOCK_FILE"
 
@@ -592,7 +610,7 @@ class "blockdhcp" {
     log "Stopping pydhcpd"
     systemctl stop pydhcpd
     if systemctl is-active --quiet pydhcpd; then
-        log "ERROR: Stopping pydhcpd FAILED — still active, aborting before touching config/ACLs"
+        log "ERROR: Stopping pydhcpd FAILED -- still active, aborting before touching config/ACLs"
         _notify "$local_user" "Warning: Abort" "pydhcpd did not stop, aborting. $(date)" -i error
         exit 1
     fi
@@ -607,7 +625,7 @@ class "blockdhcp" {
     log "Starting pydhcpd"
     systemctl start pydhcpd
     if ! systemctl is-active --quiet pydhcpd; then
-        log "ERROR: Starting pydhcpd FAILED — check 'systemctl status pydhcpd'"
+        log "ERROR: Starting pydhcpd FAILED -- check 'systemctl status pydhcpd'"
         _notify "$local_user" "Warning: Abort" "pydhcpd did not start after reload. $(date)" -i error
         exit 1
     fi

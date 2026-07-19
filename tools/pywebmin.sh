@@ -6,19 +6,21 @@
 # PyDHCP module installation/uninstallation script for Webmin
 #
 # Description:
-#   Installs or uninstalls the PyDHCP module for Webmin.
-#   Provides a web interface to manage the pydhcpd daemon:
-#   service control, active leases table, and configuration editor.
+# Installs or uninstalls the PyDHCP module for Webmin.
+# Provides a web interface to manage the pydhcpd daemon:
+# service control, active leases table, and configuration editor.
 #
 # Usage:
-#   sudo ./pywebmin.sh [OPTIONS]
+# sudo ./pywebmin.sh [OPTIONS]
 #
 # Options:
-#   install      Install the module
-#   uninstall    Uninstall the module
-#   -h, --help   Show help message
+# install Install the module
+# uninstall Uninstall the module
+# -h, --help Show help message
 #
 ################################################################################
+
+set -euo pipefail
 
 ## root check
 if [ "$(id -u)" != "0" ]; then
@@ -28,6 +30,7 @@ fi
 
 # prevent overlapping runs
 SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
     echo "Script $(basename "$0") is already running"
@@ -45,8 +48,6 @@ if [ ! -f "/etc/pydhcp/pydhcpd.py" ]; then
     echo "Please install pydhcpd first"
     exit 1
 fi
-
-set -euo pipefail
 
 MODNAME="pydhcp"
 MODDIR="/usr/share/webmin/$MODNAME"
@@ -114,17 +115,17 @@ EOF
 index_title=Servidor PyDHCP
 index_status=Estado del Servicio
 index_leases=Concesiones Activas
-index_config=Configuración
+index_config=Configuracion
 index_no_leases=No se encontraron concesiones activas.
-index_not_installed=pydhcpd no está instalado. Ejecute pyinstall.sh primero.
+index_not_installed=pydhcpd no esta instalado. Ejecute pyinstall.sh primero.
 btn_start=Iniciar
 btn_stop=Detener
 btn_restart=Reiniciar
 btn_reload=Recargar
-btn_save=Guardar Configuración
+btn_save=Guardar Configuracion
 btn_refresh=Actualizar
-table_ip=Dirección IP
-table_mac=Dirección MAC
+table_ip=Direccion IP
+table_mac=Direccion MAC
 table_hostname=Nombre de host
 table_expires=Expira
 table_binding=Estado
@@ -132,9 +133,9 @@ status_active=Activo
 status_inactive=Inactivo
 status_unknown=Desconocido
 config_title=Editar pydhcpd.conf
-config_saved=Configuración guardada. Recargue el demonio para aplicar los cambios.
-config_error=Error al guardar la configuración.
-config_syntax_error=Error de sintaxis en la configuración. No guardado.
+config_saved=Configuracion guardada. Recargue el demonio para aplicar los cambios.
+config_error=Error al guardar la configuracion.
+config_syntax_error=Error de sintaxis en la configuracion. No guardado.
 EOF
 
     cat > "$MODDIR/index.cgi" <<'INDEXCGI'
@@ -171,10 +172,10 @@ sub read_defaults {
 }
 
 my $defaults = read_defaults();
-my $DAEMON_BIN  = "/etc/pydhcp/pydhcpd.py";
+my $DAEMON_BIN = "/etc/pydhcp/pydhcpd.py";
 my $LEASES_FILE = $defaults->{DHCPDv4_LEASES} || "/etc/pydhcp/pydhcpd.leases";
-my $CONF_FILE   = $defaults->{DHCPDv4_CONF}   || "/etc/pydhcp/pydhcpd.conf";
-my $SERVICE     = "pydhcpd";
+my $CONF_FILE = $defaults->{DHCPDv4_CONF} || "/etc/pydhcp/pydhcpd.conf";
+my $SERVICE = "pydhcpd";
 
 # Per-install CSRF secret: a random value stored 0600 and embedded in every
 # state-changing form, required back on submission. A cross-site attacker
@@ -211,10 +212,10 @@ if ($in{'action'}) {
         setsid();
         open(STDOUT, '>', '/dev/null');
         open(STDERR, '>', '/dev/null');
-        if    ($act eq 'start')   { system("systemctl", "start",   $SERVICE); }
-        elsif ($act eq 'stop')    { system("systemctl", "stop",    $SERVICE); }
+        if ($act eq 'start') { system("systemctl", "start", $SERVICE); }
+        elsif ($act eq 'stop') { system("systemctl", "stop", $SERVICE); }
         elsif ($act eq 'restart') { system("systemctl", "restart", $SERVICE); }
-        elsif ($act eq 'reload')  { system("systemctl", "reload",  $SERVICE); }
+        elsif ($act eq 'reload') { system("systemctl", "reload", $SERVICE); }
         exit 0;
     }
     sleep 1;
@@ -263,9 +264,9 @@ print <<'EOCSS';
     text-transform: uppercase;
     letter-spacing: 0.4px;
 }
-.pyd-active   { background:#d4edda; color:#155724; border:1px solid #c3e6cb; }
+.pyd-active { background:#d4edda; color:#155724; border:1px solid #c3e6cb; }
 .pyd-inactive { background:#f8d7da; color:#721c24; border:1px solid #f5c6cb; }
-.pyd-unknown  { background:#e2e3e5; color:#383d41; border:1px solid #d6d8db; }
+.pyd-unknown { background:#e2e3e5; color:#383d41; border:1px solid #d6d8db; }
 .pyd-btn {
     padding: 6px 16px;
     border-radius: 4px;
@@ -277,14 +278,14 @@ print <<'EOCSS';
     text-decoration: none;
     display: inline-block;
 }
-.pyd-btn-start   { background:#28a745; color:#fff; border-color:#28a745; }
-.pyd-btn-start:hover  { background:#218838; }
-.pyd-btn-stop    { background:#dc3545; color:#fff; border-color:#dc3545; }
-.pyd-btn-stop:hover   { background:#c82333; }
+.pyd-btn-start { background:#28a745; color:#fff; border-color:#28a745; }
+.pyd-btn-start:hover { background:#218838; }
+.pyd-btn-stop { background:#dc3545; color:#fff; border-color:#dc3545; }
+.pyd-btn-stop:hover { background:#c82333; }
 .pyd-btn-restart { background:#ffc107; color:#212529; border-color:#ffc107; }
 .pyd-btn-restart:hover { background:#e0a800; }
-.pyd-btn-reload  { background:#17a2b8; color:#fff; border-color:#17a2b8; }
-.pyd-btn-reload:hover  { background:#138496; }
+.pyd-btn-reload { background:#17a2b8; color:#fff; border-color:#17a2b8; }
+.pyd-btn-reload:hover { background:#138496; }
 .pyd-btn-refresh { background:#6c757d; color:#fff; border-color:#6c757d; }
 .pyd-btn-refresh:hover { background:#5a6268; }
 .pyd-table {
@@ -377,13 +378,13 @@ if (@leases) {
     print "<th>$text{'table_hostname'}</th><th>$text{'table_expires'}</th>";
     print "<th>$text{'table_binding'}</th></tr>\n";
     for my $l (@leases) {
-        my $ip       = &html_escape($l->{ip});
-        my $mac      = &html_escape($l->{mac});
-        my $host     = $l->{hostname}
+        my $ip = &html_escape($l->{ip});
+        my $mac = &html_escape($l->{mac});
+        my $host = $l->{hostname}
             ? &html_escape($l->{hostname})
-            : '<span style="color:#aaa">—</span>';
-        my $ends     = &html_escape($l->{ends});
-        my $binding  = &html_escape($l->{binding});
+            : '<span style="color:#aaa">--</span>';
+        my $ends = &html_escape($l->{ends});
+        my $binding = &html_escape($l->{binding});
         print "<tr>";
         print "<td>$ip</td>";
         print "<td>$mac</td>";
@@ -426,10 +427,10 @@ sub parse_active_leases {
 
     while ($raw =~ /lease\s+([\d.]+)\s*\{(.*?)\}/gs) {
         my ($ip, $body) = ($1, $2);
-        my ($mac)      = $body =~ /hardware\s+ethernet\s+([\da-f:]+)\s*;/i;
+        my ($mac) = $body =~ /hardware\s+ethernet\s+([\da-f:]+)\s*;/i;
         my ($hostname) = $body =~ /client-hostname\s+"([^"]+)"\s*;/;
-        my ($ends_str)   = $body =~ /ends\s+\d+\s+([\d\/]+\s[\d:]+)\s*;/;
-        my ($binding)  = $body =~ /binding\s+state\s+(\w+)\s*;/;
+        my ($ends_str) = $body =~ /ends\s+\d+\s+([\d\/]+\s[\d:]+)\s*;/;
+        my ($binding) = $body =~ /binding\s+state\s+(\w+)\s*;/;
         next unless $mac && $ends_str;
 
         # Convert ends date string to epoch
@@ -441,11 +442,11 @@ sub parse_active_leases {
         next unless $ends_epoch > $now;
 
         push @result, {
-            ip       => $ip,
-            mac      => lc($mac),
+            ip => $ip,
+            mac => lc($mac),
             hostname => $hostname || '',
-            ends     => $ends_str,
-            binding  => $binding || 'active',
+            ends => $ends_str,
+            binding => $binding || 'active',
         };
     }
     return sort { my @a = split(/\./, $a->{ip}); my @b = split(/\./, $b->{ip}); $a[0]<=>$b[0] || $a[1]<=>$b[1] || $a[2]<=>$b[2] || $a[3]<=>$b[3] } @result;
@@ -518,11 +519,11 @@ print "Cache-Control: no-cache, no-store, must-revalidate\r\n";
 my $message = "";
 
 if ($in{'action'} eq 'save' && defined $in{'conf_content'}) {
-    my $method  = $ENV{'REQUEST_METHOD'} || '';
-    my $referer = $ENV{'HTTP_REFERER'}   || '';
-    my $server  = $ENV{'SERVER_NAME'}    || 'localhost';
-    my $port    = $ENV{'SERVER_PORT'}    || '';
-    my $origin  = $port ? "${server}:${port}" : $server;
+    my $method = $ENV{'REQUEST_METHOD'} || '';
+    my $referer = $ENV{'HTTP_REFERER'} || '';
+    my $server = $ENV{'SERVER_NAME'} || 'localhost';
+    my $port = $ENV{'SERVER_PORT'} || '';
+    my $origin = $port ? "${server}:${port}" : $server;
 
     if ($method ne 'POST') {
         $message = "<div style='margin:10px 0;padding:10px 14px;background:#f8d7da;color:#721c24;border-radius:4px;border:1px solid #f5c6cb;font-size:13px;'>Request rejected (method not POST)</div>\n";
@@ -634,19 +635,19 @@ EOF
     cat > "$MODDIR/help/intro.es.html" <<'EOF'
 <header>Servidor PyDHCP</header>
 
-<h3>Introducción</h3>
-<p>El módulo PyDHCP permite administrar el demonio pydhcpd desde Webmin.
-Ofrece control del servicio, una vista en tiempo real de las concesiones DHCP activas y un editor integrado para el archivo de configuración del demonio.</p>
+<h3>Introduccion</h3>
+<p>El modulo PyDHCP permite administrar el demonio pydhcpd desde Webmin.
+Ofrece control del servicio, una vista en tiempo real de las concesiones DHCP activas y un editor integrado para el archivo de configuracion del demonio.</p>
 
 <h3>Control del Servicio</h3>
 <p><b>Iniciar / Detener / Reiniciar:</b> Controla el servicio systemd pydhcpd.</p>
-<p><b>Recargar:</b> Envía SIGHUP a pydhcpd, recargando la configuración sin interrumpir las concesiones activas.</p>
+<p><b>Recargar:</b> Envia SIGHUP a pydhcpd, recargando la configuracion sin interrumpir las concesiones activas.</p>
 
 <h3>Concesiones Activas</h3>
-<p>Muestra todas las entradas actuales en <code>/etc/pydhcp/pydhcpd.leases</code>: dirección IP, dirección MAC, nombre de host (si lo reporta el cliente), hora de expiración y estado de la concesión.</p>
+<p>Muestra todas las entradas actuales en <code>/etc/pydhcp/pydhcpd.leases</code>: direccion IP, direccion MAC, nombre de host (si lo reporta el cliente), hora de expiracion y estado de la concesion.</p>
 
-<h3>Configuración</h3>
-<p>Abre <code>/etc/pydhcp/pydhcpd.conf</code> para edición directamente en el navegador. Después de guardar, haga clic en Recargar para aplicar los cambios sin reiniciar el demonio.</p>
+<h3>Configuracion</h3>
+<p>Abre <code>/etc/pydhcp/pydhcpd.conf</code> para edicion directamente en el navegador. Despues de guardar, haga clic en Recargar para aplicar los cambios sin reiniciar el demonio.</p>
 
 <footer>
 EOF
@@ -678,17 +679,17 @@ ICONEOF
     if [ -f /etc/webmin/webmin.acl ]; then
         if ! grep -q "$MODNAME" /etc/webmin/webmin.acl 2>/dev/null; then
             sed -i.bak "s/\(^root:.*\)/\1 $MODNAME/" /etc/webmin/webmin.acl
-            echo "✓ Module added to webmin.acl (backup: /etc/webmin/webmin.acl.bak)"
+            echo "Module added to webmin.acl (backup: /etc/webmin/webmin.acl.bak)"
         fi
     else
-        echo "⚠ Warning: /etc/webmin/webmin.acl not found, skipping ACL update"
+        echo "Warning: /etc/webmin/webmin.acl not found, skipping ACL update"
     fi
 
     rm -f /var/webmin/module.infos.cache
 
     echo "Restarting Webmin service..."
     if ! { systemctl restart webmin.service 2>/dev/null || /etc/webmin/restart 2>/dev/null; }; then
-        echo "WARNING: Webmin restart failed — reload it manually so the module takes effect"
+        echo "WARNING: Webmin restart failed -- reload it manually so the module takes effect"
     fi
 
     echo ""
@@ -713,7 +714,7 @@ uninstall_module() {
     echo ""
 
     if [ ! -d "$MODDIR" ]; then
-        echo "⚠  Module is not installed."
+        echo "Module is not installed."
         echo ""
         return 1
     fi
@@ -721,23 +722,23 @@ uninstall_module() {
     echo "Removing module directories..."
     rm -rf "$MODDIR"
     rm -rf "$ETCDIR"
-    echo "✓ Module directories removed"
+    echo "Module directories removed"
 
     if [ -f /etc/webmin/webmin.acl ]; then
         if grep -qw "$MODNAME" /etc/webmin/webmin.acl 2>/dev/null; then
             sed -i.bak "s/[[:space:]]\+${MODNAME}\b//g" /etc/webmin/webmin.acl
-            echo "✓ Module removed from webmin.acl (backup: /etc/webmin/webmin.acl.bak)"
+            echo "Module removed from webmin.acl (backup: /etc/webmin/webmin.acl.bak)"
         fi
     else
-        echo "⚠ Warning: /etc/webmin/webmin.acl not found, skipping ACL update"
+        echo "Warning: /etc/webmin/webmin.acl not found, skipping ACL update"
     fi
 
     rm -f /var/webmin/module.infos.cache
-    echo "✓ Module cache cleared"
+    echo "Module cache cleared"
 
     echo "Restarting Webmin service..."
     if ! { systemctl restart webmin.service 2>/dev/null || /etc/webmin/restart 2>/dev/null; }; then
-        echo "WARNING: Webmin restart failed — reload it manually so the module is removed from the UI"
+        echo "WARNING: Webmin restart failed -- reload it manually so the module is removed from the UI"
     fi
 
     echo ""
@@ -750,13 +751,13 @@ uninstall_module() {
 show_menu() {
     clear
     echo "============================================================"
-    echo "              PyDHCP - WEBMIN MODULE"
-    echo "                 Installation Menu"
+    echo "PyDHCP - WEBMIN MODULE"
+    echo "Installation Menu"
     echo "============================================================"
     echo ""
-    echo "  1) Install module"
-    echo "  2) Uninstall module"
-    echo "  3) Exit"
+    echo "1) Install module"
+    echo "2) Uninstall module"
+    echo "3) Exit"
     echo ""
     echo -n "Select an option [1-3]: "
 }
@@ -765,16 +766,16 @@ show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  install      Install the PyDHCP Webmin module"
-    echo "  uninstall    Uninstall the PyDHCP Webmin module"
-    echo "  -h, --help   Show this help message"
+    echo "install Install the PyDHCP Webmin module"
+    echo "uninstall Uninstall the PyDHCP Webmin module"
+    echo "-h, --help Show this help message"
     echo ""
     echo "If no option is provided, interactive menu will be shown."
     echo ""
     echo "Examples:"
-    echo "  $0 install"
-    echo "  $0 uninstall"
-    echo "  $0"
+    echo "$0 install"
+    echo "$0 uninstall"
+    echo "$0"
     echo ""
 }
 

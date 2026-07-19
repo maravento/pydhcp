@@ -8,19 +8,41 @@
 # or removes them cleanly from the system.
 #
 # Usage:
-#   sudo bash pyinstall.sh           # install
-#   sudo bash pyinstall.sh --update  # update code only (preserves user config, backs up replaced files to /etc/pydhcp/bak/)
-#   sudo bash pyinstall.sh --remove  # uninstall
+# sudo bash pyinstall.sh # install
+# sudo bash pyinstall.sh --update # update code only (preserves user config, backs up replaced files to /etc/pydhcp/bak/)
+# sudo bash pyinstall.sh --remove # uninstall
 #
 ################################################################################
 
 set -euo pipefail
 
+# logging
+LOG_FILE="/var/log/pydhcpd.log"
+log() {
+    local msg="$1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $msg" | tee -a "$LOG_FILE" 2>/dev/null || true
+}
+
+## root check
+if [ "$(id -u)" != "0" ]; then
+    log "ERROR: This script must be run as root"
+    exit 1
+fi
+
+# prevent overlapping runs
+SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$SCRIPT_LOCK")
+exec 200>"$SCRIPT_LOCK"
+if ! flock -n 200; then
+    log "Script $(basename "$0") is already running"
+    exit 1
+fi
+
+# VARIABLES
 INSTALL_DIR="/etc/pydhcp"
 SERVICE_FILE="/etc/systemd/system/pydhcpd.service"
 INIT_FILE="/etc/init.d/pydhcpd"
 SYSTEM_USER="pydhcpd"
-LOG_FILE="/var/log/pydhcpd.log"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -28,10 +50,10 @@ CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-info()    { echo -e "${CYAN}[INFO]${NC}  $*"; }
-success() { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+info() { echo -e "${CYAN}[INFO]${NC} $*"; }
+success() { echo -e "${GREEN}[OK]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 # Verify that a source file is a regular, non-empty, non-world-writable file
 # owned by root or the current user, and that its path is inside SCRIPT_DIR.
@@ -40,8 +62,8 @@ verify_source() {
     local real
     real=$(realpath "$f" 2>/dev/null) || error "Cannot resolve path: $f"
     [[ "$real" == "$SCRIPT_DIR"/* ]] || error "Source file outside SCRIPT_DIR: $f"
-    [ -f "$real" ]          || error "Source is not a regular file: $f"
-    [ -s "$real" ]          || error "Source file is empty: $f"
+    [ -f "$real" ] || error "Source is not a regular file: $f"
+    [ -s "$real" ] || error "Source file is empty: $f"
     local mode owner
     mode=$(stat -c '%a' "$real")
     owner=$(stat -c '%u' "$real")
@@ -53,15 +75,10 @@ verify_source() {
     fi
 }
 
-# ─── Root check ─────────────────────────────────────────────────────────────
-if [ "$(id -u)" -ne 0 ]; then
-    error "This script must be run as root (use sudo)"
-fi
-
-# ─── Source directory (where this script lives) ──────────────────────────────
+# --- Source directory (where this script lives) ------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ─── UNINSTALL ───────────────────────────────────────────────────────────────
+# --- UNINSTALL ---------------------------------------------------------------
 if [[ "${1:-}" == "--remove" ]]; then
     info "Stopping and disabling pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
@@ -89,7 +106,7 @@ if [[ "${1:-}" == "--remove" ]]; then
     exit 0
 fi
 
-# ─── UPDATE ──────────────────────────────────────────────────────────────────
+# --- UPDATE ------------------------------------------------------------------
 if [[ "${1:-}" == "--update" ]]; then
     if [ ! -d "$INSTALL_DIR" ]; then
         error "No existing installation found in $INSTALL_DIR. Run without --update to install first."
@@ -102,7 +119,7 @@ if [[ "${1:-}" == "--update" ]]; then
         [ -f "$INSTALL_DIR/$f" ] && cp "$INSTALL_DIR/$f" "$BACKUP_DIR/$f"
     done
     [ -f "$SERVICE_FILE" ] && cp "$SERVICE_FILE" "$BACKUP_DIR/pydhcpd.service"
-    [ -f "$INIT_FILE" ]    && cp "$INIT_FILE"    "$BACKUP_DIR/init.d/pydhcpd"
+    [ -f "$INIT_FILE" ] && cp "$INIT_FILE" "$BACKUP_DIR/init.d/pydhcpd"
 
     info "Stopping pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
@@ -148,16 +165,16 @@ if [[ "${1:-}" == "--update" ]]; then
 
     echo ""
     success "pydhcpd updated. Backup saved in $BACKUP_DIR"
-    info "  $INSTALL_DIR/pydhcpd.conf    — unchanged"
-    info "  $INSTALL_DIR/default/pydhcpd  — unchanged"
-    info "  $INSTALL_DIR/pydhcpd.leases  — unchanged"
-    warn "  NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in pyleases.env"
-    warn "        (not by editing pyleases.sh) and is unaffected by this update."
+    info "$INSTALL_DIR/pydhcpd.conf -- unchanged"
+    info "$INSTALL_DIR/default/pydhcpd -- unchanged"
+    info "$INSTALL_DIR/pydhcpd.leases -- unchanged"
+    warn "NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in pyleases.env"
+    warn "(not by editing pyleases.sh) and is unaffected by this update."
     echo ""
     exit 0
 fi
 
-# ─── INSTALL ─────────────────────────────────────────────────────────────────
+# --- INSTALL -----------------------------------------------------------------
 
 # Detect and select network interface
 echo ""
@@ -168,11 +185,11 @@ if [[ ${#IFACES[@]} -eq 0 ]]; then
 fi
 for i in "${!IFACES[@]}"; do
     STATE=$(ip -br link show "${IFACES[$i]}" | awk '{print $2}')
-    printf "  [%d] %s (%s)\n" "$((i+1))" "${IFACES[$i]}" "$STATE"
+    printf " [%d] %s (%s)\n" "$((i+1))" "${IFACES[$i]}" "$STATE"
 done
 echo ""
 while true; do
-    read -rp "  Select interface number [1-${#IFACES[@]}]: " SEL
+    read -rp " Select interface number [1-${#IFACES[@]}]: " SEL
     # Octal trap fix: force decimal with 10# prefix
     if [[ "$SEL" =~ ^[0-9]+$ ]] && (( 10#$SEL >= 1 && 10#$SEL <= ${#IFACES[@]} )); then
         IFACE="${IFACES[$((10#$SEL-1))]}"
@@ -185,7 +202,7 @@ info "Using interface: $IFACE"
 # DHCP server IP
 echo ""
 while true; do
-    read -rp "  Enter DHCP server IP address (e.g. 192.168.0.10): " SERVER_IP
+    read -rp " Enter DHCP server IP address (e.g. 192.168.0.10): " SERVER_IP
     SERVER_IP=$(echo "$SERVER_IP" | xargs)
     if [[ "$SERVER_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
         break
@@ -197,7 +214,7 @@ info "Server IP: $SERVER_IP"
 # Netmask
 echo ""
 while true; do
-    read -rp "  Enter netmask [255.255.255.0]: " NETMASK
+    read -rp " Enter netmask [255.255.255.0]: " NETMASK
     NETMASK=$(echo "$NETMASK" | xargs)
     [[ -z "$NETMASK" ]] && NETMASK="255.255.255.0"
     if [[ "$NETMASK" =~ ^(255|254|252|248|240|224|192|128|0)(\.(255|254|252|248|240|224|192|128|0)){3}$ ]]; then
@@ -227,7 +244,7 @@ info "Broadcast: $BROADCAST"
 echo ""
 while true; do
     while true; do
-        read -rp "  Enter pool start (last octet, default: 230): " POOL_START
+        read -rp " Enter pool start (last octet, default: 230): " POOL_START
         POOL_START=$(echo "$POOL_START" | xargs)
         [[ -z "$POOL_START" ]] && POOL_START="230"
         if [[ "$POOL_START" =~ ^[0-9]+$ ]] && (( 10#$POOL_START >= 1 && 10#$POOL_START <= 254 )); then
@@ -236,7 +253,7 @@ while true; do
         warn "Invalid value, enter a number between 1 and 254"
     done
     while true; do
-        read -rp "  Enter pool end   (last octet, default: 239): " POOL_END
+        read -rp " Enter pool end (last octet, default: 239): " POOL_END
         POOL_END=$(echo "$POOL_END" | xargs)
         [[ -z "$POOL_END" ]] && POOL_END="239"
         if [[ "$POOL_END" =~ ^[0-9]+$ ]] && (( 10#$POOL_END > 10#$POOL_START && 10#$POOL_END <= 254 )); then
@@ -253,9 +270,9 @@ sys.exit(0 if start in net and end in net else 1)
 " "$SUBNET" "$NETMASK" "$NET_BASE" "$POOL_START" "$POOL_END"; then
         break
     fi
-    warn "Pool range ${NET_BASE}.${POOL_START}-${POOL_END} falls outside subnet ${SUBNET}/${NETMASK} — try again"
+    warn "Pool range ${NET_BASE}.${POOL_START}-${POOL_END} falls outside subnet ${SUBNET}/${NETMASK} -- try again"
 done
-info "Pool range: ${NET_BASE}.${POOL_START} → ${NET_BASE}.${POOL_END}"
+info "Pool range: ${NET_BASE}.${POOL_START} -> ${NET_BASE}.${POOL_END}"
 
 # Verify source files exist
 for f in pydhcpd.py pydhcpd.conf pydhcpd.service init.d/pydhcpd; do
@@ -290,9 +307,9 @@ cp "$SCRIPT_DIR/pydhcpd.py" "$INSTALL_DIR/pydhcpd.py"
 chown root:root "$INSTALL_DIR/pydhcpd.py"
 chmod 755 "$INSTALL_DIR/pydhcpd.py"
 
-# Deploy pydhcpd.conf (preserved on update — never overwritten)
+# Deploy pydhcpd.conf (preserved on update -- never overwritten)
 if [ -f "$INSTALL_DIR/pydhcpd.conf" ]; then
-    warn "pydhcpd.conf already exists in $INSTALL_DIR — static hosts and blocked MACs kept, network parameters will be updated with your answers"
+    warn "pydhcpd.conf already exists in $INSTALL_DIR -- static hosts and blocked MACs kept, network parameters will be updated with your answers"
 else
     info "Deploying pydhcpd.conf ..."
     verify_source "$SCRIPT_DIR/pydhcpd.conf"
@@ -301,14 +318,14 @@ fi
 chown root:"$SYSTEM_USER" "$INSTALL_DIR/pydhcpd.conf"
 chmod 640 "$INSTALL_DIR/pydhcpd.conf"
 
-# Create default/pydhcpd (preserved on update — never overwritten)
+# Create default/pydhcpd (preserved on update -- never overwritten)
 mkdir -p "$INSTALL_DIR/default"
 chown root:"$SYSTEM_USER" "$INSTALL_DIR/default"
 chmod 750 "$INSTALL_DIR/default"
 
 if [ -f "$INSTALL_DIR/default/pydhcpd" ]; then
-    warn "default/pydhcpd already exists in $INSTALL_DIR — skipping (not overwritten)"
-    info "Interface NOT changed — still using the value in default/pydhcpd"
+    warn "default/pydhcpd already exists in $INSTALL_DIR -- skipping (not overwritten)"
+    info "Interface NOT changed -- still using the value in default/pydhcpd"
 else
     info "Creating default/pydhcpd ..."
     cat > "$INSTALL_DIR/default/pydhcpd" <<DEFEOF
@@ -395,12 +412,10 @@ cp "$SCRIPT_DIR/init.d/pydhcpd" "$INIT_FILE"
 chown root:root "$INIT_FILE"
 chmod 755 "$INIT_FILE"
 
-# Create log file only if it does not exist
-if [ ! -f "$LOG_FILE" ]; then
-    touch "$LOG_FILE"
-    chown "$SYSTEM_USER":"$SYSTEM_USER" "$LOG_FILE"
-    chmod 640 "$LOG_FILE"
-fi
+# Create log file if it does not exist, ensure correct ownership/permissions
+[ -f "$LOG_FILE" ] || touch "$LOG_FILE"
+chown "$SYSTEM_USER":"$SYSTEM_USER" "$LOG_FILE"
+chmod 640 "$LOG_FILE"
 
 # Deploy logrotate config
 info "Deploying logrotate config ..."
@@ -421,6 +436,28 @@ cat > /etc/logrotate.d/pydhcpd << 'EOF'
 EOF
 chmod 644 /etc/logrotate.d/pydhcpd
 
+# Create pyleases.sh's own log file and logrotate config (separate from the
+# daemon's pydhcpd.log -- see pyleases.sh header for details)
+if [ ! -f /var/log/pydhcp.log ]; then
+    touch /var/log/pydhcp.log
+    chown root:pydhcpd /var/log/pydhcp.log
+    chmod 640 /var/log/pydhcp.log
+fi
+
+cat > /etc/logrotate.d/pydhcp << 'EOF'
+/var/log/pydhcp.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 640 root pydhcpd
+}
+EOF
+chmod 644 /etc/logrotate.d/pydhcp
+chown root:root /etc/logrotate.d/pydhcp
+
 # Enable and start service
 info "Enabling and starting pydhcpd ..."
 systemctl daemon-reload
@@ -433,8 +470,8 @@ echo ""
 success "pydhcpd installed and running."
 echo ""
 info "Configuration : $INSTALL_DIR/pydhcpd.conf"
-info "Interface     : $(grep INTERFACESv4 "$INSTALL_DIR/default/pydhcpd" | cut -d= -f2 | tr -d '"')"
-info "Leases        : $INSTALL_DIR/pydhcpd.leases"
-info "Logs          : journalctl -u pydhcpd -f"
+info "Interface : $(grep INTERFACESv4 "$INSTALL_DIR/default/pydhcpd" | cut -d= -f2 | tr -d '"')"
+info "Leases : $INSTALL_DIR/pydhcpd.leases"
+info "Logs : journalctl -u pydhcpd -f"
 echo ""
-info "To remove     : sudo bash pyinstall.sh --remove"
+info "To remove : sudo bash pyinstall.sh --remove"
