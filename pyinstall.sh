@@ -203,7 +203,7 @@ info "Using interface: $IFACE"
 echo ""
 while true; do
     read -rp " Enter DHCP server IP address (e.g. 192.168.0.10): " SERVER_IP
-    SERVER_IP=$(echo "$SERVER_IP" | xargs)
+    read -r SERVER_IP <<< "$SERVER_IP"
     if [[ "$SERVER_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
         break
     fi

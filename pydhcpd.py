@@ -37,6 +37,7 @@ import threading
 import subprocess
 import ipaddress
 import collections
+import itertools
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import pwd
@@ -359,7 +360,10 @@ class DHCPConfig:
     def _parse(self, raw):
         m = re.search(r'\bcleanup-interval\s+(\d+)\s*;', raw)
         if m:
-            self.cleanup_interval = max(5, int(m.group(1)))
+            requested = int(m.group(1))
+            self.cleanup_interval = max(5, requested)
+            if requested < 5:
+                log.warning("cleanup-interval %d is below the minimum of 5; using 5.", requested)
 
         # "not authoritative;" is standard isc-dhcp-server syntax for explicitly
         # disabling authoritative mode. It must be checked before the plain
@@ -1081,6 +1085,49 @@ def _shutdown_ping_executor():
     _ping_executor.shutdown(wait=False)
 atexit.register(_shutdown_ping_executor)
 
+def _icmp_checksum(data):
+    if len(data) % 2:
+        data += b'\x00'
+    s = sum(struct.unpack("!%dH" % (len(data) // 2), data))
+    s = (s >> 16) + (s & 0xffff)
+    s += (s >> 16)
+    return (~s) & 0xffff
+
+# Identifier shared by all echo requests this process sends; sequence number
+# is unique per request so concurrent ping_check() calls (up to 4, see
+# _ping_executor) can tell their own reply apart from one another -- every
+# raw ICMP socket on the host receives a copy of all ICMP traffic, not just
+# replies to what it sent.
+_icmp_id = os.getpid() & 0xFFFF
+_icmp_seq_counter = itertools.count(1)
+
+def _icmp_ping(ip, timeout):
+    seq = next(_icmp_seq_counter) & 0xFFFF
+    payload = struct.pack("!d", time.time())
+    header = struct.pack("!BBHHH", 8, 0, 0, _icmp_id, seq)
+    chksum = _icmp_checksum(header + payload)
+    packet = struct.pack("!BBHHH", 8, 0, chksum, _icmp_id, seq) + payload
+
+    with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP) as sock:
+        sock.sendto(packet, (ip, 0))
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return False
+            sock.settimeout(remaining)
+            try:
+                reply, _addr = sock.recvfrom(1024)
+            except socket.timeout:
+                return False
+            ip_header_len = (reply[0] & 0x0F) * 4
+            icmp_reply = reply[ip_header_len:ip_header_len + 8]
+            if len(icmp_reply) < 8:
+                continue
+            r_type, _r_code, _r_chksum, r_id, r_seq = struct.unpack("!BBHHH", icmp_reply)
+            if r_type == 0 and r_id == _icmp_id and r_seq == seq:
+                return True
+
 def ping_check(ip, timeout=1):
     now = time.time()
     with _ping_cache_lock:
@@ -1091,13 +1138,19 @@ def ping_check(ip, timeout=1):
             if _ping_cache[k][1] <= now:
                 del _ping_cache[k]
     try:
-        result = subprocess.run(
-            ["ping", "-c", "1", "-W", str(timeout), "-q", ip],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=1.5,
-        )
-        alive = result.returncode == 0
+        alive = _icmp_ping(ip, timeout)
+    except PermissionError:
+        log.warning("Raw ICMP socket not permitted (missing CAP_NET_RAW); falling back to subprocess ping.")
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "1", "-W", str(timeout), "-q", ip],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=1.5,
+            )
+            alive = result.returncode == 0
+        except Exception:
+            alive = False
     except Exception:
         alive = False
     with _ping_cache_lock:
