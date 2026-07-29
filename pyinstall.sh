@@ -168,7 +168,7 @@ if [[ "${1:-}" == "--update" ]]; then
     info "$INSTALL_DIR/pydhcpd.conf -- unchanged"
     info "$INSTALL_DIR/default/pydhcpd -- unchanged"
     info "$INSTALL_DIR/pydhcpd.leases -- unchanged"
-    warn "NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in pyleases.env"
+    warn "NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in /etc/pydhcp/pydhcp.env"
     warn "(not by editing pyleases.sh) and is unaffected by this update."
     echo ""
     exit 0
@@ -190,7 +190,6 @@ done
 echo ""
 while true; do
     read -rp " Select interface number [1-${#IFACES[@]}]: " SEL
-    # Octal trap fix: force decimal with 10# prefix
     if [[ "$SEL" =~ ^[0-9]+$ ]] && (( 10#$SEL >= 1 && 10#$SEL <= ${#IFACES[@]} )); then
         IFACE="${IFACES[$((10#$SEL-1))]}"
         break
@@ -274,8 +273,21 @@ sys.exit(0 if start in net and end in net else 1)
 done
 info "Pool range: ${NET_BASE}.${POOL_START} -> ${NET_BASE}.${POOL_END}"
 
+# DNS servers
+echo ""
+while true; do
+    read -rp " Enter DNS server(s), comma-separated [8.8.8.8,1.1.1.1]: " DNS_SERVERS
+    DNS_SERVERS=$(echo "$DNS_SERVERS" | xargs)
+    [[ -z "$DNS_SERVERS" ]] && DNS_SERVERS="8.8.8.8,1.1.1.1"
+    if [[ "$DNS_SERVERS" =~ ^(([0-9]{1,3}\.){3}[0-9]{1,3})(,([0-9]{1,3}\.){3}[0-9]{1,3})*$ ]]; then
+        break
+    fi
+    warn "Invalid DNS format, try again"
+done
+info "DNS servers: $DNS_SERVERS"
+
 # Verify source files exist
-for f in pydhcpd.py pydhcpd.conf pydhcpd.service init.d/pydhcpd; do
+for f in pydhcpd.py pydhcpd.conf pydhcp.env pydhcpd.service init.d/pydhcpd; do
     [ -f "$SCRIPT_DIR/$f" ] || error "Missing source file: $f (run from the project directory)"
 done
 
@@ -360,7 +372,7 @@ sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${SUBNET} netmask ${NETMASK}|" "
 sed -i "s|option routers .*;|option routers ${SERVER_IP};|" "$CONF_TMP"
 sed -i "s|option broadcast-address .*;|option broadcast-address ${BROADCAST};|" "$CONF_TMP"
 sed -i "s|range [0-9.]* [0-9.]*;|range ${NET_BASE}.${POOL_START} ${NET_BASE}.${POOL_END};|" "$CONF_TMP"
-# Greedy sed fix: only replace SERVER_IP placeholder, not entire line
+sed -i "s|option domain-name-servers .*;|option domain-name-servers ${DNS_SERVERS};|" "$CONF_TMP"
 sed -i "s|#\(.*\)SERVER_IP\(.*\)|#\1${SERVER_IP}\2|g" "$CONF_TMP"
 mv -f "$CONF_TMP" "$INSTALL_DIR/pydhcpd.conf"
 info "Network parameters set in pydhcpd.conf"
@@ -397,6 +409,27 @@ for tool in pyleases.sh pywebmin.sh; do
         chmod 755 "$INSTALL_DIR/tools/$tool"
     fi
 done
+
+# Deploy pydhcp.env so tools/pyleases.sh reuses these values instead of
+# prompting again on its own first run.
+PYDHCP_ENV="$INSTALL_DIR/pydhcp.env"
+if [ -f "$PYDHCP_ENV" ]; then
+    info "$PYDHCP_ENV already exists -- left unchanged"
+else
+    info "Deploying pydhcp.env ..."
+    verify_source "$SCRIPT_DIR/pydhcp.env"
+    cp "$SCRIPT_DIR/pydhcp.env" "$PYDHCP_ENV"
+    sed -i "s|^SERV_DHCP=.*|SERV_DHCP=${SERVER_IP}|" "$PYDHCP_ENV"
+    sed -i "s|^SERV_SUBNET=.*|SERV_SUBNET=${SUBNET}|" "$PYDHCP_ENV"
+    sed -i "s|^SERV_BROADCAST=.*|SERV_BROADCAST=${BROADCAST}|" "$PYDHCP_ENV"
+    sed -i "s|^SERV_MASK=.*|SERV_MASK=${NETMASK}|" "$PYDHCP_ENV"
+    sed -i "s|^SERV_INI_RANGE_BLOCK=.*|SERV_INI_RANGE_BLOCK=${NET_BASE}.${POOL_START}|" "$PYDHCP_ENV"
+    sed -i "s|^SERV_END_RANGE_BLOCK=.*|SERV_END_RANGE_BLOCK=${NET_BASE}.${POOL_END}|" "$PYDHCP_ENV"
+    sed -i "s|^SERV_DNS=.*|SERV_DNS=${DNS_SERVERS}|" "$PYDHCP_ENV"
+    chown root:"$SYSTEM_USER" "$PYDHCP_ENV"
+    chmod 640 "$PYDHCP_ENV"
+    info "pydhcp.env deployed -- tools/pyleases.sh will reuse it without re-prompting"
+fi
 
 # Deploy systemd service
 info "Deploying systemd unit ..."
