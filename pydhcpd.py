@@ -663,7 +663,7 @@ class LeaseManager:
             with self.lock:
                 static_ip = self.config.static_hosts.get(mac)
                 if static_ip:
-                    return static_ip, self.config.max_lease, None
+                    return static_ip, self.config.default_lease, None
 
                 if mac in self.config.blocked_macs:
                     return None, None, "deny members of blockdhcp"
@@ -1125,7 +1125,7 @@ def _icmp_ping(ip, timeout):
             if len(icmp_reply) < 8:
                 continue
             r_type, _r_code, _r_chksum, r_id, r_seq = struct.unpack("!BBHHH", icmp_reply)
-            if r_type == 0 and r_id == _icmp_id and r_seq == seq:
+            if r_type == 0 and r_id == _icmp_id and r_seq == seq and _addr[0] == ip:
                 return True
 
 def ping_check(ip, timeout=1):
@@ -1495,7 +1495,7 @@ class DHCPServer:
         is_own_ip = existing_lease and existing_lease.ip == offered_ip
 
         def _send_offer():
-            xid_hex = (pkt["xid"].hex(), mac)
+            xid_hex = (pkt["xid"].hex(), mac, pkt.get("giaddr", "0.0.0.0"))
             with self._pending_lock:
                 self._pending[xid_hex] = offered_ip
                 if len(self._pending) > 1024:
@@ -1546,7 +1546,7 @@ class DHCPServer:
 
         requested = pkt["requested_ip"]
         ciaddr    = pkt["ciaddr"]
-        xid_key   = (pkt["xid"].hex(), mac)
+        xid_key   = (pkt["xid"].hex(), mac, pkt.get("giaddr", "0.0.0.0"))
 
         if requested and requested != "0.0.0.0":
             target_ip = requested
@@ -1590,7 +1590,6 @@ class DHCPServer:
             server_ip_snapshot = self.server_ip
             config_auth = config_snapshot.authoritative
             config_one_per_client = config_snapshot.one_per_client
-            config_pool_def_lease = config_snapshot.pool_def_lease
 
         if config_auth and target_ip:
             static_ip = self.leases.get_static(mac)
@@ -1693,31 +1692,37 @@ def _pid_is_pydhcpd(pid):
     return "pydhcpd.py" in cmdline
 
 def write_pid(path):
-    if os.path.exists(path):
+    old_pid = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         try:
-            with open(path, 'r') as f:
+            with os.fdopen(fd, 'r') as f:
                 old_pid = int(f.read().strip())
         except (ValueError, OSError):
             old_pid = None
-        if old_pid is not None:
-            try:
-                os.kill(old_pid, 0)
-                alive = True
-            except ProcessLookupError:
-                alive = False
-            except OSError:
-                # Process exists but we cannot signal it (different owner).
-                alive = True
-            if alive and _pid_is_pydhcpd(old_pid):
-                log.error("pydhcpd already running (pid %d) — refusing to start "
-                          "a second instance", old_pid)
-                sys.exit(1)
-            elif alive:
-                log.warning("PID %d in %s is alive but not pydhcpd — overwriting",
-                            old_pid, path)
-    with open(path, "w") as f:
+    except OSError:
+        old_pid = None
+
+    if old_pid is not None:
+        try:
+            os.kill(old_pid, 0)
+            alive = True
+        except ProcessLookupError:
+            alive = False
+        except OSError:
+            # Process exists but we cannot signal it (different owner).
+            alive = True
+        if alive and _pid_is_pydhcpd(old_pid):
+            log.error("pydhcpd already running (pid %d) — refusing to start "
+                      "a second instance", old_pid)
+            sys.exit(1)
+        elif alive:
+            log.warning("PID %d in %s is alive but not pydhcpd — overwriting",
+                        old_pid, path)
+
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o640)
+    with os.fdopen(fd, "w") as f:
         f.write(str(os.getpid()))
-    os.chmod(path, 0o640)
 
 def remove_pid(path):
     try:
@@ -1764,7 +1769,6 @@ def main():
     if not os.path.isdir(f"/sys/class/net/{interface}"):
         log.error("Interface '%s' does not exist on this system", interface)
         sys.exit(1)
-
 
     config = DHCPConfig()
     try:

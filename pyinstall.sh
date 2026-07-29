@@ -9,7 +9,9 @@
 #
 # Usage:
 # sudo bash pyinstall.sh # install
-# sudo bash pyinstall.sh --update # update code only (preserves user config, backs up replaced files to /etc/pydhcp/bak/)
+# sudo bash pyinstall.sh --update # update code only (preserves user config,
+#   backs up replaced files to /etc/pydhcp/bak/; aborts if pydhcp.env is
+#   missing -- run without flags first)
 # sudo bash pyinstall.sh --remove # uninstall
 #
 ################################################################################
@@ -78,6 +80,9 @@ verify_source() {
 # --- Source directory (where this script lives) ------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Start
+log "pyinstall start..."
+
 # --- UNINSTALL ---------------------------------------------------------------
 if [[ "${1:-}" == "--remove" ]]; then
     info "Stopping and disabling pydhcpd service..."
@@ -103,6 +108,7 @@ if [[ "${1:-}" == "--remove" ]]; then
     systemctl daemon-reload
 
     success "pydhcpd has been removed from the system."
+    log "pyinstall done at: $(date)"
     exit 0
 fi
 
@@ -110,6 +116,10 @@ fi
 if [[ "${1:-}" == "--update" ]]; then
     if [ ! -d "$INSTALL_DIR" ]; then
         error "No existing installation found in $INSTALL_DIR. Run without --update to install first."
+    fi
+    if [ ! -f "$INSTALL_DIR/pydhcp.env" ]; then
+        echo -e "${RED}[ERROR]${NC} $INSTALL_DIR/pydhcp.env not found (pre-dates config persistence)." >&2
+        error "Run 'pyinstall.sh --remove' then reinstall."
     fi
 
     BACKUP_DIR="/etc/pydhcp/bak/$(date +%Y%m%d_%H%M%S)"
@@ -171,10 +181,16 @@ if [[ "${1:-}" == "--update" ]]; then
     warn "NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in /etc/pydhcp/pydhcp.env"
     warn "(not by editing pyleases.sh) and is unaffected by this update."
     echo ""
+    log "pyinstall done at: $(date)"
     exit 0
 fi
 
 # --- INSTALL -----------------------------------------------------------------
+
+if [ -f "$INSTALL_DIR/pydhcpd.py" ]; then
+    echo -e "${RED}[ERROR]${NC} pydhcpd is already installed at $INSTALL_DIR." >&2
+    error "Use --update to upgrade, or --remove to reinstall."
+fi
 
 # Detect and select network interface
 echo ""
@@ -203,7 +219,7 @@ echo ""
 while true; do
     read -rp " Enter DHCP server IP address (e.g. 192.168.0.10): " SERVER_IP
     read -r SERVER_IP <<< "$SERVER_IP"
-    if [[ "$SERVER_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    if [[ "$SERVER_IP" =~ ^(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])$ ]]; then
         break
     fi
     warn "Invalid IP address, try again"
@@ -216,7 +232,8 @@ while true; do
     read -rp " Enter netmask [255.255.255.0]: " NETMASK
     NETMASK=$(echo "$NETMASK" | xargs)
     [[ -z "$NETMASK" ]] && NETMASK="255.255.255.0"
-    if [[ "$NETMASK" =~ ^(255|254|252|248|240|224|192|128|0)(\.(255|254|252|248|240|224|192|128|0)){3}$ ]]; then
+    if [[ "$NETMASK" =~ ^(255|254|252|248|240|224|192|128|0)(\.(255|254|252|248|240|224|192|128|0)){3}$ ]] \
+        && python3 -c "import ipaddress; ipaddress.IPv4Network('0.0.0.0/${NETMASK}')" 2>/dev/null; then
         break
     fi
     warn "Invalid netmask, try again"
@@ -243,18 +260,18 @@ info "Broadcast: $BROADCAST"
 echo ""
 while true; do
     while true; do
-        read -rp " Enter pool start (last octet, default: 230): " POOL_START
+        read -rp " Enter pool start (last octet, default: 220): " POOL_START
         POOL_START=$(echo "$POOL_START" | xargs)
-        [[ -z "$POOL_START" ]] && POOL_START="230"
+        [[ -z "$POOL_START" ]] && POOL_START="220"
         if [[ "$POOL_START" =~ ^[0-9]+$ ]] && (( 10#$POOL_START >= 1 && 10#$POOL_START <= 254 )); then
             break
         fi
         warn "Invalid value, enter a number between 1 and 254"
     done
     while true; do
-        read -rp " Enter pool end (last octet, default: 239): " POOL_END
+        read -rp " Enter pool end (last octet, default: 235): " POOL_END
         POOL_END=$(echo "$POOL_END" | xargs)
-        [[ -z "$POOL_END" ]] && POOL_END="239"
+        [[ -z "$POOL_END" ]] && POOL_END="235"
         if [[ "$POOL_END" =~ ^[0-9]+$ ]] && (( 10#$POOL_END > 10#$POOL_START && 10#$POOL_END <= 254 )); then
             break
         fi
@@ -279,7 +296,7 @@ while true; do
     read -rp " Enter DNS server(s), comma-separated [8.8.8.8,1.1.1.1]: " DNS_SERVERS
     DNS_SERVERS=$(echo "$DNS_SERVERS" | xargs)
     [[ -z "$DNS_SERVERS" ]] && DNS_SERVERS="8.8.8.8,1.1.1.1"
-    if [[ "$DNS_SERVERS" =~ ^(([0-9]{1,3}\.){3}[0-9]{1,3})(,([0-9]{1,3}\.){3}[0-9]{1,3})*$ ]]; then
+    if [[ "$DNS_SERVERS" =~ ^(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])(,(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5]))*$ ]]; then
         break
     fi
     warn "Invalid DNS format, try again"
@@ -287,7 +304,7 @@ done
 info "DNS servers: $DNS_SERVERS"
 
 # Verify source files exist
-for f in pydhcpd.py pydhcpd.conf pydhcp.env pydhcpd.service init.d/pydhcpd; do
+for f in pydhcpd.py pydhcpd.conf pydhcpd.service init.d/pydhcpd; do
     [ -f "$SCRIPT_DIR/$f" ] || error "Missing source file: $f (run from the project directory)"
 done
 
@@ -352,6 +369,9 @@ DHCPDv4_CONF=/etc/pydhcp/pydhcpd.conf
 # Path to pydhcpd PID file
 DHCPDv4_PID=/etc/pydhcp/pydhcpd.pid
 
+# Path to pydhcpd leases file
+DHCPDv4_LEASES=/etc/pydhcp/pydhcpd.leases
+
 # Network interface to listen on (IPv4 only, single interface)
 INTERFACESv4="$IFACE"
 
@@ -364,6 +384,65 @@ fi
 chown root:"$SYSTEM_USER" "$INSTALL_DIR/default/pydhcpd"
 chmod 640 "$INSTALL_DIR/default/pydhcpd"
 
+# Create pydhcp's own ACL directories/files (preserved on update -- never
+# overwritten). These lists are only consumed by the optional pyleases.sh
+# tool (or by uhotspot's uleases.sh, if deployed), but are created here
+# unconditionally so their paths can be recorded in pydhcp.env from the
+# start -- not deferred until whichever optional tool happens to run first.
+mkdir -p /etc/acl/acl_mac /etc/acl/acl_dhcp
+chmod 700 /etc/acl/acl_mac /etc/acl/acl_dhcp
+
+if [ ! -f /etc/acl/acl_dhcp/blockdhcp.txt ]; then
+    touch /etc/acl/acl_dhcp/blockdhcp.txt
+    chmod 600 /etc/acl/acl_dhcp/blockdhcp.txt
+    chown root:root /etc/acl/acl_dhcp/blockdhcp.txt
+fi
+
+for f in /etc/acl/acl_mac/mac-proxy.txt /etc/acl/acl_mac/mac-unlimited.txt; do
+    if [ ! -f "$f" ]; then
+        touch "$f"
+        chmod 600 "$f"
+        chown root:root "$f"
+    fi
+done
+info "ACL directories/files present in /etc/acl"
+
+# Create pydhcp.env (preserved on update -- never overwritten). Single source
+# of truth for network and ACL-path values: pyleases.sh and any other future
+# script read these from here instead of asking again, adding only their own
+# keys if missing.
+if [ -f "$INSTALL_DIR/pydhcp.env" ]; then
+    warn "pydhcp.env already exists in $INSTALL_DIR -- skipping (not overwritten)"
+else
+    info "Creating pydhcp.env ..."
+    cat > "$INSTALL_DIR/pydhcp.env" <<ENVEOF
+# /etc/pydhcp/pydhcp.env
+# Network configuration -- generated by pyinstall.sh on $(date)
+# Single source of truth for network values across pydhcp scripts.
+# pyleases.sh and any other script add only their own keys here if missing --
+# never re-ask or overwrite these.
+
+SERVER_IP=$SERVER_IP
+SERV_SUBNET=$SUBNET
+SERV_BROADCAST=$BROADCAST
+SERV_MASK=$NETMASK
+SERV_INI_RANGE_BLOCK=${NET_BASE}.${POOL_START}
+SERV_END_RANGE_BLOCK=${NET_BASE}.${POOL_END}
+SERV_DNS=$DNS_SERVERS
+
+# ACL paths (files created above; only consumed by pyleases.sh / uleases.sh)
+ACL_PATH=/etc/acl
+ACL_MAC_PATH=/etc/acl/acl_mac
+ACL_DHCP_PATH=/etc/acl/acl_dhcp
+ACL_MAC_PROXY=/etc/acl/acl_mac/mac-proxy.txt
+ACL_MAC_UNLIMITED=/etc/acl/acl_mac/mac-unlimited.txt
+ACL_BLOCK_FILE=/etc/acl/acl_dhcp/blockdhcp.txt
+ENVEOF
+    info "Network and ACL-path values set in pydhcp.env"
+fi
+chown root:"$SYSTEM_USER" "$INSTALL_DIR/pydhcp.env"
+chmod 640 "$INSTALL_DIR/pydhcp.env"
+
 # Apply network parameters to pydhcpd.conf
 CONF_TMP=$(mktemp "$INSTALL_DIR/.pydhcpd.conf.XXXXXX")
 cp -f "$INSTALL_DIR/pydhcpd.conf" "$CONF_TMP"
@@ -373,7 +452,7 @@ sed -i "s|option routers .*;|option routers ${SERVER_IP};|" "$CONF_TMP"
 sed -i "s|option broadcast-address .*;|option broadcast-address ${BROADCAST};|" "$CONF_TMP"
 sed -i "s|range [0-9.]* [0-9.]*;|range ${NET_BASE}.${POOL_START} ${NET_BASE}.${POOL_END};|" "$CONF_TMP"
 sed -i "s|option domain-name-servers .*;|option domain-name-servers ${DNS_SERVERS};|" "$CONF_TMP"
-sed -i "s|#\(.*\)SERVER_IP\(.*\)|#\1${SERVER_IP}\2|g" "$CONF_TMP"
+sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${SERVER_IP}:18100/wpad.pac\";|" "$CONF_TMP"
 mv -f "$CONF_TMP" "$INSTALL_DIR/pydhcpd.conf"
 info "Network parameters set in pydhcpd.conf"
 
@@ -409,27 +488,6 @@ for tool in pyleases.sh pywebmin.sh; do
         chmod 755 "$INSTALL_DIR/tools/$tool"
     fi
 done
-
-# Deploy pydhcp.env so tools/pyleases.sh reuses these values instead of
-# prompting again on its own first run.
-PYDHCP_ENV="$INSTALL_DIR/pydhcp.env"
-if [ -f "$PYDHCP_ENV" ]; then
-    info "$PYDHCP_ENV already exists -- left unchanged"
-else
-    info "Deploying pydhcp.env ..."
-    verify_source "$SCRIPT_DIR/pydhcp.env"
-    cp "$SCRIPT_DIR/pydhcp.env" "$PYDHCP_ENV"
-    sed -i "s|^SERV_DHCP=.*|SERV_DHCP=${SERVER_IP}|" "$PYDHCP_ENV"
-    sed -i "s|^SERV_SUBNET=.*|SERV_SUBNET=${SUBNET}|" "$PYDHCP_ENV"
-    sed -i "s|^SERV_BROADCAST=.*|SERV_BROADCAST=${BROADCAST}|" "$PYDHCP_ENV"
-    sed -i "s|^SERV_MASK=.*|SERV_MASK=${NETMASK}|" "$PYDHCP_ENV"
-    sed -i "s|^SERV_INI_RANGE_BLOCK=.*|SERV_INI_RANGE_BLOCK=${NET_BASE}.${POOL_START}|" "$PYDHCP_ENV"
-    sed -i "s|^SERV_END_RANGE_BLOCK=.*|SERV_END_RANGE_BLOCK=${NET_BASE}.${POOL_END}|" "$PYDHCP_ENV"
-    sed -i "s|^SERV_DNS=.*|SERV_DNS=${DNS_SERVERS}|" "$PYDHCP_ENV"
-    chown root:"$SYSTEM_USER" "$PYDHCP_ENV"
-    chmod 640 "$PYDHCP_ENV"
-    info "pydhcp.env deployed -- tools/pyleases.sh will reuse it without re-prompting"
-fi
 
 # Deploy systemd service
 info "Deploying systemd unit ..."
@@ -508,3 +566,4 @@ info "Leases : $INSTALL_DIR/pydhcpd.leases"
 info "Logs : journalctl -u pydhcpd -f"
 echo ""
 info "To remove : sudo bash pyinstall.sh --remove"
+log "pyinstall done at: $(date)"

@@ -22,6 +22,30 @@
 
 set -euo pipefail
 
+show_usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "install Install the PyDHCP Webmin module"
+    echo "uninstall Uninstall the PyDHCP Webmin module"
+    echo "-h, --help Show this help message"
+    echo ""
+    echo "If no option is provided, interactive menu will be shown."
+    echo ""
+    echo "Examples:"
+    echo "$0 install"
+    echo "$0 uninstall"
+    echo "$0"
+    echo ""
+}
+
+case "${1:-}" in
+    -h|--help)
+        show_usage
+        exit 0
+        ;;
+esac
+
 ## root check
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: This script must be run as root"
@@ -142,7 +166,7 @@ EOF
 #!/usr/bin/perl
 use strict;
 use warnings;
-use POSIX 'strftime';
+use POSIX qw(strftime setsid);
 use Time::Local 'timegm';
 
 do '../web-lib.pl';
@@ -195,7 +219,9 @@ sub csrf_token {
             my @h = ('0'..'9','a'..'f');
             $tok = join('', map { $h[int(rand(16))] } 1..64);
         }
+        my $old_umask = umask(0177);
         if (open(my $fh, '>', $f)) { print $fh $tok; close($fh); chmod 0600, $f; }
+        umask($old_umask);
     }
     return $tok;
 }
@@ -507,7 +533,9 @@ sub csrf_token {
             my @h = ('0'..'9','a'..'f');
             $tok = join('', map { $h[int(rand(16))] } 1..64);
         }
+        my $old_umask = umask(0177);
         if (open(my $fh, '>', $f)) { print $fh $tok; close($fh); chmod 0600, $f; }
+        umask($old_umask);
     }
     return $tok;
 }
@@ -518,7 +546,7 @@ print "Cache-Control: no-cache, no-store, must-revalidate\r\n";
 
 my $message = "";
 
-if ($in{'action'} eq 'save' && defined $in{'conf_content'}) {
+if (($in{'action'} || '') eq 'save' && defined $in{'conf_content'}) {
     my $method = $ENV{'REQUEST_METHOD'} || '';
     my $referer = $ENV{'HTTP_REFERER'} || '';
     my $server = $ENV{'SERVER_NAME'} || 'localhost';
@@ -663,7 +691,7 @@ Version 1.0 (2025)
 EOF
 
     local icon_tmp
-    icon_tmp=$(mktemp /tmp/pydhcp_icon.XXXXXX.b64)
+    icon_tmp=$(mktemp --suffix=.b64)
     cat > "$icon_tmp" <<'ICONEOF'
 R0lGODlhMAAwAPAAAAAAAAAAACH5BAEAAAAALAAAAAAwADAAAAKrhI+py+0Po5wqJEszCpyf7mkUiAGkOJJqiUKr2krvGS/zDdYGzusmj6vdLjPfynb0/XIVmnLZQTKfsOZU95I6W8NNUQj8yq5hcWRbzk62xOA5BIX/Pj0XML6rP9JuvJ3v4cTGAChncpFR+JSXtshIlgSm5mWWWPlYJdLVFqmxSdlpOQmayRU6isXnGHfnqEhVyBITazgbuxiFWXKlxFJ6uGpVGywsS3yMHFMAADs=
 ICONEOF
@@ -677,7 +705,7 @@ ICONEOF
     chmod 644 "$MODDIR/images/"* 2>/dev/null || true
 
     if [ -f /etc/webmin/webmin.acl ]; then
-        if ! grep -q "$MODNAME" /etc/webmin/webmin.acl 2>/dev/null; then
+        if ! grep -qw "$MODNAME" /etc/webmin/webmin.acl 2>/dev/null; then
             sed -i.bak "s/\(^root:.*\)/\1 $MODNAME/" /etc/webmin/webmin.acl
             echo "Module added to webmin.acl (backup: /etc/webmin/webmin.acl.bak)"
         fi
@@ -762,29 +790,7 @@ show_menu() {
     echo -n "Select an option [1-3]: "
 }
 
-show_usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo ""
-    echo "Options:"
-    echo "install Install the PyDHCP Webmin module"
-    echo "uninstall Uninstall the PyDHCP Webmin module"
-    echo "-h, --help Show this help message"
-    echo ""
-    echo "If no option is provided, interactive menu will be shown."
-    echo ""
-    echo "Examples:"
-    echo "$0 install"
-    echo "$0 uninstall"
-    echo "$0"
-    echo ""
-}
-
 main() {
-    if [ ! -d "/usr/share/webmin" ] && [ ! -d "/etc/webmin" ]; then
-        echo "Error: Webmin is not installed on this system"
-        exit 1
-    fi
-
     if [ $# -gt 0 ]; then
         case "$1" in
             install)
