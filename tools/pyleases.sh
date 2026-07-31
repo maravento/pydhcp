@@ -19,7 +19,7 @@
 # - Lease filtering and selective persistence
 # - Automatic cleanup and normalization of ACL files
 # - Duplicate detection with fail-safe abort
-# - Network configuration read from pydhcp.env (created by pyinstall.sh --
+# - Network configuration read from pydhcp.env (created by pysetup.sh --
 #   pyleases.sh never asks for it; aborts if pydhcp.env or its network keys
 #   are missing)
 # - All paths, ACL files and network settings read from pydhcp.env
@@ -28,7 +28,7 @@
 # - pydhcpd installed and running
 # - ACL directories and files as defined in pydhcp.env
 # - Root privileges
-# - python3 (required by pydhcpd itself; checked here as a precondition)
+# - python3 (required by pydhcpd itself; verified in DEPENDENCIES at startup)
 #
 # ACL FORMAT:
 # a;MAC;IP;HOSTNAME;
@@ -36,7 +36,7 @@
 # NOTES:
 # - Designed for environments enforcing DHCP-based access control
 # - Incorrect ACL data may disrupt IP assignments
-# - pydhcp.env must already exist (created by pyinstall.sh) -- pyleases.sh
+# - pydhcp.env must already exist (created by pysetup.sh) -- pyleases.sh
 #   only adds its own keys (ACL paths, timers, etc.) if missing, never the
 #   network ones
 #
@@ -50,7 +50,7 @@
 # NOTE on logging:
 # - Writes to /var/log/pydhcp.log, a separate log from the daemon's
 # /var/log/pydhcpd.log. The log file and its rotation config
-# (/etc/logrotate.d/pydhcp) are created by pyinstall.sh.
+# (/etc/logrotate.d/pydhcp) are created by pysetup.sh.
 #
 ################################################################################
 
@@ -123,6 +123,14 @@ if ! local_user=$(detect_local_user); then
 fi
 log "Using local user: $local_user"
 
+# DEPENDENCIES
+for dep in python3 gawk; do
+    if ! dpkg -s "$dep" &>/dev/null; then
+        log "ERROR: Required dependency '$dep' is not installed."
+        exit 1
+    fi
+done
+
 # Start
 log "pyleases start..."
 
@@ -142,24 +150,52 @@ trap cleanup_temp EXIT
 
 ENV_FILE="/etc/pydhcp/pydhcp.env"
 if [ ! -f "$ENV_FILE" ]; then
-    log "ERROR: $ENV_FILE not found. Run pyinstall.sh first (a fresh install creates it)."
+    log "ERROR: $ENV_FILE not found. Run pysetup.sh first (a fresh install creates it)."
     exit 1
 fi
 
 # Safety check before trusting this file enough to inject pyleases.sh's own
-# keys into it: verify pyinstall.sh's own keys are actually present.
-_missing_pyinstall_keys=()
+# keys into it: verify pysetup.sh's own keys are actually present.
+_missing_pysetup_keys=()
 for _k in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS; do
-    grep -q "^${_k}=" "$ENV_FILE" || _missing_pyinstall_keys+=("$_k")
+    grep -q "^${_k}=" "$ENV_FILE" || _missing_pysetup_keys+=("$_k")
 done
-if (( ${#_missing_pyinstall_keys[@]} > 0 )); then
-    log "ERROR: $ENV_FILE is missing pyinstall.sh's own keys: ${_missing_pyinstall_keys[*]} -- refusing to proceed. Re-run pyinstall.sh (or restore $ENV_FILE from backup)."
+if (( ${#_missing_pysetup_keys[@]} > 0 )); then
+    log "ERROR: $ENV_FILE is missing pysetup.sh's own keys: ${_missing_pysetup_keys[*]} -- refusing to proceed. Re-run pysetup.sh (or restore $ENV_FILE from backup)."
     exit 1
 fi
-unset _missing_pyinstall_keys _k
+unset _missing_pysetup_keys _k
+
+# Inserts $2 (one or more lines) right before the file's last closing
+# "# ====...====" delimiter, instead of a plain >> append -- keeps the block
+# inside the PYDHCP frame instead of scattering variables past it. Falls
+# back to a plain append if no delimiter line is found (older file).
+insert_before_closing_delimiter() {
+    local file="$1" content="$2" last_line tmp boundary
+    # pydhcp's own section never has a blank line in its body -- the first
+    # blank line in the file (if any) marks the boundary before anything
+    # appended after it (e.g. gateproxy.sh's own custom-values block).
+    # Anchor on the last "# ====" line before that boundary, not the last
+    # one in the whole file, so appended blocks are never disturbed.
+    boundary=$(grep -n '^$' "$file" | head -1 | cut -d: -f1)
+    if [[ -n "$boundary" ]]; then
+        last_line=$(head -n "$((boundary - 1))" "$file" | grep -n '^# =\{5,\}$' | tail -1 | cut -d: -f1)
+    else
+        last_line=$(grep -n '^# =\{5,\}$' "$file" | tail -1 | cut -d: -f1)
+    fi
+    if [[ -z "$last_line" ]]; then
+        printf '%s\n' "$content" >> "$file"
+        return
+    fi
+    tmp=$(mktemp)
+    head -n "$((last_line - 1))" "$file" > "$tmp"
+    printf '%s\n' "$content" >> "$tmp"
+    tail -n "+${last_line}" "$file" >> "$tmp"
+    mv "$tmp" "$file"
+}
 
 # Injects pyleases.sh's own keys if missing. Never touches the network keys
-# above, already written by pyinstall.sh. Backs up the file once, right
+# above, already written by pysetup.sh. Backs up the file once, right
 # before the first actual change, as a fallback in case it needs to be undone.
 ensure_own_keys() {
     local file="$1" key added=0
@@ -170,19 +206,23 @@ ensure_own_keys() {
         [ACL_MAC_PROXY]="/etc/acl/acl_mac/mac-proxy.txt"
         [ACL_MAC_UNLIMITED]="/etc/acl/acl_mac/mac-unlimited.txt"
         [ACL_BLOCK_FILE]="/etc/acl/acl_dhcp/blockdhcp.txt"
+        [PYDHCPD_LEASES]="/etc/pydhcp/pydhcpd.leases"
         [CLEANUP_INTERVAL]="60"
         [AUTHORIZED_LEASE_TIME]="2592000"
+        [QUARANTINE_DURATION]="60"
         [WPAD_ENABLED]="false"
         [PING_CHECK_ENABLED]="true"
+        [PING_TIMEOUT_SECONDS]="1"
     )
     for key in ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_PROXY ACL_MAC_UNLIMITED \
-               ACL_BLOCK_FILE CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME WPAD_ENABLED PING_CHECK_ENABLED; do
+               ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION \
+               WPAD_ENABLED PING_CHECK_ENABLED PING_TIMEOUT_SECONDS; do
         if ! grep -q "^${key}=" "$file"; then
             if (( ! added )); then
                 cp -f "$file" "${file}.bak"
                 log "Backed up $file to ${file}.bak before adding missing keys"
             fi
-            echo "${key}=${own_defaults[$key]}" >> "$file"
+            insert_before_closing_delimiter "$file" "${key}=${own_defaults[$key]}"
             added=1
         fi
     done
@@ -199,10 +239,14 @@ load_env_file() {
         [[ "$line" =~ ^[[:space:]]*$ ]] && continue
         key="${line%%=*}"
         value="${line#*=}"
+        if [[ "$value" == \"*\" && "$value" == *\" && ${#value} -ge 2 ]]; then
+            value="${value:1:$((${#value}-2))}"
+        fi
         case "$key" in
             SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
-            ACL_PATH|ACL_MAC_PATH|ACL_DHCP_PATH|ACL_MAC_PROXY|ACL_MAC_UNLIMITED|ACL_BLOCK_FILE|\
-            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|WPAD_ENABLED|PING_CHECK_ENABLED)
+            ACL_PATH|ACL_MAC_PATH|ACL_DHCP_PATH|ACL_MAC_PROXY|ACL_MAC_UNLIMITED|ACL_BLOCK_FILE|PYDHCPD_LEASES|\
+            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|PING_CHECK_ENABLED|\
+            PING_TIMEOUT_SECONDS|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
                 printf -v "$key" '%s' "$value"
                 ;;
             *)
@@ -211,6 +255,22 @@ load_env_file() {
     done < "$file"
 }
 load_env_file "$ENV_FILE"
+
+# Guard: SERVER_IP must never fall inside its own block-pool range -- pydhcpd.py
+# rejects this at config load, but that only surfaces after this script has
+# already stopped the daemon and rewritten pydhcpd.conf. Catching it here,
+# before any destructive action, avoids leaving the daemon down over a config
+# mistake that could have been caught up front.
+if python3 -c "
+import ipaddress, sys
+server = ipaddress.IPv4Address(sys.argv[1])
+start = ipaddress.IPv4Address(sys.argv[2])
+end = ipaddress.IPv4Address(sys.argv[3])
+print('1' if start <= server <= end else '0')
+" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" 2>/dev/null | grep -q '^1$'; then
+    log "ERROR: SERVER_IP ($SERVER_IP) overlaps the block-pool range ($SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK) in $ENV_FILE -- refusing to proceed"
+    exit 1
+fi
 
 if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
     wpad_header="option wpad code 252 = text;"
@@ -222,8 +282,10 @@ fi
 
 if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
     ping_check_line="ping-check true;"
+    ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS:-1};"
 else
     ping_check_line="ping-check false;"
+    ping_timeout_line=""
 fi
 
 _notify() {
@@ -258,10 +320,6 @@ _notify() {
 }
 
 verify_dhcp_service() {
-    if ! command -v python3 &>/dev/null; then
-        log "ERROR: python3 is not installed (required by pydhcpd / pyleases.sh)"
-        exit 1
-    fi
     if ! systemctl is-active --quiet pydhcpd; then
         log "ERROR: pydhcpd is not running"
         exit 1
@@ -270,22 +328,22 @@ verify_dhcp_service() {
 
 verify_dhcp_files() {
     mkdir -p /etc/pydhcp
-    chown root:pydhcpd /etc/pydhcp
-    chmod 770 /etc/pydhcp
-    if [ ! -f /etc/pydhcp/pydhcpd.leases ]; then
-        touch /etc/pydhcp/pydhcpd.leases
+    chown root:"${DAEMON_GROUP:-pydhcpd}" /etc/pydhcp
+    chmod 1770 /etc/pydhcp
+    if [ ! -f "$PYDHCPD_LEASES" ]; then
+        touch "$PYDHCPD_LEASES"
     fi
-    chown pydhcpd:pydhcpd /etc/pydhcp/pydhcpd.leases
-    chmod 640 /etc/pydhcp/pydhcpd.leases
+    chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$PYDHCPD_LEASES"
+    chmod 640 "$PYDHCPD_LEASES"
 }
 
 verify_dhcp_config() {
-    if [ ! -f "/etc/pydhcp/pydhcpd.conf" ]; then
-        log "ERROR: /etc/pydhcp/pydhcpd.conf does not exist"
+    if [ ! -f "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}" ]; then
+        log "ERROR: ${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf} does not exist"
         exit 1
     fi
-    chmod 640 "/etc/pydhcp/pydhcpd.conf"
-    chown root:pydhcpd "/etc/pydhcp/pydhcpd.conf"
+    chmod 640 "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
+    chown root:"${DAEMON_GROUP:-pydhcpd}" "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
 }
 
 verify_directories() {
@@ -312,16 +370,53 @@ initialize_empty_files() {
     done
 }
 
+dedup_acl_mac_lines() {
+    local f="$1" tmp before after
+    [ -f "$f" ] || return 0
+    before=$(wc -l < "$f")
+    tmp=$(mktemp)
+    TEMP_FILES_TO_CLEAN+=("${tmp}")
+    awk -F';' '
+        /^a;/ {
+            mac=tolower($2)
+            if (mac in seen) next
+            seen[mac]=1
+        }
+        { print }
+    ' "$f" > "$tmp"
+    after=$(wc -l < "$tmp")
+    if (( after < before )); then
+        mv "$tmp" "$f"
+        chmod 600 "$f"
+        log "dedup_acl_mac_lines: removed $(( before - after )) duplicate MAC line(s) from $(basename "$f")"
+    fi
+}
+
+validate_block_file() {
+    local f="$1" n=0 line
+    [ -f "$f" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        n=$((n + 1))
+        [[ -z "$line" ]] && continue
+        if [[ "$line" == \#* ]]; then
+            log "ERROR: malformed line $n in $(basename "$f"): $line -- blockdhcp.txt has no comment/disable syntax, delete the line to unblock instead of commenting it"
+            exit 1
+        fi
+    done < "$f"
+}
+
 verify_dhcp_service
 verify_dhcp_files
 verify_dhcp_config
 verify_directories
 initialize_empty_files
+dedup_acl_mac_lines "$ACL_BLOCK_FILE"
+validate_block_file "$ACL_BLOCK_FILE"
 log "Verification OK -- pydhcpd active, paths valid"
 
 function is_pydhcp() {
-    dhcpd=/etc/pydhcp/pydhcpd.leases
-    dhcp_conf="/etc/pydhcp/pydhcpd.conf"
+    dhcpd="$PYDHCPD_LEASES"
+    dhcp_conf="${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
     dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX")
     TEMP_FILES_TO_CLEAN+=("$dhcp_conf_temp")
 
@@ -353,7 +448,7 @@ function is_pydhcp() {
                         line_lease="a;$mac_address;$ip_address;$host;"
 
                         shopt -s nullglob
-                        acl_mac_files=("$ACL_MAC_PATH"/mac-*)
+                        acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
                         shopt -u nullglob
                         if [ ${#acl_mac_files[@]} -eq 0 ] || ! grep -qi "^a;${mac_address};" "${acl_mac_files[@]}" 2>/dev/null; then
                             if ! grep -qi "^a;${mac_address};" "$ACL_BLOCK_FILE" 2>/dev/null; then
@@ -380,7 +475,7 @@ function is_pydhcp() {
 
         if [[ -s "$temp_leases" ]]; then
             mv -f "$temp_leases" "$dhcpd"
-            chown pydhcpd:pydhcpd "$dhcpd"
+            chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$dhcpd"
             chmod 640 "$dhcpd"
         elif [[ -s "$dhcpd" ]]; then
             # Parser kept nothing but the source file was not empty: this can
@@ -391,7 +486,7 @@ function is_pydhcp() {
             log "read_leases: WARNING -- kept 0 leases but $dhcpd was not empty; leaving it untouched to avoid data loss"
         else
             : > "$dhcpd"
-            chown pydhcpd:pydhcpd "$dhcpd"
+            chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$dhcpd"
             chmod 640 "$dhcpd"
         fi
     }
@@ -400,16 +495,18 @@ function is_pydhcp() {
         echo "# pydhcpd Configuration
 authoritative;
 cleanup-interval $CLEANUP_INTERVAL;
+abandon-lease-time ${QUARANTINE_DURATION:-60};
 $wpad_header
 server-identifier $SERVER_IP;
 deny duplicates;
 one-lease-per-client true;
 deny declines;
 $ping_check_line
+$ping_timeout_line
         " >"$dhcp_conf_temp"
 
         shopt -s nullglob
-        acl_files=("$ACL_MAC_PATH"/mac-*)
+        acl_files=("$ACL_MAC_PATH"/mac-*.txt)
         shopt -u nullglob
         if [ ${#acl_files[@]} -gt 0 ]; then
             acl_sources=$(cat "${acl_files[@]}")
@@ -481,7 +578,7 @@ class "blockdhcp" {
         # Keep a backup of the previous config in case the new one is faulty.
         [ -f "$dhcp_conf" ] && cp -f "$dhcp_conf" "${dhcp_conf}.bak"
         mv -f "$dhcp_conf_temp" "$dhcp_conf"
-        chown root:pydhcpd "$dhcp_conf"
+        chown root:"${DAEMON_GROUP:-pydhcpd}" "$dhcp_conf"
         chmod 640 "$dhcp_conf"
     }
 
@@ -492,17 +589,17 @@ class "blockdhcp" {
         patterns=$(mktemp)
         TEMP_FILES_TO_CLEAN+=("${patterns}")
         shopt -s nullglob
-        acl_mac_files=("$ACL_MAC_PATH"/mac-*)
+        acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
         shopt -u nullglob
         if [ ${#acl_mac_files[@]} -gt 0 ]; then
-            grep -hiE ';[0-9a-f:]+;' "${acl_mac_files[@]}" 2>/dev/null | cut -d ";" -f2 | tr '[:upper:]' '[:lower:]' | sort -u >"$file_temp"
+            grep -hiE '^a;[0-9a-f:]+;' "${acl_mac_files[@]}" 2>/dev/null | cut -d ";" -f2 | tr '[:upper:]' '[:lower:]' | sort -u >"$file_temp"
         else
             : >"$file_temp"
         fi
 
         while read -r mac_actual; do
             [ -z "$mac_actual" ] && continue
-            if grep -qF ";${mac_actual};" "$ACL_BLOCK_FILE" 2>/dev/null; then
+            if grep -qiF ";${mac_actual};" "$ACL_BLOCK_FILE" 2>/dev/null; then
                 log "clean_block_list: removing $mac_actual from blockdhcp (found in acl_mac)"
                 printf ';%s;\n' "$mac_actual" >> "$patterns"
                 (( removed++ )) || true
@@ -513,7 +610,7 @@ class "blockdhcp" {
             local _grep_rc=0 block_tmp
             block_tmp=$(mktemp)
             TEMP_FILES_TO_CLEAN+=("${block_tmp}")
-            grep -vFf "$patterns" "$ACL_BLOCK_FILE" > "$block_tmp" || _grep_rc=$?
+            grep -viFf "$patterns" "$ACL_BLOCK_FILE" > "$block_tmp" || _grep_rc=$?
             if (( _grep_rc > 1 )); then
                 log "ERROR: clean_block_list: grep failed (rc=$_grep_rc) -- skipping update of blockdhcp"
                 rm -f "$block_tmp"
@@ -532,7 +629,7 @@ class "blockdhcp" {
         local removed=0 patterns
         patterns=$(mktemp)
         TEMP_FILES_TO_CLEAN+=("${patterns}")
-        awk -F';' 'NF>=2 && $2!="" {print ";"tolower($2)";"}' "$ACL_MAC_UNLIMITED" | sort -u > "$patterns"
+        awk -F';' '$1=="a" && NF>=2 && $2!="" {print ";"tolower($2)";"}' "$ACL_MAC_UNLIMITED" | sort -u > "$patterns"
 
         while IFS= read -r pat; do
             local mac_actual="${pat//;/}"
@@ -594,9 +691,23 @@ class "blockdhcp" {
     log "Starting pydhcpd"
     systemctl start pydhcpd
     if ! systemctl is-active --quiet pydhcpd; then
-        log "ERROR: Starting pydhcpd FAILED -- check 'systemctl status pydhcpd'"
-        _notify "$local_user" "Warning: Abort" "pydhcpd did not start after reload. $(date)" -i error
-        exit 1
+        log "ERROR: pydhcpd failed to start after config rebuild -- attempting backup config restore"
+        if [ -f "${dhcp_conf}.bak" ]; then
+            cp -f "${dhcp_conf}.bak" "$dhcp_conf"
+            log "Restored ${dhcp_conf}.bak -- retrying pydhcpd start"
+            systemctl start pydhcpd
+            if ! systemctl is-active --quiet pydhcpd; then
+                log "ERROR: pydhcpd failed to start even with backup config -- manual intervention required"
+                _notify "$local_user" "Warning: Abort" "pydhcpd failed to start (backup also failed). Check $log_file" -i error
+                exit 1
+            else
+                log "pydhcpd recovered with backup config"
+            fi
+        else
+            log "ERROR: No backup config found -- manual intervention required"
+            _notify "$local_user" "Warning: Abort" "pydhcpd failed to start after reload. $(date)" -i error
+            exit 1
+        fi
     fi
     log "Starting pydhcpd: done"
     PYDHCPD_NEEDS_RESTART=0
@@ -605,12 +716,17 @@ class "blockdhcp" {
 function duplicate() {
     aclall=$(
         shopt -s nullglob
-        acl_mac_files=("$ACL_MAC_PATH"/mac-*)
+        acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
         shopt -u nullglob
         if [ ${#acl_mac_files[@]} -gt 0 ]; then
             for field in 2 3 4; do
-                awk -F';' '/^a;/' "${acl_mac_files[@]}" 2>/dev/null \
-                    | cut -d\; -f${field} | sort | uniq -d
+                if [ "$field" = 2 ]; then
+                    awk -F';' '/^a;/' "${acl_mac_files[@]}" 2>/dev/null \
+                        | cut -d\; -f${field} | tr '[:upper:]' '[:lower:]' | sort | uniq -d
+                else
+                    awk -F';' '/^a;/' "${acl_mac_files[@]}" 2>/dev/null \
+                        | cut -d\; -f${field} | sort | uniq -d
+                fi
             done
         fi
     )

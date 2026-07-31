@@ -61,11 +61,21 @@ if ! flock -n 200; then
     exit 1
 fi
 
-# Dependency checks
-if [ ! -d "/usr/share/webmin" ] && [ ! -d "/etc/webmin" ]; then
-    echo "ERROR: Webmin is not installed on this system"
-    exit 1
-fi
+# DEPENDENCIES
+for dep in coreutils; do
+    if ! dpkg -s "$dep" &>/dev/null; then
+        echo "ERROR: Required dependency '$dep' is not installed." >&2
+        exit 1
+    fi
+done
+
+# DEPENDENCIES (external repo)
+for dep in webmin; do
+    if ! dpkg -s "$dep" &>/dev/null; then
+        echo "ERROR: 'webmin' is not installed." >&2
+        exit 1
+    fi
+done
 
 if [ ! -f "/etc/pydhcp/pydhcpd.py" ]; then
     echo "ERROR: pydhcpd is not installed on this system"
@@ -114,7 +124,7 @@ index_status=Service Status
 index_leases=Active Leases
 index_config=Configuration
 index_no_leases=No active leases found.
-index_not_installed=pydhcpd is not installed. Run pyinstall.sh first.
+index_not_installed=pydhcpd is not installed. Run pysetup.sh first.
 btn_start=Start
 btn_stop=Stop
 btn_restart=Restart
@@ -141,7 +151,7 @@ index_status=Estado del Servicio
 index_leases=Concesiones Activas
 index_config=Configuracion
 index_no_leases=No se encontraron concesiones activas.
-index_not_installed=pydhcpd no esta instalado. Ejecute pyinstall.sh primero.
+index_not_installed=pydhcpd no esta instalado. Ejecute pysetup.sh primero.
 btn_start=Iniciar
 btn_stop=Detener
 btn_restart=Reiniciar
@@ -166,7 +176,7 @@ EOF
 #!/usr/bin/perl
 use strict;
 use warnings;
-use POSIX qw(strftime setsid);
+use POSIX qw(setsid);
 use Time::Local 'timegm';
 
 do '../web-lib.pl';
@@ -177,9 +187,9 @@ do '../ui-lib.pl';
 our ($module_name, %text, %in);
 &load_language($module_name);
 
-# Read paths from defaults file
+# Read paths from pydhcp.env (single source of truth -- see pydhcp.env's own header)
 sub read_defaults {
-    my $defaults_file = "/etc/pydhcp/default/pydhcpd";
+    my $defaults_file = shift // "/etc/pydhcp/pydhcp.env";
     my %defaults;
     if (open(my $fh, '<', $defaults_file)) {
         while (<$fh>) {
@@ -196,9 +206,8 @@ sub read_defaults {
 }
 
 my $defaults = read_defaults();
-my $DAEMON_BIN = "/etc/pydhcp/pydhcpd.py";
-my $LEASES_FILE = $defaults->{DHCPDv4_LEASES} || "/etc/pydhcp/pydhcpd.leases";
-my $CONF_FILE = $defaults->{DHCPDv4_CONF} || "/etc/pydhcp/pydhcpd.conf";
+my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/pydhcpd.py";
+my $LEASES_FILE = $defaults->{PYDHCPD_LEASES} || "/etc/pydhcp/pydhcpd.leases";
 my $SERVICE = "pydhcpd";
 
 # Per-install CSRF secret: a random value stored 0600 and embedded in every
@@ -484,6 +493,7 @@ INDEXCGI
 use strict;
 use warnings;
 use File::Copy;
+use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 
 do '../web-lib.pl';
 do '../ui-lib.pl';
@@ -493,9 +503,9 @@ do '../ui-lib.pl';
 our ($module_name, %text, %in);
 &load_language($module_name);
 
-# Read paths from defaults file
+# Read paths from pydhcp.env (single source of truth -- see pydhcp.env's own header)
 sub read_defaults {
-    my $defaults_file = "/etc/pydhcp/default/pydhcpd";
+    my $defaults_file = "/etc/pydhcp/pydhcp.env";
     my %defaults;
     if (open(my $fh, '<', $defaults_file)) {
         while (<$fh>) {
@@ -514,7 +524,7 @@ sub read_defaults {
 my $defaults = read_defaults();
 my $CONF_FILE = $defaults->{DHCPDv4_CONF} || "/etc/pydhcp/pydhcpd.conf";
 my $BACKUP_FILE = "/etc/pydhcp/pydhcpd.conf.bak";
-my $DAEMON_BIN = "/etc/pydhcp/pydhcpd.py";
+my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/pydhcpd.py";
 
 # Per-install CSRF secret (see index.cgi): unpredictable to a cross-site
 # attacker and required back as a hidden field on save.
@@ -564,7 +574,8 @@ if (($in{'action'} || '') eq 'save' && defined $in{'conf_content'}) {
         $content =~ s/\r\n/\n/g;
 
         my $tmpfile = $CONF_FILE . ".tmp";
-        if (open(my $fh, '>', $tmpfile)) {
+        unlink($tmpfile) if -e $tmpfile && !-l $tmpfile;
+        if (!-l $tmpfile && sysopen(my $fh, $tmpfile, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600)) {
             print $fh $content;
             close($fh);
 
@@ -587,13 +598,16 @@ if (($in{'action'} || '') eq 'save' && defined $in{'conf_content'}) {
             } else {
                 if (-f $CONF_FILE) {
                     my $ts = time();
-                    copy($CONF_FILE, "$BACKUP_FILE.$ts");
+                    copy($CONF_FILE, "$BACKUP_FILE.$ts") unless -l "$BACKUP_FILE.$ts";
                     my @backups = sort glob("$BACKUP_FILE.*");
                     if (@backups > 5) {
                         unlink(@backups[0 .. (@backups - 6)]);
                     }
                 }
                 if (rename($tmpfile, $CONF_FILE)) {
+                    my $gid = getgrnam('pydhcpd');
+                    chown(0, defined $gid ? $gid : -1, $CONF_FILE);
+                    chmod(0640, $CONF_FILE);
                     $message = "<div style='margin:10px 0;padding:10px 14px;background:#d4edda;color:#155724;border-radius:4px;border:1px solid #c3e6cb;font-size:13px;'>$text{'config_saved'}</div>\n";
                 } else {
                     unlink($tmpfile);
@@ -705,7 +719,7 @@ ICONEOF
     chmod 644 "$MODDIR/images/"* 2>/dev/null || true
 
     if [ -f /etc/webmin/webmin.acl ]; then
-        if ! grep -qw "$MODNAME" /etc/webmin/webmin.acl 2>/dev/null; then
+        if ! grep -qE "^root:.*\b${MODNAME}\b" /etc/webmin/webmin.acl 2>/dev/null; then
             sed -i.bak "s/\(^root:.*\)/\1 $MODNAME/" /etc/webmin/webmin.acl
             echo "Module added to webmin.acl (backup: /etc/webmin/webmin.acl.bak)"
         fi
@@ -787,7 +801,7 @@ show_menu() {
     echo "2) Uninstall module"
     echo "3) Exit"
     echo ""
-    echo -n "Select an option [1-3]: "
+    echo -n "Select an option [1-3] [3]: "
 }
 
 main() {
@@ -799,10 +813,6 @@ main() {
                 ;;
             uninstall)
                 uninstall_module || true
-                exit 0
-                ;;
-            -h|--help)
-                show_usage
                 exit 0
                 ;;
             *)
@@ -817,16 +827,18 @@ main() {
     while true; do
         show_menu
         read -r option
+        option=$(echo "$option" | xargs)
+        [[ -z "$option" ]] && option="3"
         case $option in
             1)
                 install_module
                 echo ""
-                read -p "Press Enter to continue..."
+                read -rp "Press Enter to continue..."
                 ;;
             2)
                 uninstall_module || true
                 echo ""
-                read -p "Press Enter to continue..."
+                read -rp "Press Enter to continue..."
                 ;;
             3)
                 echo ""

@@ -5,13 +5,21 @@
 # DHCP daemon for those migrating from isc-dhcp-server (EOL 2022), using
 # compatible configuration syntax and lease file format. Not a full
 # replacement — see README Scope section for what is and isn't implemented.
-# Reads /etc/pydhcp/pydhcpd.conf and /etc/pydhcp/default/pydhcpd,
-# writes /etc/pydhcp/pydhcpd.leases and /etc/pydhcp/pydhcpd.pid.
+# Reads /etc/pydhcp/pydhcpd.conf and /etc/pydhcp/pydhcp.env. pydhcp.env holds
+# two distinct groups: (1) daemon bootstrap -- the equivalent of the old
+# /etc/default/isc-dhcp-server (config/pid/leases paths, interface, user/
+# group); (2) pydhcp's own extra features with no isc-dhcp-server/dhcpd.conf
+# equivalent (ping cache TTL, allocation rate-limit, DISCOVER reservation
+# TTL -- see parse_defaults()). Every directive below that DOES have a
+# dhcpd.conf equivalent lives in pydhcpd.conf instead, same as
+# isc-dhcp-server -- never in pydhcp.env. Writes the leases and pid files at
+# the paths those resolve to (default /etc/pydhcp/pydhcpd.leases and
+# /etc/pydhcp/pydhcpd.pid).
 #
 # Supported dhcpd.conf directives:
 #   authoritative, not authoritative, server-identifier, deny duplicates,
 #   one-lease-per-client, deny declines,
-#   ping-check, cleanup-interval,
+#   ping-check, ping-timeout, cleanup-interval, abandon-lease-time,
 #   host { hardware ethernet; fixed-address; }
 #   class "blockdhcp" { match pick-first-value ... }
 #   subclass "blockdhcp" 1:<mac>;
@@ -19,6 +27,22 @@
 #             domain-name-servers, wpad;
 #             min/default/max-lease-time;
 #             pool { deny members of "blockdhcp"; range; } }
+#
+# FIXED VALUES -- not configurable anywhere (not pydhcp.env, not
+# pydhcpd.conf), on purpose: each is a protocol/math invariant or an internal
+# implementation detail with no admin-meaningful range of alternatives, not
+# an operational choice. See individual comments at each site for the
+# specific reasoning:
+#   - Max pool/subnet size (65536 addresses) -- fixed by IPv4 arithmetic,
+#     not a policy.
+#   - Max DHCP option length (255 bytes, WPAD URL / other options) -- fixed
+#     by the 1-byte length field in the DHCP option format (RFC 2132).
+#   - Allocation round-robin counter wraparound (2**16) -- internal iteration
+#     state, no observable effect on behavior.
+#   - Main-loop shutdown poll timeout (5s socket timeout) -- controls how
+#     fast a stop request is noticed, not DHCP behavior.
+# Anything else in pydhcp.env is a real, admin-adjustable value; this list
+# exists so a missing knob here isn't mistaken for an oversight.
 #
 # Requirements: Python 3.8+, no external dependencies.
 # Runs as a systemd service under the pydhcpd user (AmbientCapabilities
@@ -50,7 +74,7 @@ import tempfile
 # =============================================================================
 
 BASE_DIR        = "/etc/pydhcp"
-DEFAULTS_FILE   = os.path.join(BASE_DIR, "default", "pydhcpd")
+PYDHCP_ENV      = os.path.join(BASE_DIR, "pydhcp.env")
 CONF_FILE       = os.path.join(BASE_DIR, "pydhcpd.conf")
 LEASES_FILE     = os.path.join(BASE_DIR, "pydhcpd.leases")
 PID_FILE        = os.path.join(BASE_DIR, "pydhcpd.pid")
@@ -145,10 +169,7 @@ OPT_REQUESTED_IP       = 50
 OPT_LEASE_TIME         = 51
 OPT_MSG_TYPE           = 53
 OPT_SERVER_ID          = 54
-OPT_PARAM_REQUEST_LIST = 55
-OPT_MAX_MSG_SIZE       = 57
 OPT_MESSAGE            = 56
-OPT_CLIENT_ID          = 61
 OPT_WPAD               = 252
 OPT_END                = 255
 OPT_PAD                = 0
@@ -174,17 +195,32 @@ class ConfigError(Exception):
 # DEFAULTS PARSER
 # =============================================================================
 
+# pydhcp.env is the single source of truth for two distinct groups of keys,
+# both read directly here (the file is never sourced/eval'd, so a tampered
+# pydhcp.env cannot execute code):
+#   1. Bootstrap values -- the equivalent of the old /etc/default/isc-dhcp-server
+#      (config/pid/leases paths, interface, user/group). Shared with
+#      pyleases.sh/pywebmin.sh.
+#   2. pydhcp's own extra features, with no isc-dhcp-server/dhcpd.conf
+#      equivalent (ping cache TTL, allocation rate-limit, DISCOVER
+#      reservation TTL) -- unlike lease timers/ping-check/abandon-lease-time/
+#      WPAD, which DO have a dhcpd.conf equivalent and so live in
+#      pydhcpd.conf instead, same as isc-dhcp-server (see DHCPConfig).
 def parse_defaults(path):
     defaults = {
-        "conf":      CONF_FILE,
-        "pid":       PID_FILE,
-        "leases":    LEASES_FILE,
-        "interface": "",
-        "user":      "pydhcpd",
-        "group":     "pydhcpd",
+        "conf":        CONF_FILE,
+        "pid":         PID_FILE,
+        "leases":      LEASES_FILE,
+        "interface":   "",
+        "user":        "pydhcpd",
+        "group":       "pydhcpd",
+        "ping_cache_ttl":    _PING_CACHE_TTL,
+        "rate_limit_window": LeaseManager._RATE_LIMIT_WINDOW,
+        "rate_limit_max":    LeaseManager._RATE_LIMIT_MAX,
+        "reservation_ttl":   LeaseManager._RESERVATION_TTL,
     }
     if not os.path.isfile(path):
-        log.warning("Defaults file not found: %s", path)
+        log.warning("pydhcp.env not found: %s", path)
         return defaults
     with open(path) as f:
         for line in f:
@@ -201,7 +237,7 @@ def parse_defaults(path):
                 defaults["conf"] = val
             elif key == "DHCPDv4_PID":
                 defaults["pid"] = val
-            elif key == "DHCPDv4_LEASES":
+            elif key == "PYDHCPD_LEASES":
                 defaults["leases"] = val
             elif key == "INTERFACESv4":
                 defaults["interface"] = val.split()[0] if val.split() else ""
@@ -209,6 +245,18 @@ def parse_defaults(path):
                 defaults["user"] = val
             elif key == "DAEMON_GROUP":
                 defaults["group"] = val
+            elif key in ("PING_CACHE_TTL_SECONDS", "RATE_LIMIT_WINDOW_SECONDS",
+                         "RATE_LIMIT_MAX", "RESERVATION_TTL_SECONDS"):
+                dest = {
+                    "PING_CACHE_TTL_SECONDS":    "ping_cache_ttl",
+                    "RATE_LIMIT_WINDOW_SECONDS": "rate_limit_window",
+                    "RATE_LIMIT_MAX":            "rate_limit_max",
+                    "RESERVATION_TTL_SECONDS":   "reservation_ttl",
+                }[key]
+                try:
+                    defaults[dest] = int(val)
+                except ValueError:
+                    log.warning("Invalid %s in %s: %r — using default", key, path, val)
     return defaults
 
 # =============================================================================
@@ -223,6 +271,7 @@ class DHCPConfig:
         self.one_per_client   = False
         self.deny_declines    = False
         self.ping_check       = False
+        self.ping_timeout     = 1
 
         self.subnet           = ""
         self.netmask          = ""
@@ -241,6 +290,7 @@ class DHCPConfig:
         self.pool_max_lease   = 60
 
         self.cleanup_interval = 60
+        self.abandon_lease_time = 60
 
         self.static_hosts     = {}
         self.blocked_macs     = set()
@@ -293,8 +343,16 @@ class DHCPConfig:
                     except ValueError:
                         pass
 
+                if self.server_id:
+                    try:
+                        if s <= ipaddress.IPv4Address(self.server_id) <= e:
+                            raise ConfigError(
+                                f"server-identifier {self.server_id} overlaps pool range {s}\u2013{e}")
+                    except ValueError:
+                        pass
+
                 pool_size = int(e) - int(s) + 1
-                if pool_size > 65536:
+                if pool_size > 65536:  # fixed by IPv4 arithmetic, see FIXED VALUES header
                     raise ConfigError(
                         f"Pool range {s}–{e} covers {pool_size} addresses; max is 65536")
             except ValueError as err:
@@ -307,7 +365,7 @@ class DHCPConfig:
                     f"Duplicate static IP {ip} assigned to {seen_ips[ip]} and {mac}")
             seen_ips[ip] = mac
 
-        if self.wpad_url and len(self.wpad_url.encode()) > 255:
+        if self.wpad_url and len(self.wpad_url.encode()) > 255:  # DHCP option format, see FIXED VALUES header
             raise ConfigError(
                 f"wpad URL is {len(self.wpad_url.encode())} bytes; DHCP option 252 max is 255")
         if len(self.dns_servers) > 63:
@@ -365,6 +423,10 @@ class DHCPConfig:
             if requested < 5:
                 log.warning("cleanup-interval %d is below the minimum of 5; using 5.", requested)
 
+        m = re.search(r'\babandon-lease-time\s+(\d+)\s*;', raw)
+        if m:
+            self.abandon_lease_time = int(m.group(1))
+
         # "not authoritative;" is standard isc-dhcp-server syntax for explicitly
         # disabling authoritative mode. It must be checked before the plain
         # "authoritative;" match, since that regex would otherwise match the
@@ -378,6 +440,10 @@ class DHCPConfig:
         self.one_per_client  = bool(re.search(r'\bone-lease-per-client\s+true\s*;', raw))
         self.deny_declines   = bool(re.search(r'\bdeny\s+declines\s*;', raw))
         self.ping_check      = bool(re.search(r'\bping-check\s+true\s*;', raw))
+
+        m = re.search(r'\bping-timeout\s+(\d+)\s*;', raw)
+        if m:
+            self.ping_timeout = int(m.group(1))
 
         m = re.search(r'\bserver-identifier\s+([\d.]+)\s*;', raw)
         if m:
@@ -408,9 +474,18 @@ class DHCPConfig:
                 self._parse_subnet(subnet_body)
 
     def _parse_subnet(self, body):
-        m = re.search(r'option\s+routers\s+([\d.]+)\s*;', body)
+        m = re.search(r'option\s+routers\s+([^;]+);', body)
         if m:
-            self.routers = m.group(1)
+            entries = [s.strip() for s in m.group(1).split(",") if s.strip()]
+            if entries:
+                first = entries[0]
+                if re.match(r'^\d+\.\d+\.\d+\.\d+$', first):
+                    self.routers = first
+                    if len(entries) > 1:
+                        log.warning("option routers: only the first IP is used, %d extra entries ignored",
+                                    len(entries) - 1)
+                else:
+                    log.warning("Invalid router IP: %s (skipped)", first)
 
         m = re.search(r'option\s+broadcast-address\s+([\d.]+)\s*;', body)
         if m:
@@ -438,20 +513,25 @@ class DHCPConfig:
         if m:
             self.wpad_url = m.group(1)
 
-        m = re.search(r'min-lease-time\s+(\d+)\s*;', body)
+        pool_m = re.search(r'\bpool\s*\{', body)
+        pool = self._balanced_braces(body, pool_m.end()) if pool_m else None
+        subnet_only = body
+        if pool is not None:
+            pool_end = pool_m.end() + len(pool) + 1
+            subnet_only = body[:pool_m.start()] + body[pool_end:]
+
+        m = re.search(r'min-lease-time\s+(\d+)\s*;', subnet_only)
         if m:
             self.min_lease = int(m.group(1))
 
-        m = re.search(r'default-lease-time\s+(\d+)\s*;', body)
+        m = re.search(r'default-lease-time\s+(\d+)\s*;', subnet_only)
         if m:
             self.default_lease = int(m.group(1))
 
-        m = re.search(r'max-lease-time\s+(\d+)\s*;', body)
+        m = re.search(r'max-lease-time\s+(\d+)\s*;', subnet_only)
         if m:
             self.max_lease = int(m.group(1))
 
-        pool_m = re.search(r'\bpool\s*\{', body)
-        pool = self._balanced_braces(body, pool_m.end()) if pool_m else None
         if pool is not None:
             m = re.search(r'range\s+([\d.]+)\s+([\d.]+)\s*;', pool)
             if m:
@@ -506,7 +586,9 @@ class Lease:
 class LeaseManager:
     # Token-bucket rate-limit for DISCOVER/REQUEST: at most this many new lease
     # allocations per MAC within the sliding window, to limit pool exhaustion
-    # by an attacker rotating MACs.
+    # by an attacker rotating MACs. No isc-dhcp-server equivalent -- pydhcp's
+    # own feature, overridable via RATE_LIMIT_WINDOW_SECONDS/RATE_LIMIT_MAX in
+    # pydhcp.env (read directly, not through pydhcpd.conf; see __init__).
     _RATE_LIMIT_WINDOW = 60   # seconds
     _RATE_LIMIT_MAX    = 5    # allocations per window per MAC
 
@@ -515,12 +597,23 @@ class LeaseManager:
     # the matching REQUEST arrives. This keeps a DISCOVER flood (trivially
     # forged, one MAC per packet) from being able to hold pool IPs hostage
     # for hours; the reservation self-expires in seconds regardless of
-    # whether the client ever follows up.
+    # whether the client ever follows up. No isc-dhcp-server equivalent --
+    # pydhcp's own feature, overridable via RESERVATION_TTL_SECONDS in
+    # pydhcp.env (read directly, not through pydhcpd.conf; see __init__).
     _RESERVATION_TTL = 30     # seconds
 
-    def __init__(self, path, config, daemon_user="pydhcpd", daemon_group="pydhcpd"):
+    def __init__(self, path, config, daemon_user="pydhcpd", daemon_group="pydhcpd",
+                 quarantine_duration=60, rate_limit_window=None, rate_limit_max=None,
+                 reservation_ttl=None):
         self.path   = path
         self.config = config
+        self.quarantine_duration = quarantine_duration
+        if rate_limit_window is not None:
+            self._RATE_LIMIT_WINDOW = rate_limit_window
+        if rate_limit_max is not None:
+            self._RATE_LIMIT_MAX = rate_limit_max
+        if reservation_ttl is not None:
+            self._RESERVATION_TTL = reservation_ttl
         self.lock   = threading.RLock()
         self._write_lock = threading.Lock()
         self.leases = {}
@@ -645,8 +738,10 @@ class LeaseManager:
         with self.lock:
             return mac in self.config.blocked_macs
 
-    def quarantine_ip(self, ip, duration=60):
+    def quarantine_ip(self, ip, duration=None):
         with self.lock:
+            if duration is None:
+                duration = self.quarantine_duration
             self._quarantine[ip] = time.time() + duration
 
     def allocate(self, mac, hostname, requested_ip=None, hint_ip=None,
@@ -801,7 +896,7 @@ class LeaseManager:
             return None
         sorted_free = sorted(free, key=self._ip_key)
         idx = self._alloc_counter % len(sorted_free)
-        self._alloc_counter = (self._alloc_counter + 1) % (2**16)
+        self._alloc_counter = (self._alloc_counter + 1) % (2**16)  # internal state, see FIXED VALUES header
         return sorted_free[idx]
 
     def _create_lease_locked(self, ip, mac, hostname, duration):
@@ -974,7 +1069,7 @@ def parse_packet(data):
         opt = data[i]
         if opt == OPT_END:
             break
-        if opt == 0:
+        if opt == OPT_PAD:
             i += 1
             continue
         if i + 1 >= data_len:
@@ -1037,7 +1132,7 @@ def build_packet(msg_type, xid, mac_str, offered_ip, server_ip, config, lease_ti
 
     def add_opt(code, value):
         nonlocal options
-        if len(value) > 255:
+        if len(value) > 255:  # DHCP option format, see FIXED VALUES header
             log.error("DHCP option %d value too long (%d bytes) — skipped",
                       code, len(value))
             return
@@ -1045,8 +1140,7 @@ def build_packet(msg_type, xid, mac_str, offered_ip, server_ip, config, lease_ti
 
     add_opt(OPT_MSG_TYPE,  bytes([msg_type]))
     add_opt(OPT_SERVER_ID, ip_to_bytes(server_ip))
-    if msg_type != MSG_INFORM:
-        add_opt(OPT_LEASE_TIME, struct.pack("!I", lease_time))
+    add_opt(OPT_LEASE_TIME, struct.pack("!I", lease_time))
     add_opt(OPT_SUBNET_MASK, ip_to_bytes(config.netmask))
 
     if config.routers:
@@ -1070,6 +1164,10 @@ def build_packet(msg_type, xid, mac_str, offered_ip, server_ip, config, lease_ti
 # PING CHECK
 # =============================================================================
 
+# How long a ping result (alive/dead) is cached before re-checking. No
+# isc-dhcp-server equivalent -- pydhcp's own feature, overridable via
+# PING_CACHE_TTL_SECONDS in pydhcp.env (read directly, not through
+# pydhcpd.conf; see parse_defaults()/main()).
 _PING_CACHE_TTL = 120
 _ping_cache_lock = threading.Lock()
 _ping_cache = {}
@@ -1188,6 +1286,7 @@ class DHCPServer:
                 self.config        = new_config
                 self.leases.config = new_config
                 self.leases.pool   = new_pool
+                self.leases.quarantine_duration = new_config.abandon_lease_time
                 # Remove leases whose IP is no longer in the new pool so the
                 # lease table stays consistent after a range change.
                 stale = [ip for ip in list(self.leases.leases)
@@ -1216,7 +1315,7 @@ class DHCPServer:
                                           socket.htons(ETH_P_IP))
             self.raw_sock.bind((self.interface, 0))
             _attach_dhcp_bpf(self.raw_sock)
-            self.raw_sock.settimeout(5.0)
+            self.raw_sock.settimeout(5.0)  # shutdown poll only, see FIXED VALUES header
         except OSError as e:
             log.error("Failed to open raw socket on %s: %s", self.interface, e)
             sys.exit(1)
@@ -1430,7 +1529,7 @@ class DHCPServer:
 
         def add_opt(code, value):
             nonlocal options
-            if len(value) > 255:
+            if len(value) > 255:  # DHCP option format, see FIXED VALUES header
                 log.error("DHCP option %d value too long (%d bytes) — skipped",
                           code, len(value))
                 return
@@ -1466,13 +1565,17 @@ class DHCPServer:
             server_ip_snapshot = self.server_ip
             config_deny_duplicates = config_snapshot.deny_duplicates
             config_ping_check = config_snapshot.ping_check
+            config_ping_timeout = config_snapshot.ping_timeout
             config_pool_def_lease = config_snapshot.pool_def_lease
 
         if config_deny_duplicates:
             existing = self.leases.get_by_mac(mac)
             if existing and not self.leases.is_blocked(mac):
                 offered_ip  = existing.ip
-                lease_time  = config_pool_def_lease
+                if config_snapshot.static_hosts.get(mac) == existing.ip:
+                    lease_time = config_snapshot.default_lease
+                else:
+                    lease_time = config_pool_def_lease
                 alloc_reason = None
             else:
                 offered_ip, lease_time, alloc_reason = self.leases.allocate(
@@ -1520,16 +1623,17 @@ class DHCPServer:
                         _ping_inflight.release()
                     if alive:
                         log.warning("PING-CHECK: %s is in use — quarantined", offered_ip)
-                        self.leases.quarantine_ip(offered_ip, duration=60)
+                        self.leases.quarantine_ip(offered_ip)
                         self.leases.release_reservation_owned(mac, offered_ip)
                         return
                     _send_offer()
 
                 # Submit and return immediately: this frees the calling main-
                 # pool worker right away instead of blocking it on the ping
-                # for up to 2s. _on_ping_done runs on the ping executor's own
-                # thread once the ping finishes, and does the send/quarantine.
-                future = _ping_executor.submit(ping_check, offered_ip)
+                # for up to ping-timeout seconds. _on_ping_done runs on the
+                # ping executor's own thread once the ping finishes, and does
+                # the send/quarantine.
+                future = _ping_executor.submit(ping_check, offered_ip, config_ping_timeout)
                 future.add_done_callback(_on_ping_done)
                 return
             else:
@@ -1752,7 +1856,7 @@ def test_config(config_path):
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("-t", "--test"):
-        test_path = CONF_FILE
+        test_path = parse_defaults(PYDHCP_ENV)["conf"]
         if "-cf" in sys.argv:
             cf_idx = sys.argv.index("-cf")
             if cf_idx + 1 < len(sys.argv):
@@ -1761,10 +1865,12 @@ def main():
 
     os.makedirs(BASE_DIR, exist_ok=True)
 
-    defaults = parse_defaults(DEFAULTS_FILE)
+    defaults = parse_defaults(PYDHCP_ENV)
+    global _PING_CACHE_TTL
+    _PING_CACHE_TTL = defaults["ping_cache_ttl"]
     interface = defaults["interface"]
     if not interface:
-        log.error("No interface defined in %s (INTERFACESv4)", DEFAULTS_FILE)
+        log.error("No interface defined in %s (INTERFACESv4)", PYDHCP_ENV)
         sys.exit(1)
     if not os.path.isdir(f"/sys/class/net/{interface}"):
         log.error("Interface '%s' does not exist on this system", interface)
@@ -1783,7 +1889,11 @@ def main():
 
     lease_mgr = LeaseManager(defaults["leases"], config,
                              daemon_user=defaults["user"],
-                             daemon_group=defaults["group"])
+                             daemon_group=defaults["group"],
+                             quarantine_duration=config.abandon_lease_time,
+                             rate_limit_window=defaults["rate_limit_window"],
+                             rate_limit_max=defaults["rate_limit_max"],
+                             reservation_ttl=defaults["reservation_ttl"])
     server    = DHCPServer(interface, config, lease_mgr)
 
     write_pid(defaults["pid"])

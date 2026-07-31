@@ -13,20 +13,26 @@
 
 set -e
 
-DEFAULTS_FILE="/etc/pydhcp/default/pydhcpd"
-DAEMON=/usr/bin/python3
-DAEMON_ARGS=/etc/pydhcp/pydhcpd.py
+DEFAULTS_FILE="/etc/pydhcp/pydhcp.env"
 NAME=pydhcpd
-LOG_FILE="/var/log/pydhcpd.log"
 
 # Defaults; may be overridden from DEFAULTS_FILE below.
+DAEMON=/usr/bin/python3
+DAEMON_ARGS=/etc/pydhcp/pydhcpd.py
+LOG_FILE="/var/log/pydhcpd.log"
 PID_FILE="/etc/pydhcp/pydhcpd.pid"
 DAEMON_USER="pydhcpd"
 DAEMON_GROUP="pydhcpd"
 
-# Read PID path, user and group from the defaults file so this wrapper stays
-# in sync with the systemd unit and pyinstall.sh.
+# Read daemon path, log path, PID path, user and group from pydhcp.env so
+# this wrapper stays in sync with the systemd unit and pysetup.sh.
 if [ -f "$DEFAULTS_FILE" ]; then
+    val=$(grep '^DHCPDv4_BIN=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
+    [ -n "$val" ] && DAEMON="$val"
+    val=$(grep '^DHCPDv4_SCRIPT=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
+    [ -n "$val" ] && DAEMON_ARGS="$val"
+    val=$(grep '^LOG_FILE=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
+    [ -n "$val" ] && LOG_FILE="$val"
     val=$(grep '^DHCPDv4_PID=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
     [ -n "$val" ] && PID_FILE="$val"
     val=$(grep '^DAEMON_USER=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)

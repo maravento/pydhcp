@@ -8,11 +8,11 @@
 # or removes them cleanly from the system.
 #
 # Usage:
-# sudo bash pyinstall.sh # install
-# sudo bash pyinstall.sh --update # update code only (preserves user config,
+# sudo bash pysetup.sh # install
+# sudo bash pysetup.sh --update # update code only (preserves user config,
 #   backs up replaced files to /etc/pydhcp/bak/; aborts if pydhcp.env is
 #   missing -- run without flags first)
-# sudo bash pyinstall.sh --remove # uninstall
+# sudo bash pysetup.sh --remove # uninstall
 #
 ################################################################################
 
@@ -40,6 +40,14 @@ if ! flock -n 200; then
     exit 1
 fi
 
+# DEPENDENCIES
+for dep in python3 iproute2 gawk; do
+    if ! dpkg -s "$dep" &>/dev/null; then
+        log "ERROR: Required dependency '$dep' is not installed."
+        exit 1
+    fi
+done
+
 # VARIABLES
 INSTALL_DIR="/etc/pydhcp"
 SERVICE_FILE="/etc/systemd/system/pydhcpd.service"
@@ -56,6 +64,106 @@ info() { echo -e "${CYAN}[INFO]${NC} $*"; }
 success() { echo -e "${GREEN}[OK]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+
+# --- Interactive prompts ------------------------------------------------------
+ask_interface_number() {
+    local prompt="$1" default="$2" var="$3" max="$4" answer
+    while true; do
+        read -rp " ${prompt} [1-${max}] [${default}]: " answer
+        answer="${answer:-$default}"
+        if [[ "$answer" =~ ^[0-9]+$ ]] && (( 10#$answer >= 1 && 10#$answer <= max )); then
+            printf -v "$var" '%s' "$answer"
+            break
+        fi
+        warn "Invalid selection, try again"
+    done
+}
+
+ask_ip() {
+    local prompt="$1" default="$2" var="$3" answer hint
+    hint="${default:-e.g. 192.168.0.10}"
+    while true; do
+        read -rp " ${prompt} [${hint}]: " answer
+        answer="${answer:-$default}"
+        if [[ "$answer" =~ ^(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])$ ]]; then
+            printf -v "$var" '%s' "$answer"
+            break
+        fi
+        warn "'$answer' is not a valid IP address."
+    done
+}
+
+ask_netmask() {
+    local prompt="$1" default="$2" var="$3" answer
+    while true; do
+        read -rp " ${prompt} [${default}]: " answer
+        answer="${answer:-$default}"
+        if [[ "$answer" =~ ^(255|254|252|248|240|224|192|128|0)(\.(255|254|252|248|240|224|192|128|0)){3}$ ]] \
+            && python3 -c "import ipaddress; ipaddress.IPv4Network('0.0.0.0/${answer}')" 2>/dev/null; then
+            printf -v "$var" '%s' "$answer"
+            break
+        fi
+        warn "'$answer' is not a valid netmask."
+    done
+}
+
+# ref_start (optional): rejects an octet <= this value, for pool-end prompts.
+ask_octet() {
+    local prompt="$1" default="$2" var="$3" ref_start="${4:-}" answer
+    while true; do
+        read -rp " ${prompt} [${default}]: " answer
+        answer="${answer:-$default}"
+        if [[ "$answer" =~ ^[0-9]+$ ]] && (( 10#$answer >= 1 && 10#$answer <= 254 )); then
+            if [[ -n "$ref_start" ]] && (( 10#$answer <= 10#$ref_start )); then
+                warn "Pool end must be greater than pool start (${ref_start})"
+                continue
+            fi
+            # Store the canonical decimal value (strips any leading zero,
+            # e.g. "08" -> "8") -- the raw string would later be rejected by
+            # Python's ipaddress module ("Leading zeros are not permitted")
+            # when this octet is composed into a dotted-quad IP.
+            printf -v "$var" '%d' "$((10#$answer))"
+            break
+        fi
+        warn "Invalid value, enter a number between 1 and 254"
+    done
+}
+
+ask_dns() {
+    local prompt="$1" default="$2" var="$3" answer ip_re
+    ip_re='(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])'
+    while true; do
+        read -rp " ${prompt} [${default}]: " answer
+        answer="${answer:-$default}"
+        if [[ "$answer" =~ ^${ip_re}(,${ip_re})*$ ]]; then
+            printf -v "$var" '%s' "$answer"
+            break
+        fi
+        warn "Invalid DNS format, try again"
+    done
+}
+
+ask_number() {
+    local prompt="$1" default="$2" var="$3" answer
+    while true; do
+        read -rp " ${prompt} [${default}]: " answer
+        answer="${answer:-$default}"
+        if [[ "$answer" =~ ^[0-9]+$ ]] && (( 10#$answer >= 1 )); then
+            printf -v "$var" '%d' "$((10#$answer))"
+            break
+        fi
+        warn "Invalid value, enter a positive integer"
+    done
+}
+
+confirm() {
+    # confirm "prompt" [default y|n] -- returns 0 on yes, 1 on no
+    local prompt="$1" default="${2:-n}" answer hint
+    [[ "$default" == "y" ]] && hint="[Y/n]" || hint="[y/N]"
+    read -rp " ${prompt} ${hint}: " answer
+    answer="${answer:-$default}"
+    [[ "${answer,,}" =~ ^y(es)?$ ]]
+}
 
 # Verify that a source file is a regular, non-empty, non-world-writable file
 # owned by root or the current user, and that its path is inside SCRIPT_DIR.
@@ -81,7 +189,7 @@ verify_source() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Start
-log "pyinstall start..."
+log "pysetup start..."
 
 # --- UNINSTALL ---------------------------------------------------------------
 if [[ "${1:-}" == "--remove" ]]; then
@@ -92,10 +200,14 @@ if [[ "${1:-}" == "--remove" ]]; then
     info "Removing system files..."
     rm -f "$SERVICE_FILE"
     rm -f "$INIT_FILE"
-    rm -f "$LOG_FILE"
     rm -f /etc/logrotate.d/pydhcpd
     rm -f /var/log/pydhcp.log
     rm -f /etc/logrotate.d/pydhcp
+
+    if [ -x "$INSTALL_DIR/tools/pywebmin.sh" ]; then
+        info "Removing Webmin module ..."
+        "$INSTALL_DIR/tools/pywebmin.sh" uninstall || true
+    fi
 
     info "Removing $INSTALL_DIR ..."
     [[ "$INSTALL_DIR" == "/etc/pydhcp" ]] || error "Unexpected install dir: $INSTALL_DIR"
@@ -108,7 +220,8 @@ if [[ "${1:-}" == "--remove" ]]; then
     systemctl daemon-reload
 
     success "pydhcpd has been removed from the system."
-    log "pyinstall done at: $(date)"
+    log "pysetup done at: $(date)"
+    rm -f "$LOG_FILE"
     exit 0
 fi
 
@@ -119,7 +232,11 @@ if [[ "${1:-}" == "--update" ]]; then
     fi
     if [ ! -f "$INSTALL_DIR/pydhcp.env" ]; then
         echo -e "${RED}[ERROR]${NC} $INSTALL_DIR/pydhcp.env not found (pre-dates config persistence)." >&2
-        error "Run 'pyinstall.sh --remove' then reinstall."
+        error "Run 'pysetup.sh --remove' then reinstall."
+    fi
+    if [ ! -d "$INSTALL_DIR/tools" ]; then
+        echo -e "${RED}[ERROR]${NC} $INSTALL_DIR/tools not found (unexpected state for an existing installation)." >&2
+        error "Run 'pysetup.sh --remove' then reinstall."
     fi
 
     BACKUP_DIR="/etc/pydhcp/bak/$(date +%Y%m%d_%H%M%S)"
@@ -176,12 +293,12 @@ if [[ "${1:-}" == "--update" ]]; then
     echo ""
     success "pydhcpd updated. Backup saved in $BACKUP_DIR"
     info "$INSTALL_DIR/pydhcpd.conf -- unchanged"
-    info "$INSTALL_DIR/default/pydhcpd -- unchanged"
+    info "$INSTALL_DIR/pydhcp.env -- unchanged"
     info "$INSTALL_DIR/pydhcpd.leases -- unchanged"
     warn "NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in /etc/pydhcp/pydhcp.env"
     warn "(not by editing pyleases.sh) and is unaffected by this update."
     echo ""
-    log "pyinstall done at: $(date)"
+    log "pysetup done at: $(date)"
     exit 0
 fi
 
@@ -195,7 +312,7 @@ fi
 # Detect and select network interface
 echo ""
 info "Available network interfaces:"
-mapfile -t IFACES < <(ip -br link show | awk '$1 != "lo" {print $1}')
+mapfile -t IFACES < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
 if [[ ${#IFACES[@]} -eq 0 ]]; then
     error "No network interfaces found"
 fi
@@ -204,40 +321,19 @@ for i in "${!IFACES[@]}"; do
     printf " [%d] %s (%s)\n" "$((i+1))" "${IFACES[$i]}" "$STATE"
 done
 echo ""
-while true; do
-    read -rp " Select interface number [1-${#IFACES[@]}]: " SEL
-    if [[ "$SEL" =~ ^[0-9]+$ ]] && (( 10#$SEL >= 1 && 10#$SEL <= ${#IFACES[@]} )); then
-        IFACE="${IFACES[$((10#$SEL-1))]}"
-        break
-    fi
-    warn "Invalid selection, try again"
-done
+ask_interface_number "Select interface number" "1" SEL "${#IFACES[@]}"
+IFACE="${IFACES[$((10#$SEL-1))]}"
 info "Using interface: $IFACE"
 
 # DHCP server IP
 echo ""
-while true; do
-    read -rp " Enter DHCP server IP address (e.g. 192.168.0.10): " SERVER_IP
-    read -r SERVER_IP <<< "$SERVER_IP"
-    if [[ "$SERVER_IP" =~ ^(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])$ ]]; then
-        break
-    fi
-    warn "Invalid IP address, try again"
-done
+DEFAULT_SERVER_IP=$(ip -4 -br addr show "$IFACE" 2>/dev/null | awk '{print $3}' | cut -d/ -f1)
+ask_ip "Enter DHCP server IP address" "$DEFAULT_SERVER_IP" SERVER_IP
 info "Server IP: $SERVER_IP"
 
 # Netmask
 echo ""
-while true; do
-    read -rp " Enter netmask [255.255.255.0]: " NETMASK
-    NETMASK=$(echo "$NETMASK" | xargs)
-    [[ -z "$NETMASK" ]] && NETMASK="255.255.255.0"
-    if [[ "$NETMASK" =~ ^(255|254|252|248|240|224|192|128|0)(\.(255|254|252|248|240|224|192|128|0)){3}$ ]] \
-        && python3 -c "import ipaddress; ipaddress.IPv4Network('0.0.0.0/${NETMASK}')" 2>/dev/null; then
-        break
-    fi
-    warn "Invalid netmask, try again"
-done
+ask_netmask "Enter netmask" "255.255.255.0" NETMASK
 info "Netmask: $NETMASK"
 
 # Calculate network values from SERVER_IP and NETMASK using python3
@@ -259,24 +355,8 @@ info "Broadcast: $BROADCAST"
 # Pool range
 echo ""
 while true; do
-    while true; do
-        read -rp " Enter pool start (last octet, default: 220): " POOL_START
-        POOL_START=$(echo "$POOL_START" | xargs)
-        [[ -z "$POOL_START" ]] && POOL_START="220"
-        if [[ "$POOL_START" =~ ^[0-9]+$ ]] && (( 10#$POOL_START >= 1 && 10#$POOL_START <= 254 )); then
-            break
-        fi
-        warn "Invalid value, enter a number between 1 and 254"
-    done
-    while true; do
-        read -rp " Enter pool end (last octet, default: 235): " POOL_END
-        POOL_END=$(echo "$POOL_END" | xargs)
-        [[ -z "$POOL_END" ]] && POOL_END="235"
-        if [[ "$POOL_END" =~ ^[0-9]+$ ]] && (( 10#$POOL_END > 10#$POOL_START && 10#$POOL_END <= 254 )); then
-            break
-        fi
-        warn "Pool end must be greater than pool start ($POOL_START) and <= 254"
-    done
+    ask_octet "Enter pool start (last octet)" "220" POOL_START
+    ask_octet "Enter pool end (last octet)" "235" POOL_END "$POOL_START"
     if python3 -c "
 import ipaddress, sys
 net = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
@@ -290,18 +370,36 @@ sys.exit(0 if start in net and end in net else 1)
 done
 info "Pool range: ${NET_BASE}.${POOL_START} -> ${NET_BASE}.${POOL_END}"
 
+# Guard: SERVER_IP must never fall inside its own pool range -- pydhcpd.py
+# rejects this at config load, but that only surfaces after this script has
+# already created the user, directories, and systemd unit. Catching it here,
+# before any of that, avoids leaving the system half-configured over a
+# config mistake that could have been caught up front.
+if python3 -c "
+import ipaddress, sys
+server = ipaddress.IPv4Address(sys.argv[1])
+start = ipaddress.IPv4Address(sys.argv[2])
+end = ipaddress.IPv4Address(sys.argv[3])
+print('1' if start <= server <= end else '0')
+" "$SERVER_IP" "${NET_BASE}.${POOL_START}" "${NET_BASE}.${POOL_END}" 2>/dev/null | grep -q '^1$'; then
+    error "Server IP ($SERVER_IP) overlaps the pool range (${NET_BASE}.${POOL_START}-${NET_BASE}.${POOL_END}) -- choose a server IP outside the pool"
+fi
+
 # DNS servers
 echo ""
-while true; do
-    read -rp " Enter DNS server(s), comma-separated [8.8.8.8,1.1.1.1]: " DNS_SERVERS
-    DNS_SERVERS=$(echo "$DNS_SERVERS" | xargs)
-    [[ -z "$DNS_SERVERS" ]] && DNS_SERVERS="8.8.8.8,1.1.1.1"
-    if [[ "$DNS_SERVERS" =~ ^(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])(,(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5]))*$ ]]; then
-        break
-    fi
-    warn "Invalid DNS format, try again"
-done
+ask_dns "Enter DNS server(s), comma-separated" "8.8.8.8,1.1.1.1" DNS_SERVERS
 info "DNS servers: $DNS_SERVERS"
+
+# Pool lease cleanup interval
+ask_number "DHCP pool lease cleanup interval in seconds (CLEANUP_INTERVAL)" "60" CLEANUP_INTERVAL
+
+# Optional features
+WPAD_ENABLED="false"
+confirm "Enable WPAD/PAC proxy auto-configuration? (requires Apache2 on port 18100)" "n" && WPAD_ENABLED="true"
+# ping-check matches isc-dhcp-server's own default (on unless explicitly
+# disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
+# pydhcp.env afterward if your environment has strict ICMP firewall rules.
+PING_CHECK_ENABLED="true"
 
 # Verify source files exist
 for f in pydhcpd.py pydhcpd.conf pydhcpd.service init.d/pydhcpd; do
@@ -327,7 +425,7 @@ fi
 info "Creating $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
 chown root:"$SYSTEM_USER" "$INSTALL_DIR"
-chmod 770 "$INSTALL_DIR"
+chmod 1770 "$INSTALL_DIR"
 
 # Deploy daemon and config files
 info "Deploying pydhcpd.py ..."
@@ -347,48 +445,10 @@ fi
 chown root:"$SYSTEM_USER" "$INSTALL_DIR/pydhcpd.conf"
 chmod 640 "$INSTALL_DIR/pydhcpd.conf"
 
-# Create default/pydhcpd (preserved on update -- never overwritten)
-mkdir -p "$INSTALL_DIR/default"
-chown root:"$SYSTEM_USER" "$INSTALL_DIR/default"
-chmod 750 "$INSTALL_DIR/default"
-
-if [ -f "$INSTALL_DIR/default/pydhcpd" ]; then
-    warn "default/pydhcpd already exists in $INSTALL_DIR -- skipping (not overwritten)"
-    info "Interface NOT changed -- still using the value in default/pydhcpd"
-else
-    info "Creating default/pydhcpd ..."
-    cat > "$INSTALL_DIR/default/pydhcpd" <<DEFEOF
-# /etc/pydhcp/default/pydhcpd
-# Configuration defaults for pydhcpd
-# Generated by pyinstall.sh on $(date)
-# Read by pydhcpd.py at startup and by /etc/init.d/pydhcpd
-
-# Path to pydhcpd config file
-DHCPDv4_CONF=/etc/pydhcp/pydhcpd.conf
-
-# Path to pydhcpd PID file
-DHCPDv4_PID=/etc/pydhcp/pydhcpd.pid
-
-# Path to pydhcpd leases file
-DHCPDv4_LEASES=/etc/pydhcp/pydhcpd.leases
-
-# Network interface to listen on (IPv4 only, single interface)
-INTERFACESv4="$IFACE"
-
-# System user and group under which pydhcpd runs.
-DAEMON_USER="pydhcpd"
-DAEMON_GROUP="pydhcpd"
-DEFEOF
-    info "Interface set in default/pydhcpd: $IFACE"
-fi
-chown root:"$SYSTEM_USER" "$INSTALL_DIR/default/pydhcpd"
-chmod 640 "$INSTALL_DIR/default/pydhcpd"
-
 # Create pydhcp's own ACL directories/files (preserved on update -- never
 # overwritten). These lists are only consumed by the optional pyleases.sh
-# tool (or by uhotspot's uleases.sh, if deployed), but are created here
-# unconditionally so their paths can be recorded in pydhcp.env from the
-# start -- not deferred until whichever optional tool happens to run first.
+# tool, but are created here unconditionally so their paths can be recorded
+# in pydhcp.env from the start -- not deferred until pyleases.sh first runs.
 mkdir -p /etc/acl/acl_mac /etc/acl/acl_dhcp
 chmod 700 /etc/acl/acl_mac /etc/acl/acl_dhcp
 
@@ -408,20 +468,30 @@ done
 info "ACL directories/files present in /etc/acl"
 
 # Create pydhcp.env (preserved on update -- never overwritten). Single source
-# of truth for network and ACL-path values: pyleases.sh and any other future
-# script read these from here instead of asking again, adding only their own
-# keys if missing.
+# of truth for network, ACL-path and daemon-defaults values: pyleases.sh and
+# any other future script read these from here instead of asking again,
+# adding only their own keys if missing.
 if [ -f "$INSTALL_DIR/pydhcp.env" ]; then
     warn "pydhcp.env already exists in $INSTALL_DIR -- skipping (not overwritten)"
+    info "Interface NOT changed -- still using the value in pydhcp.env"
 else
     info "Creating pydhcp.env ..."
     cat > "$INSTALL_DIR/pydhcp.env" <<ENVEOF
+# =============================================================================
+# PYDHCP
 # /etc/pydhcp/pydhcp.env
-# Network configuration -- generated by pyinstall.sh on $(date)
-# Single source of truth for network values across pydhcp scripts.
-# pyleases.sh and any other script add only their own keys here if missing --
-# never re-ask or overwrite these.
-
+# =============================================================================
+# -- Daemon bootstrap (/etc/default/isc-dhcp-server migration) ----------------
+DHCPDv4_CONF=/etc/pydhcp/pydhcpd.conf
+DHCPDv4_PID=/etc/pydhcp/pydhcpd.pid
+DHCPDv4_BIN=/usr/bin/python3
+DHCPDv4_SCRIPT=/etc/pydhcp/pydhcpd.py
+LOG_FILE=/var/log/pydhcpd.log
+PYDHCPD_LEASES=$INSTALL_DIR/pydhcpd.leases
+INTERFACESv4="$IFACE"
+DAEMON_USER="pydhcpd"
+DAEMON_GROUP="pydhcpd"
+# -- Network values (chosen by the administrator during install) --------------
 SERVER_IP=$SERVER_IP
 SERV_SUBNET=$SUBNET
 SERV_BROADCAST=$BROADCAST
@@ -429,16 +499,29 @@ SERV_MASK=$NETMASK
 SERV_INI_RANGE_BLOCK=${NET_BASE}.${POOL_START}
 SERV_END_RANGE_BLOCK=${NET_BASE}.${POOL_END}
 SERV_DNS=$DNS_SERVERS
-
-# ACL paths (files created above; only consumed by pyleases.sh / uleases.sh)
+# -- ACL paths (files created above; only consumed by pyleases.sh) ------------
 ACL_PATH=/etc/acl
 ACL_MAC_PATH=/etc/acl/acl_mac
 ACL_DHCP_PATH=/etc/acl/acl_dhcp
 ACL_MAC_PROXY=/etc/acl/acl_mac/mac-proxy.txt
 ACL_MAC_UNLIMITED=/etc/acl/acl_mac/mac-unlimited.txt
 ACL_BLOCK_FILE=/etc/acl/acl_dhcp/blockdhcp.txt
+# -- Lease timers (pyleases.sh -> pydhcpd.conf pool/subnet directives) --------
+CLEANUP_INTERVAL=$CLEANUP_INTERVAL
+AUTHORIZED_LEASE_TIME=2592000
+QUARANTINE_DURATION=60
+# -- Optional features (pyleases.sh -> pydhcpd.conf wpad/ping-check) ----------
+WPAD_ENABLED=$WPAD_ENABLED
+PING_CHECK_ENABLED=$PING_CHECK_ENABLED
+PING_TIMEOUT_SECONDS=1
+# -- pydhcp-only features (no isc-dhcp-server equivalent) ---------------------
+PING_CACHE_TTL_SECONDS=120
+RATE_LIMIT_WINDOW_SECONDS=60
+RATE_LIMIT_MAX=5
+RESERVATION_TTL_SECONDS=30
+# =============================================================================
 ENVEOF
-    info "Network and ACL-path values set in pydhcp.env"
+    info "Network, ACL-path and daemon-defaults values set in pydhcp.env"
 fi
 chown root:"$SYSTEM_USER" "$INSTALL_DIR/pydhcp.env"
 chmod 640 "$INSTALL_DIR/pydhcp.env"
@@ -452,7 +535,12 @@ sed -i "s|option routers .*;|option routers ${SERVER_IP};|" "$CONF_TMP"
 sed -i "s|option broadcast-address .*;|option broadcast-address ${BROADCAST};|" "$CONF_TMP"
 sed -i "s|range [0-9.]* [0-9.]*;|range ${NET_BASE}.${POOL_START} ${NET_BASE}.${POOL_END};|" "$CONF_TMP"
 sed -i "s|option domain-name-servers .*;|option domain-name-servers ${DNS_SERVERS};|" "$CONF_TMP"
-sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${SERVER_IP}:18100/wpad.pac\";|" "$CONF_TMP"
+if [[ "$WPAD_ENABLED" == "true" ]]; then
+    sed -i "s|# option wpad code 252 = text;|option wpad code 252 = text;|" "$CONF_TMP"
+    sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|option wpad \"http://${SERVER_IP}:18100/wpad.pac\";|" "$CONF_TMP"
+else
+    sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${SERVER_IP}:18100/wpad.pac\";|" "$CONF_TMP"
+fi
 mv -f "$CONF_TMP" "$INSTALL_DIR/pydhcpd.conf"
 info "Network parameters set in pydhcpd.conf"
 
@@ -512,7 +600,6 @@ chmod 640 "$LOG_FILE"
 info "Deploying logrotate config ..."
 cat > /etc/logrotate.d/pydhcpd << 'EOF'
 /var/log/pydhcpd.log {
-    su pydhcpd pydhcpd
     weekly
     rotate 4
     compress
@@ -561,9 +648,9 @@ echo ""
 success "pydhcpd installed and running."
 echo ""
 info "Configuration : $INSTALL_DIR/pydhcpd.conf"
-info "Interface : $(grep INTERFACESv4 "$INSTALL_DIR/default/pydhcpd" | cut -d= -f2 | tr -d '"')"
+info "Interface : $(grep INTERFACESv4 "$INSTALL_DIR/pydhcp.env" | cut -d= -f2 | tr -d '"')"
 info "Leases : $INSTALL_DIR/pydhcpd.leases"
 info "Logs : journalctl -u pydhcpd -f"
 echo ""
-info "To remove : sudo bash pyinstall.sh --remove"
-log "pyinstall done at: $(date)"
+info "To remove : sudo bash pysetup.sh --remove"
+log "pysetup done at: $(date)"
