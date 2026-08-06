@@ -41,12 +41,31 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in python3 iproute2 gawk; do
+for dep in python3 iproute2 gawk passwd util-linux coreutils; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
     fi
 done
+
+# OCTET VALIDATION
+# _UH_OCT accepts 0-255 with no leading zeros, so any value that passes is
+# already canonical decimal and never needs a "10#" prefix downstream.
+# Use uh_valid_ipv4/uh_valid_octet to VALIDATE a value; never use _UH_IPV4 to
+# EXTRACT one from free text -- an anchorless match would silently return a
+# truncated address (e.g. "192.168.0.010" -> "192.168.0.0"). Extract with a
+# permissive pattern, then validate the result.
+_UH_OCT='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
+_UH_IPV4="^${_UH_OCT}(\.${_UH_OCT}){3}$"
+uh_valid_ipv4() { [[ "$1" =~ $_UH_IPV4 ]]; }
+uh_valid_octet() { [[ "$1" =~ ^${_UH_OCT}$ ]]; }
+
+# UINT VALIDATION
+# _UH_UINT accepts any non-negative integer with no leading zeros (epochs,
+# seconds, counters -- not octets, no 0-255 ceiling). A value that fails is
+# rejected outright, never repaired with a "10#" prefix.
+_UH_UINT='^(0|[1-9][0-9]*)$'
+uh_valid_uint() { [[ "$1" =~ $_UH_UINT ]]; }
 
 # VARIABLES
 INSTALL_DIR="/etc/pydhcp"
@@ -71,7 +90,7 @@ ask_interface_number() {
     while true; do
         read -rp " ${prompt} [1-${max}] [${default}]: " answer
         answer="${answer:-$default}"
-        if [[ "$answer" =~ ^[0-9]+$ ]] && (( 10#$answer >= 1 && 10#$answer <= max )); then
+        if uh_valid_uint "$answer" && (( answer >= 1 && answer <= max )); then
             printf -v "$var" '%s' "$answer"
             break
         fi
@@ -85,7 +104,7 @@ ask_ip() {
     while true; do
         read -rp " ${prompt} [${hint}]: " answer
         answer="${answer:-$default}"
-        if [[ "$answer" =~ ^(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])$ ]]; then
+        if uh_valid_ipv4 "$answer"; then
             printf -v "$var" '%s' "$answer"
             break
         fi
@@ -113,16 +132,12 @@ ask_octet() {
     while true; do
         read -rp " ${prompt} [${default}]: " answer
         answer="${answer:-$default}"
-        if [[ "$answer" =~ ^[0-9]+$ ]] && (( 10#$answer >= 1 && 10#$answer <= 254 )); then
-            if [[ -n "$ref_start" ]] && (( 10#$answer <= 10#$ref_start )); then
+        if uh_valid_octet "$answer" && (( answer >= 1 && answer <= 254 )); then
+            if [[ -n "$ref_start" ]] && (( answer <= ref_start )); then
                 warn "Pool end must be greater than pool start (${ref_start})"
                 continue
             fi
-            # Store the canonical decimal value (strips any leading zero,
-            # e.g. "08" -> "8") -- the raw string would later be rejected by
-            # Python's ipaddress module ("Leading zeros are not permitted")
-            # when this octet is composed into a dotted-quad IP.
-            printf -v "$var" '%d' "$((10#$answer))"
+            printf -v "$var" '%s' "$answer"
             break
         fi
         warn "Invalid value, enter a number between 1 and 254"
@@ -131,7 +146,7 @@ ask_octet() {
 
 ask_dns() {
     local prompt="$1" default="$2" var="$3" answer ip_re
-    ip_re='(([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]{1,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5])'
+    ip_re='(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])'
     while true; do
         read -rp " ${prompt} [${default}]: " answer
         answer="${answer:-$default}"
@@ -148,8 +163,8 @@ ask_number() {
     while true; do
         read -rp " ${prompt} [${default}]: " answer
         answer="${answer:-$default}"
-        if [[ "$answer" =~ ^[0-9]+$ ]] && (( 10#$answer >= 1 )); then
-            printf -v "$var" '%d' "$((10#$answer))"
+        if uh_valid_uint "$answer" && (( answer >= 1 )); then
+            printf -v "$var" '%s' "$answer"
             break
         fi
         warn "Invalid value, enter a positive integer"
@@ -535,6 +550,10 @@ sed -i "s|option routers .*;|option routers ${SERVER_IP};|" "$CONF_TMP"
 sed -i "s|option broadcast-address .*;|option broadcast-address ${BROADCAST};|" "$CONF_TMP"
 sed -i "s|range [0-9.]* [0-9.]*;|range ${NET_BASE}.${POOL_START} ${NET_BASE}.${POOL_END};|" "$CONF_TMP"
 sed -i "s|option domain-name-servers .*;|option domain-name-servers ${DNS_SERVERS};|" "$CONF_TMP"
+sed -i "s|^cleanup-interval .*|cleanup-interval ${CLEANUP_INTERVAL};|" "$CONF_TMP"
+sed -i "/pool {/,/}/ s|min-lease-time .*;|min-lease-time ${CLEANUP_INTERVAL};|" "$CONF_TMP"
+sed -i "/pool {/,/}/ s|default-lease-time .*;|default-lease-time ${CLEANUP_INTERVAL};|" "$CONF_TMP"
+sed -i "/pool {/,/}/ s|max-lease-time .*;|max-lease-time ${CLEANUP_INTERVAL};|" "$CONF_TMP"
 if [[ "$WPAD_ENABLED" == "true" ]]; then
     sed -i "s|# option wpad code 252 = text;|option wpad code 252 = text;|" "$CONF_TMP"
     sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|option wpad \"http://${SERVER_IP}:18100/wpad.pac\";|" "$CONF_TMP"

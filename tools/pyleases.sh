@@ -85,46 +85,8 @@ if ! flock -n 200; then
     exit 1
 fi
 
-# LOCAL USER detection
-detect_local_user() {
-    local uid_min uid_max
-    local user uid best_user="" best_uid=999999
-
-    uid_min=$(awk '/^UID_MIN/{print $2}' /etc/login.defs 2>/dev/null)
-    uid_max=$(awk '/^UID_MAX/{print $2}' /etc/login.defs 2>/dev/null)
-    uid_min=${uid_min:-1000}
-    uid_max=${uid_max:-60000}
-
-    while IFS=: read -r user _ uid _ _ _ shell; do
-        [ "$user" = "root" ] && continue
-        [ -z "$uid" ] && continue
-        [ "$uid" -lt "$uid_min" ] && continue
-        [ "$uid" -gt "$uid_max" ] && continue
-
-        case "$shell" in
-            */false|*/nologin) continue ;;
-        esac
-
-        id -nG "$user" 2>/dev/null | grep -qw sudo || continue
-
-        if [ "$uid" -lt "$best_uid" ]; then
-            best_uid="$uid"
-            best_user="$user"
-        fi
-    done </etc/passwd
-
-    [ -n "$best_user" ] || return 1
-    echo "$best_user"
-}
-
-if ! local_user=$(detect_local_user); then
-    log "ERROR: No valid local user found. Create one with sudo access."
-    exit 1
-fi
-log "Using local user: $local_user"
-
 # DEPENDENCIES
-for dep in python3 gawk; do
+for dep in python3 gawk util-linux systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -133,6 +95,18 @@ done
 
 # Start
 log "pyleases start..."
+
+# OCTET VALIDATION
+# _UH_OCT accepts 0-255 with no leading zeros, so any value that passes is
+# already canonical decimal and never needs a "10#" prefix downstream.
+# Use uh_valid_ipv4/uh_valid_octet to VALIDATE a value; never use _UH_IPV4 to
+# EXTRACT one from free text -- an anchorless match would silently return a
+# truncated address (e.g. "192.168.0.010" -> "192.168.0.0"). Extract with a
+# permissive pattern, then validate the result.
+_UH_OCT='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
+_UH_IPV4="^${_UH_OCT}(\.${_UH_OCT}){3}$"
+uh_valid_ipv4() { [[ "$1" =~ $_UH_IPV4 ]]; }
+uh_valid_octet() { [[ "$1" =~ ^${_UH_OCT}$ ]]; }
 
 TEMP_FILES_TO_CLEAN=()
 PYDHCPD_NEEDS_RESTART=0
@@ -256,6 +230,14 @@ load_env_file() {
 }
 load_env_file "$ENV_FILE"
 
+for _ip_var in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK; do
+    if ! uh_valid_ipv4 "${!_ip_var}"; then
+        log "ERROR: $_ip_var is not a valid IPv4 address: '${!_ip_var}' in $ENV_FILE"
+        exit 1
+    fi
+done
+unset _ip_var
+
 # Guard: SERVER_IP must never fall inside its own block-pool range -- pydhcpd.py
 # rejects this at config load, but that only surfaces after this script has
 # already stopped the daemon and rewritten pydhcpd.conf. Catching it here,
@@ -287,37 +269,6 @@ else
     ping_check_line="ping-check false;"
     ping_timeout_line=""
 fi
-
-_notify() {
-    local user="$1"; shift
-    [ -z "$user" ] && return 0
-    local uid
-    uid=$(id -u "$user")
-    local bus="unix:path=/run/user/${uid}/bus"
-    local xdg_runtime="/run/user/${uid}"
-
-    local session_id
-    session_id=$(loginctl show-user "$user" 2>/dev/null | awk -F'[= ]' '/^Sessions=/{print $2}')
-
-    local session_type
-    session_type=$(loginctl show-session "$session_id" -p Type --value 2>/dev/null || echo "x11")
-
-    if [[ "$session_type" == "wayland" ]]; then
-        sudo -u "$user" \
-            DBUS_SESSION_BUS_ADDRESS="$bus" \
-            WAYLAND_DISPLAY=wayland-1 \
-            XDG_RUNTIME_DIR="$xdg_runtime" \
-            notify-send "$@" 2>/dev/null || true
-    else
-        local display
-        display=$(loginctl show-session "$session_id" -p Display --value 2>/dev/null)
-        sudo -u "$user" \
-            DISPLAY="${display:-:0}" \
-            DBUS_SESSION_BUS_ADDRESS="$bus" \
-            XDG_RUNTIME_DIR="$xdg_runtime" \
-            notify-send "$@" 2>/dev/null || true
-    fi
-}
 
 verify_dhcp_service() {
     if ! systemctl is-active --quiet pydhcpd; then
@@ -444,6 +395,11 @@ function is_pydhcp() {
                     host_candidate=$(echo "$lease_content" | grep -oE 'client-hostname "[^"]+"' | cut -d'"' -f2 | tr " " "_")
                     host="${host_candidate:-no_name_$(head -c100 /dev/urandom | sha1sum | head -c10)}"
 
+                    if [[ -n "$ip_address" ]] && ! uh_valid_ipv4 "$ip_address"; then
+                        log "read_leases: skipping lease with invalid IP: $ip_address"
+                        ip_address=""
+                    fi
+
                     if [[ -n "$mac_address" && -n "$ip_address" ]]; then
                         line_lease="a;$mac_address;$ip_address;$host;"
 
@@ -526,7 +482,7 @@ $ping_timeout_line
                     log "update_dhcp_conf: skipping entry, invalid MAC: $macsource"
                     continue
                 fi
-                if ! [[ $ipsource =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+                if ! uh_valid_ipv4 "$ipsource"; then
                     log "update_dhcp_conf: skipping entry, invalid IP: $ipsource"
                     continue
                 fi
@@ -677,7 +633,6 @@ class "blockdhcp" {
     systemctl stop pydhcpd
     if systemctl is-active --quiet pydhcpd; then
         log "ERROR: Stopping pydhcpd FAILED -- still active, aborting before touching config/ACLs"
-        _notify "$local_user" "Warning: Abort" "pydhcpd did not stop, aborting. $(date)" -i error
         exit 1
     fi
     log "Stopping pydhcpd: done"
@@ -698,14 +653,12 @@ class "blockdhcp" {
             systemctl start pydhcpd
             if ! systemctl is-active --quiet pydhcpd; then
                 log "ERROR: pydhcpd failed to start even with backup config -- manual intervention required"
-                _notify "$local_user" "Warning: Abort" "pydhcpd failed to start (backup also failed). Check $log_file" -i error
                 exit 1
             else
                 log "pydhcpd recovered with backup config"
             fi
         else
             log "ERROR: No backup config found -- manual intervention required"
-            _notify "$local_user" "Warning: Abort" "pydhcpd failed to start after reload. $(date)" -i error
             exit 1
         fi
     fi
@@ -736,7 +689,6 @@ function duplicate() {
     else
         log "ERROR: Duplicate data detected: $aclall"
         log "Duplicate Data: $aclall"
-        _notify "$local_user" "Warning: Abort" "Duplicate: $aclall. $(date)" -i error
         exit 1
     fi
 }

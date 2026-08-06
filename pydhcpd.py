@@ -756,12 +756,12 @@ class LeaseManager:
         snapshot_to_save = None
         try:
             with self.lock:
+                if mac in self.config.blocked_macs:
+                    return None, None, "deny members of blockdhcp"
+
                 static_ip = self.config.static_hosts.get(mac)
                 if static_ip:
                     return static_ip, self.config.default_lease, None
-
-                if mac in self.config.blocked_macs:
-                    return None, None, "deny members of blockdhcp"
 
                 # Sliding-window rate-limit: reject new allocations from MACs that
                 # have already consumed their quota in the last window.
@@ -796,6 +796,8 @@ class LeaseManager:
                         return True
                     resv = self._reservations.get(ip)
                     if resv and resv[1] > now and resv[0] != mac:
+                        return True
+                    if self._quarantine.get(ip, 0) > now:
                         return True
                     return False
 
@@ -1899,11 +1901,8 @@ def main():
     write_pid(defaults["pid"])
 
     def signal_shutdown(signum, frame):
-        # Keep the handler minimal: flip the run flag and close the sockets so
-        # the main loop unblocks and tears down cleanly via the finally clause.
         log.info("Signal %d received, shutting down...", signum)
         server.running = False
-        server.stop()
 
     def reload_config(signum, frame):
         for h in logging.getLogger().handlers:
@@ -1931,6 +1930,7 @@ def main():
     try:
         server.start()
     finally:
+        server.stop()
         remove_pid(defaults["pid"])
 
 
