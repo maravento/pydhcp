@@ -48,24 +48,14 @@ for dep in python3 iproute2 gawk passwd util-linux coreutils; do
     fi
 done
 
-# OCTET VALIDATION
-# _UH_OCT accepts 0-255 with no leading zeros, so any value that passes is
-# already canonical decimal and never needs a "10#" prefix downstream.
-# Use uh_valid_ipv4/uh_valid_octet to VALIDATE a value; never use _UH_IPV4 to
-# EXTRACT one from free text -- an anchorless match would silently return a
-# truncated address (e.g. "192.168.0.010" -> "192.168.0.0"). Extract with a
-# permissive pattern, then validate the result.
-_UH_OCT='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
-_UH_IPV4="^${_UH_OCT}(\.${_UH_OCT}){3}$"
-uh_valid_ipv4() { [[ "$1" =~ $_UH_IPV4 ]]; }
-uh_valid_octet() { [[ "$1" =~ ^${_UH_OCT}$ ]]; }
-
-# UINT VALIDATION
-# _UH_UINT accepts any non-negative integer with no leading zeros (epochs,
-# seconds, counters -- not octets, no 0-255 ceiling). A value that fails is
-# rejected outright, never repaired with a "10#" prefix.
+# VALIDATION -- one variable per thing validated; use directly with =~
+_UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+_UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+_UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
+_UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
+_UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 _UH_UINT='^(0|[1-9][0-9]*)$'
-uh_valid_uint() { [[ "$1" =~ $_UH_UINT ]]; }
+_UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 # VARIABLES
 INSTALL_DIR="/etc/pydhcp"
@@ -90,7 +80,7 @@ ask_interface_number() {
     while true; do
         read -rp " ${prompt} [1-${max}] [${default}]: " answer
         answer="${answer:-$default}"
-        if uh_valid_uint "$answer" && (( answer >= 1 && answer <= max )); then
+        if [[ "$answer" =~ $_UH_UINT ]] && (( answer >= 1 && answer <= max )); then
             printf -v "$var" '%s' "$answer"
             break
         fi
@@ -104,7 +94,7 @@ ask_ip() {
     while true; do
         read -rp " ${prompt} [${hint}]: " answer
         answer="${answer:-$default}"
-        if uh_valid_ipv4 "$answer"; then
+        if [[ "$answer" =~ $_UH_IPV4 ]]; then
             printf -v "$var" '%s' "$answer"
             break
         fi
@@ -117,8 +107,7 @@ ask_netmask() {
     while true; do
         read -rp " ${prompt} [${default}]: " answer
         answer="${answer:-$default}"
-        if [[ "$answer" =~ ^(255|254|252|248|240|224|192|128|0)(\.(255|254|252|248|240|224|192|128|0)){3}$ ]] \
-            && python3 -c "import ipaddress; ipaddress.IPv4Network('0.0.0.0/${answer}')" 2>/dev/null; then
+        if [[ "$answer" =~ $_UH_NETMASK ]]; then
             printf -v "$var" '%s' "$answer"
             break
         fi
@@ -132,7 +121,7 @@ ask_octet() {
     while true; do
         read -rp " ${prompt} [${default}]: " answer
         answer="${answer:-$default}"
-        if uh_valid_octet "$answer" && (( answer >= 1 && answer <= 254 )); then
+        if [[ "$answer" =~ $_UH_OCT ]] && (( answer >= 1 && answer <= 254 )); then
             if [[ -n "$ref_start" ]] && (( answer <= ref_start )); then
                 warn "Pool end must be greater than pool start (${ref_start})"
                 continue
@@ -145,12 +134,11 @@ ask_octet() {
 }
 
 ask_dns() {
-    local prompt="$1" default="$2" var="$3" answer ip_re
-    ip_re='(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])'
+    local prompt="$1" default="$2" var="$3" answer
     while true; do
         read -rp " ${prompt} [${default}]: " answer
         answer="${answer:-$default}"
-        if [[ "$answer" =~ ^${ip_re}(,${ip_re})*$ ]]; then
+        if [[ "$answer" =~ $_UH_DNS ]]; then
             printf -v "$var" '%s' "$answer"
             break
         fi
@@ -163,7 +151,7 @@ ask_number() {
     while true; do
         read -rp " ${prompt} [${default}]: " answer
         answer="${answer:-$default}"
-        if uh_valid_uint "$answer" && (( answer >= 1 )); then
+        if [[ "$answer" =~ $_UH_UINT ]] && (( answer >= 1 )); then
             printf -v "$var" '%s' "$answer"
             break
         fi

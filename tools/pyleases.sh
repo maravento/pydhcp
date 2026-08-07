@@ -96,17 +96,14 @@ done
 # Start
 log "pyleases start..."
 
-# OCTET VALIDATION
-# _UH_OCT accepts 0-255 with no leading zeros, so any value that passes is
-# already canonical decimal and never needs a "10#" prefix downstream.
-# Use uh_valid_ipv4/uh_valid_octet to VALIDATE a value; never use _UH_IPV4 to
-# EXTRACT one from free text -- an anchorless match would silently return a
-# truncated address (e.g. "192.168.0.010" -> "192.168.0.0"). Extract with a
-# permissive pattern, then validate the result.
-_UH_OCT='(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
-_UH_IPV4="^${_UH_OCT}(\.${_UH_OCT}){3}$"
-uh_valid_ipv4() { [[ "$1" =~ $_UH_IPV4 ]]; }
-uh_valid_octet() { [[ "$1" =~ ^${_UH_OCT}$ ]]; }
+# VALIDATION -- one variable per thing validated; use directly with =~
+_UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+_UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+_UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
+_UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
+_UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
+_UH_UINT='^(0|[1-9][0-9]*)$'
+_UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 TEMP_FILES_TO_CLEAN=()
 PYDHCPD_NEEDS_RESTART=0
@@ -231,12 +228,20 @@ load_env_file() {
 load_env_file "$ENV_FILE"
 
 for _ip_var in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK; do
-    if ! uh_valid_ipv4 "${!_ip_var}"; then
+    if ! [[ "${!_ip_var}" =~ $_UH_IPV4 ]]; then
         log "ERROR: $_ip_var is not a valid IPv4 address: '${!_ip_var}' in $ENV_FILE"
         exit 1
     fi
 done
 unset _ip_var
+if ! [[ "$SERV_MASK" =~ $_UH_NETMASK ]]; then
+    log "ERROR: SERV_MASK is not a valid netmask: '$SERV_MASK' in $ENV_FILE"
+    exit 1
+fi
+if ! [[ "$SERV_DNS" =~ $_UH_DNS ]]; then
+    log "ERROR: SERV_DNS is not a valid comma-separated IPv4 list: '$SERV_DNS' in $ENV_FILE"
+    exit 1
+fi
 
 # Guard: SERVER_IP must never fall inside its own block-pool range -- pydhcpd.py
 # rejects this at config load, but that only surfaces after this script has
@@ -395,7 +400,7 @@ function is_pydhcp() {
                     host_candidate=$(echo "$lease_content" | grep -oE 'client-hostname "[^"]+"' | cut -d'"' -f2 | tr " " "_")
                     host="${host_candidate:-no_name_$(head -c100 /dev/urandom | sha1sum | head -c10)}"
 
-                    if [[ -n "$ip_address" ]] && ! uh_valid_ipv4 "$ip_address"; then
+                    if [[ -n "$ip_address" ]] && ! [[ "$ip_address" =~ $_UH_IPV4 ]]; then
                         log "read_leases: skipping lease with invalid IP: $ip_address"
                         ip_address=""
                     fi
@@ -482,7 +487,7 @@ $ping_timeout_line
                     log "update_dhcp_conf: skipping entry, invalid MAC: $macsource"
                     continue
                 fi
-                if ! uh_valid_ipv4 "$ipsource"; then
+                if ! [[ "$ipsource" =~ $_UH_IPV4 ]]; then
                     log "update_dhcp_conf: skipping entry, invalid IP: $ipsource"
                     continue
                 fi
