@@ -628,6 +628,17 @@ class "blockdhcp" {
 
     function order_files_acl {
         sort -V "$ACL_BLOCK_FILE" -o "$ACL_BLOCK_FILE"
+        # mac-*.txt: sorted by IP (field 3) -- lost in the rewrite from the
+        # original isc-dhcp-server-era leases.sh, which sorted these too.
+        # Purely cosmetic (update_dhcp_conf() and pydhcpd.py's host{} parsing
+        # are both order-independent), restored for admin readability.
+        shopt -s nullglob
+        local _order_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+        shopt -u nullglob
+        local _omf
+        for _omf in "${_order_mac_files[@]}"; do
+            sort -t';' -k3,3V "$_omf" -o "$_omf"
+        done
     }
 
     clean_acl
