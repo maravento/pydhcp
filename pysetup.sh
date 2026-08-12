@@ -19,7 +19,7 @@
 set -euo pipefail
 
 # logging
-LOG_FILE="/var/log/pydhcpd.log"
+LOG_FILE="/var/log/pydhcp.log"
 log() {
     local msg="$1"
     echo "$(date '+%Y-%m-%d %H:%M:%S') $msg" | tee -a "$LOG_FILE" 2>/dev/null || true
@@ -41,7 +41,7 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in python3 iproute2 gawk passwd util-linux coreutils; do
+for dep in python3 iproute2 gawk passwd util-linux coreutils iputils-ping systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -62,6 +62,17 @@ INSTALL_DIR="/etc/pydhcp"
 SERVICE_FILE="/etc/systemd/system/pydhcpd.service"
 INIT_FILE="/etc/init.d/pydhcpd"
 SYSTEM_USER="pydhcpd"
+
+# ACL layout: composed from ACL_PATH so the base directory is named once.
+# pydhcp.env itself is written with these already resolved -- it is parsed
+# key=value (never sourced), so a "$VAR" inside it would be stored as that
+# literal string, not as a path.
+ACL_PATH="/etc/acl"
+ACL_MAC_PATH="${ACL_PATH}/acl_mac"
+ACL_DHCP_PATH="${ACL_PATH}/acl_dhcp"
+ACL_MAC_PROXY="${ACL_MAC_PATH}/mac-proxy.txt"
+ACL_MAC_UNLIMITED="${ACL_MAC_PATH}/mac-unlimited.txt"
+ACL_BLOCK_FILE="${ACL_DHCP_PATH}/blockdhcp.txt"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -159,6 +170,19 @@ ask_number() {
     done
 }
 
+ask_port() {
+    local prompt="$1" default="$2" var="$3" answer
+    while true; do
+        read -rp " ${prompt} [${default}]: " answer
+        answer="${answer:-$default}"
+        if [[ "$answer" =~ $_UH_UINT ]] && (( answer >= 1 && answer <= 65535 )); then
+            printf -v "$var" '%s' "$answer"
+            break
+        fi
+        warn "Invalid port, enter a number between 1 and 65535"
+    done
+}
+
 confirm() {
     # confirm "prompt" [default y|n] -- returns 0 on yes, 1 on no
     local prompt="$1" default="${2:-n}" answer hint
@@ -203,9 +227,10 @@ if [[ "${1:-}" == "--remove" ]]; then
     info "Removing system files..."
     rm -f "$SERVICE_FILE"
     rm -f "$INIT_FILE"
-    rm -f /etc/logrotate.d/pydhcpd
-    rm -f /var/log/pydhcp.log
     rm -f /etc/logrotate.d/pydhcp
+    rm -f /var/log/pydhcp.log
+    rm -f /etc/logrotate.d/pydhcpd
+    rm -f /var/log/pydhcpd.log
 
     if [ -x "$INSTALL_DIR/tools/pywebmin.sh" ]; then
         info "Removing Webmin module ..."
@@ -286,6 +311,36 @@ if [[ "${1:-}" == "--update" ]]; then
         cp "$SCRIPT_DIR/tools/pywebmin.sh" "$INSTALL_DIR/tools/pywebmin.sh"
         chown root:root "$INSTALL_DIR/tools/pywebmin.sh"
         chmod 755 "$INSTALL_DIR/tools/pywebmin.sh"
+    fi
+
+    info "Consolidating logs into $LOG_FILE ..."
+    if [ -f /var/log/pydhcpd.log ]; then
+        cat /var/log/pydhcpd.log >> "$LOG_FILE"
+        rm -f /var/log/pydhcpd.log
+    fi
+    rm -f /etc/logrotate.d/pydhcpd
+    [ -f "$LOG_FILE" ] || touch "$LOG_FILE"
+    chown "$SYSTEM_USER":"$SYSTEM_USER" "$LOG_FILE"
+    chmod 640 "$LOG_FILE"
+    cat > /etc/logrotate.d/pydhcp << 'EOF'
+/var/log/pydhcp.log {
+    daily
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 640 pydhcpd pydhcpd
+    postrotate
+        systemctl reload pydhcpd > /dev/null 2>&1 || true
+    endscript
+}
+EOF
+    chmod 644 /etc/logrotate.d/pydhcp
+    chown root:root /etc/logrotate.d/pydhcp
+
+    if grep -q '^LOG_FILE=' "$INSTALL_DIR/pydhcp.env"; then
+        sed -i "s|^LOG_FILE=.*|LOG_FILE=$LOG_FILE|" "$INSTALL_DIR/pydhcp.env"
     fi
 
     systemctl daemon-reload
@@ -398,7 +453,15 @@ ask_number "DHCP pool lease cleanup interval in seconds (CLEANUP_INTERVAL)" "60"
 
 # Optional features
 WPAD_ENABLED="false"
-confirm "Enable WPAD/PAC proxy auto-configuration? (requires Apache2 on port 18100)" "n" && WPAD_ENABLED="true"
+WPAD_PORT="18100"
+if dpkg -s apache2 &>/dev/null; then
+    if confirm "Enable WPAD/PAC proxy auto-configuration? (requires an Apache2 VirtualHost serving wpad.pac)" "n"; then
+        WPAD_ENABLED="true"
+        ask_port "WPAD/PAC port" "18100" WPAD_PORT
+    fi
+else
+    info "apache2 not installed -- WPAD/PAC not offered (WPAD_ENABLED=false)"
+fi
 # ping-check matches isc-dhcp-server's own default (on unless explicitly
 # disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
 # pydhcp.env afterward if your environment has strict ICMP firewall rules.
@@ -428,7 +491,7 @@ fi
 info "Creating $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
 chown root:"$SYSTEM_USER" "$INSTALL_DIR"
-chmod 1770 "$INSTALL_DIR"
+chmod 770 "$INSTALL_DIR"
 
 # Deploy daemon and config files
 info "Deploying pydhcpd.py ..."
@@ -452,23 +515,23 @@ chmod 640 "$INSTALL_DIR/pydhcpd.conf"
 # overwritten). These lists are only consumed by the optional pyleases.sh
 # tool, but are created here unconditionally so their paths can be recorded
 # in pydhcp.env from the start -- not deferred until pyleases.sh first runs.
-mkdir -p /etc/acl/acl_mac /etc/acl/acl_dhcp
-chmod 700 /etc/acl/acl_mac /etc/acl/acl_dhcp
+mkdir -p "$ACL_MAC_PATH" "$ACL_DHCP_PATH"
+chmod 700 "$ACL_MAC_PATH" "$ACL_DHCP_PATH"
 
-if [ ! -f /etc/acl/acl_dhcp/blockdhcp.txt ]; then
-    touch /etc/acl/acl_dhcp/blockdhcp.txt
-    chmod 600 /etc/acl/acl_dhcp/blockdhcp.txt
-    chown root:root /etc/acl/acl_dhcp/blockdhcp.txt
+if [ ! -f "$ACL_BLOCK_FILE" ]; then
+    touch "$ACL_BLOCK_FILE"
+    chmod 600 "$ACL_BLOCK_FILE"
+    chown root:root "$ACL_BLOCK_FILE"
 fi
 
-for f in /etc/acl/acl_mac/mac-proxy.txt /etc/acl/acl_mac/mac-unlimited.txt; do
+for f in "$ACL_MAC_PROXY" "$ACL_MAC_UNLIMITED"; do
     if [ ! -f "$f" ]; then
         touch "$f"
         chmod 600 "$f"
         chown root:root "$f"
     fi
 done
-info "ACL directories/files present in /etc/acl"
+info "ACL directories/files present in $ACL_PATH"
 
 # Create pydhcp.env (preserved on update -- never overwritten). Single source
 # of truth for network, ACL-path and daemon-defaults values: pyleases.sh and
@@ -489,7 +552,7 @@ DHCPDv4_CONF=/etc/pydhcp/pydhcpd.conf
 DHCPDv4_PID=/etc/pydhcp/pydhcpd.pid
 DHCPDv4_BIN=/usr/bin/python3
 DHCPDv4_SCRIPT=/etc/pydhcp/pydhcpd.py
-LOG_FILE=/var/log/pydhcpd.log
+LOG_FILE=/var/log/pydhcp.log
 PYDHCPD_LEASES=$INSTALL_DIR/pydhcpd.leases
 INTERFACESv4="$IFACE"
 DAEMON_USER="pydhcpd"
@@ -503,18 +566,19 @@ SERV_INI_RANGE_BLOCK=${NET_BASE}.${POOL_START}
 SERV_END_RANGE_BLOCK=${NET_BASE}.${POOL_END}
 SERV_DNS=$DNS_SERVERS
 # -- ACL paths (files created above; only consumed by pyleases.sh) ------------
-ACL_PATH=/etc/acl
-ACL_MAC_PATH=/etc/acl/acl_mac
-ACL_DHCP_PATH=/etc/acl/acl_dhcp
-ACL_MAC_PROXY=/etc/acl/acl_mac/mac-proxy.txt
-ACL_MAC_UNLIMITED=/etc/acl/acl_mac/mac-unlimited.txt
-ACL_BLOCK_FILE=/etc/acl/acl_dhcp/blockdhcp.txt
+ACL_PATH=$ACL_PATH
+ACL_MAC_PATH=$ACL_MAC_PATH
+ACL_DHCP_PATH=$ACL_DHCP_PATH
+ACL_MAC_PROXY=$ACL_MAC_PROXY
+ACL_MAC_UNLIMITED=$ACL_MAC_UNLIMITED
+ACL_BLOCK_FILE=$ACL_BLOCK_FILE
 # -- Lease timers (pyleases.sh -> pydhcpd.conf pool/subnet directives) --------
 CLEANUP_INTERVAL=$CLEANUP_INTERVAL
 AUTHORIZED_LEASE_TIME=2592000
 QUARANTINE_DURATION=60
 # -- Optional features (pyleases.sh -> pydhcpd.conf wpad/ping-check) ----------
 WPAD_ENABLED=$WPAD_ENABLED
+WPAD_PORT=$WPAD_PORT
 PING_CHECK_ENABLED=$PING_CHECK_ENABLED
 PING_TIMEOUT_SECONDS=1
 # -- pydhcp-only features (no isc-dhcp-server equivalent) ---------------------
@@ -544,9 +608,9 @@ sed -i "/pool {/,/}/ s|default-lease-time .*;|default-lease-time ${CLEANUP_INTER
 sed -i "/pool {/,/}/ s|max-lease-time .*;|max-lease-time ${CLEANUP_INTERVAL};|" "$CONF_TMP"
 if [[ "$WPAD_ENABLED" == "true" ]]; then
     sed -i "s|# option wpad code 252 = text;|option wpad code 252 = text;|" "$CONF_TMP"
-    sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|option wpad \"http://${SERVER_IP}:18100/wpad.pac\";|" "$CONF_TMP"
+    sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|option wpad \"http://${SERVER_IP}:${WPAD_PORT}/wpad.pac\";|" "$CONF_TMP"
 else
-    sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${SERVER_IP}:18100/wpad.pac\";|" "$CONF_TMP"
+    sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${SERVER_IP}:${WPAD_PORT}/wpad.pac\";|" "$CONF_TMP"
 fi
 mv -f "$CONF_TMP" "$INSTALL_DIR/pydhcpd.conf"
 info "Network parameters set in pydhcpd.conf"
@@ -605,9 +669,10 @@ chmod 640 "$LOG_FILE"
 
 # Deploy logrotate config
 info "Deploying logrotate config ..."
-cat > /etc/logrotate.d/pydhcpd << 'EOF'
-/var/log/pydhcpd.log {
-    weekly
+rm -f /etc/logrotate.d/pydhcpd
+cat > /etc/logrotate.d/pydhcp << 'EOF'
+/var/log/pydhcp.log {
+    daily
     rotate 4
     compress
     delaycompress
@@ -617,27 +682,6 @@ cat > /etc/logrotate.d/pydhcpd << 'EOF'
     postrotate
         systemctl reload pydhcpd > /dev/null 2>&1 || true
     endscript
-}
-EOF
-chmod 644 /etc/logrotate.d/pydhcpd
-
-# Create pyleases.sh's own log file and logrotate config (separate from the
-# daemon's pydhcpd.log -- see pyleases.sh header for details)
-if [ ! -f /var/log/pydhcp.log ]; then
-    touch /var/log/pydhcp.log
-    chown root:pydhcpd /var/log/pydhcp.log
-    chmod 640 /var/log/pydhcp.log
-fi
-
-cat > /etc/logrotate.d/pydhcp << 'EOF'
-/var/log/pydhcp.log {
-    weekly
-    rotate 4
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 640 root pydhcpd
 }
 EOF
 chmod 644 /etc/logrotate.d/pydhcp

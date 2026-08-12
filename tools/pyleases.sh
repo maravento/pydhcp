@@ -28,7 +28,6 @@
 # - pydhcpd installed and running
 # - ACL directories and files as defined in pydhcp.env
 # - Root privileges
-# - python3 (required by pydhcpd itself; verified in DEPENDENCIES at startup)
 #
 # ACL FORMAT:
 # a;MAC;IP;HOSTNAME;
@@ -48,9 +47,13 @@
 # 4. Set WPAD_ENABLED=true in /etc/pydhcp/pydhcp.env
 #
 # NOTE on logging:
-# - Writes to /var/log/pydhcp.log, a separate log from the daemon's
-# /var/log/pydhcpd.log. The log file and its rotation config
-# (/etc/logrotate.d/pydhcp) are created by pysetup.sh.
+# - Writes to /var/log/pydhcp.log, the single log shared by the whole
+# project: pydhcpd.py, pysetup.sh and this script all write to it.
+# The path is declared as LOG_FILE in pydhcp.env; the file and its
+# rotation config (/etc/logrotate.d/pydhcp, daily) are created by
+# pysetup.sh. It is owned by pydhcpd:pydhcpd 640 so the daemon, which
+# runs as the pydhcpd account and not as root, can write to it; the
+# other two run as root.
 #
 ################################################################################
 
@@ -86,7 +89,7 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in python3 gawk util-linux systemd; do
+for dep in python3 gawk coreutils util-linux curl grep sed systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: Required dependency '$dep' is not installed."
         exit 1
@@ -162,7 +165,8 @@ insert_before_closing_delimiter() {
     head -n "$((last_line - 1))" "$file" > "$tmp"
     printf '%s\n' "$content" >> "$tmp"
     tail -n "+${last_line}" "$file" >> "$tmp"
-    mv "$tmp" "$file"
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
 }
 
 # Injects pyleases.sh's own keys if missing. Never touches the network keys
@@ -182,12 +186,13 @@ ensure_own_keys() {
         [AUTHORIZED_LEASE_TIME]="2592000"
         [QUARANTINE_DURATION]="60"
         [WPAD_ENABLED]="false"
+        [WPAD_PORT]="18100"
         [PING_CHECK_ENABLED]="true"
         [PING_TIMEOUT_SECONDS]="1"
     )
     for key in ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_PROXY ACL_MAC_UNLIMITED \
                ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION \
-               WPAD_ENABLED PING_CHECK_ENABLED PING_TIMEOUT_SECONDS; do
+               WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS; do
         if ! grep -q "^${key}=" "$file"; then
             if (( ! added )); then
                 cp -f "$file" "${file}.bak"
@@ -216,7 +221,7 @@ load_env_file() {
         case "$key" in
             SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
             ACL_PATH|ACL_MAC_PATH|ACL_DHCP_PATH|ACL_MAC_PROXY|ACL_MAC_UNLIMITED|ACL_BLOCK_FILE|PYDHCPD_LEASES|\
-            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|PING_CHECK_ENABLED|\
+            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|WPAD_PORT|PING_CHECK_ENABLED|\
             PING_TIMEOUT_SECONDS|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
                 printf -v "$key" '%s' "$value"
                 ;;
@@ -243,6 +248,31 @@ if ! [[ "$SERV_DNS" =~ $_UH_DNS ]]; then
     exit 1
 fi
 
+CLEANUP_INTERVAL="${CLEANUP_INTERVAL:-60}"
+if ! [[ "$CLEANUP_INTERVAL" =~ $_UH_UINT ]] || (( CLEANUP_INTERVAL == 0 )); then
+    log "WARNING: CLEANUP_INTERVAL invalid"
+    log "  ($CLEANUP_INTERVAL) -- using default 60"
+    CLEANUP_INTERVAL=60
+fi
+AUTHORIZED_LEASE_TIME="${AUTHORIZED_LEASE_TIME:-2592000}"
+if ! [[ "$AUTHORIZED_LEASE_TIME" =~ $_UH_UINT ]] || (( AUTHORIZED_LEASE_TIME == 0 )); then
+    log "WARNING: AUTHORIZED_LEASE_TIME invalid"
+    log "  ($AUTHORIZED_LEASE_TIME) -- using default 2592000"
+    AUTHORIZED_LEASE_TIME=2592000
+fi
+QUARANTINE_DURATION="${QUARANTINE_DURATION:-60}"
+if ! [[ "$QUARANTINE_DURATION" =~ $_UH_UINT ]] || (( QUARANTINE_DURATION == 0 )); then
+    log "WARNING: QUARANTINE_DURATION invalid"
+    log "  ($QUARANTINE_DURATION) -- using default 60"
+    QUARANTINE_DURATION=60
+fi
+PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
+if ! [[ "$PING_TIMEOUT_SECONDS" =~ $_UH_UINT ]] || (( PING_TIMEOUT_SECONDS == 0 )); then
+    log "WARNING: PING_TIMEOUT_SECONDS invalid"
+    log "  ($PING_TIMEOUT_SECONDS) -- using default 1"
+    PING_TIMEOUT_SECONDS=1
+fi
+
 # Guard: SERVER_IP must never fall inside its own block-pool range -- pydhcpd.py
 # rejects this at config load, but that only surfaces after this script has
 # already stopped the daemon and rewritten pydhcpd.conf. Catching it here,
@@ -259,12 +289,29 @@ print('1' if start <= server <= end else '0')
     exit 1
 fi
 
+wpad_port="${WPAD_PORT:-18100}"
+if ! [[ "$wpad_port" =~ $_UH_UINT ]] || (( wpad_port < 1 || wpad_port > 65535 )); then
+    log "ERROR: WPAD_PORT is not a valid port: '$wpad_port' in $ENV_FILE"
+    exit 1
+fi
+wpad_url="http://$SERVER_IP:$wpad_port/wpad.pac"
+
+wpad_ready=0
 if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
+    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
+        wpad_ready=1
+    else
+        log "WARNING: WPAD_ENABLED=true but $wpad_url is not being served"
+        log "WARNING: WPAD not activated -- set WPAD_ENABLED=false in $ENV_FILE or see README"
+    fi
+fi
+
+if (( wpad_ready )); then
     wpad_header="option wpad code 252 = text;"
-    wpad_subnet="option wpad \"http://$SERVER_IP:18100/wpad.pac\";"
+    wpad_subnet="option wpad \"$wpad_url\";"
 else
     wpad_header="#option wpad code 252 = text;"
-    wpad_subnet="#option wpad \"http://$SERVER_IP:18100/wpad.pac\";"
+    wpad_subnet="#option wpad \"$wpad_url\";"
 fi
 
 if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
@@ -285,7 +332,7 @@ verify_dhcp_service() {
 verify_dhcp_files() {
     mkdir -p /etc/pydhcp
     chown root:"${DAEMON_GROUP:-pydhcpd}" /etc/pydhcp
-    chmod 1770 /etc/pydhcp
+    chmod 770 /etc/pydhcp
     if [ ! -f "$PYDHCPD_LEASES" ]; then
         touch "$PYDHCPD_LEASES"
     fi
@@ -460,7 +507,6 @@ abandon-lease-time ${QUARANTINE_DURATION:-60};
 $wpad_header
 server-identifier $SERVER_IP;
 deny duplicates;
-one-lease-per-client true;
 deny declines;
 $ping_check_line
 $ping_timeout_line

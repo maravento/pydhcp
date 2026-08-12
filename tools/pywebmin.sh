@@ -62,7 +62,7 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in coreutils; do
+for dep in coreutils util-linux systemd grep sed; do
     if ! dpkg -s "$dep" &>/dev/null; then
         echo "ERROR: Required dependency '$dep' is not installed." >&2
         exit 1
@@ -598,7 +598,10 @@ if (($in{'action'} || '') eq 'save' && defined $in{'conf_content'}) {
             } else {
                 if (-f $CONF_FILE) {
                     my $ts = time();
-                    copy($CONF_FILE, "$BACKUP_FILE.$ts") unless -l "$BACKUP_FILE.$ts";
+                    unless (-l "$BACKUP_FILE.$ts") {
+                        copy($CONF_FILE, "$BACKUP_FILE.$ts");
+                        chmod(0640, "$BACKUP_FILE.$ts");
+                    }
                     my @backups = sort glob("$BACKUP_FILE.*");
                     if (@backups > 5) {
                         unlink(@backups[0 .. (@backups - 6)]);
@@ -827,7 +830,7 @@ main() {
     while true; do
         show_menu
         read -r option
-        option=$(echo "$option" | xargs)
+        option="${option//[[:space:]]/}"
         [[ -z "$option" ]] && option="3"
         case $option in
             1)

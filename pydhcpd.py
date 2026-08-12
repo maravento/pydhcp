@@ -18,7 +18,7 @@
 #
 # Supported dhcpd.conf directives:
 #   authoritative, not authoritative, server-identifier, deny duplicates,
-#   one-lease-per-client, deny declines,
+#   deny declines,
 #   ping-check, ping-timeout, cleanup-interval, abandon-lease-time,
 #   host { hardware ethernet; fixed-address; }
 #   class "blockdhcp" { match pick-first-value ... }
@@ -78,7 +78,7 @@ PYDHCP_ENV      = os.path.join(BASE_DIR, "pydhcp.env")
 CONF_FILE       = os.path.join(BASE_DIR, "pydhcpd.conf")
 LEASES_FILE     = os.path.join(BASE_DIR, "pydhcpd.leases")
 PID_FILE        = os.path.join(BASE_DIR, "pydhcpd.pid")
-LOG_FILE        = "/var/log/pydhcpd.log"
+LOG_FILE        = "/var/log/pydhcp.log"
 
 # =============================================================================
 # LOGGING
@@ -211,6 +211,7 @@ def parse_defaults(path):
         "conf":        CONF_FILE,
         "pid":         PID_FILE,
         "leases":      LEASES_FILE,
+        "log_file":    LOG_FILE,
         "interface":   "",
         "user":        "pydhcpd",
         "group":       "pydhcpd",
@@ -239,6 +240,8 @@ def parse_defaults(path):
                 defaults["pid"] = val
             elif key == "PYDHCPD_LEASES":
                 defaults["leases"] = val
+            elif key == "LOG_FILE":
+                defaults["log_file"] = val
             elif key == "INTERFACESv4":
                 defaults["interface"] = val.split()[0] if val.split() else ""
             elif key == "DAEMON_USER":
@@ -254,9 +257,15 @@ def parse_defaults(path):
                     "RESERVATION_TTL_SECONDS":   "reservation_ttl",
                 }[key]
                 try:
-                    defaults[dest] = int(val)
+                    parsed = int(val)
                 except ValueError:
                     log.warning("Invalid %s in %s: %r — using default", key, path, val)
+                else:
+                    if parsed < 1:
+                        log.warning("%s in %s must be at least 1, got %d — using default",
+                                    key, path, parsed)
+                    else:
+                        defaults[dest] = parsed
     return defaults
 
 # =============================================================================
@@ -266,9 +275,8 @@ def parse_defaults(path):
 class DHCPConfig:
     def __init__(self):
         self.server_id        = ""
-        self.authoritative    = False
+        self.authoritative    = True
         self.deny_duplicates  = False
-        self.one_per_client   = False
         self.deny_declines    = False
         self.ping_check       = False
         self.ping_timeout     = 1
@@ -325,6 +333,24 @@ class DHCPConfig:
                 except ValueError as err:
                     raise ConfigError(f"Invalid {label} address {value!r}: {err}") from err
 
+        for h_mac, h_ip in self.static_hosts.items():
+            try:
+                h_addr = ipaddress.IPv4Address(h_ip)
+            except ValueError as err:
+                raise ConfigError(
+                    f"Static host {h_mac} has an invalid fixed-address {h_ip!r}: {err}") from err
+            if self.subnet and self.netmask:
+                try:
+                    net = ipaddress.IPv4Network(f"{self.subnet}/{self.netmask}", strict=False)
+                except ValueError:
+                    net = None
+                if net is not None and h_addr not in net:
+                    raise ConfigError(
+                        f"Static host {h_mac} IP {h_ip} is outside subnet {net}")
+                if net is not None and h_addr in (net.network_address, net.broadcast_address):
+                    raise ConfigError(
+                        f"Static host {h_mac} IP {h_ip} is the network/broadcast address of {net}")
+
         if self.pool_range_start and self.pool_range_end:
             try:
                 s = ipaddress.IPv4Address(self.pool_range_start)
@@ -336,12 +362,9 @@ class DHCPConfig:
                     if s not in net or e not in net:
                         raise ConfigError(f"Pool range {s}\u2013{e} is outside subnet {net}")
                 for h_mac, h_ip in self.static_hosts.items():
-                    try:
-                        if s <= ipaddress.IPv4Address(h_ip) <= e:
-                            raise ConfigError(
-                                f"Static host {h_mac} IP {h_ip} overlaps pool range {s}\u2013{e}")
-                    except ValueError:
-                        pass
+                    if s <= ipaddress.IPv4Address(h_ip) <= e:
+                        raise ConfigError(
+                            f"Static host {h_mac} IP {h_ip} overlaps pool range {s}\u2013{e}")
 
                 if self.server_id:
                     try:
@@ -427,17 +450,16 @@ class DHCPConfig:
         if m:
             self.abandon_lease_time = int(m.group(1))
 
-        # "not authoritative;" is standard isc-dhcp-server syntax for explicitly
-        # disabling authoritative mode. It must be checked before the plain
-        # "authoritative;" match, since that regex would otherwise match the
-        # substring "authoritative;" inside "not authoritative;" and silently
-        # invert the admin's intent.
+        # pydhcpd is authoritative by default: an explicit "not authoritative;"
+        # is the only way to disable it, and "authoritative;" is accepted as a
+        # no-op for dhcpd.conf compatibility. This diverges from
+        # isc-dhcp-server, where omitting the directive means non-authoritative
+        # -- see README.
         if re.search(r'\bnot\s+authoritative\s*;', raw):
             self.authoritative = False
         else:
-            self.authoritative = bool(re.search(r'\bauthoritative\s*;', raw))
+            self.authoritative = True
         self.deny_duplicates = bool(re.search(r'\bdeny\s+duplicates\s*;', raw))
-        self.one_per_client  = bool(re.search(r'\bone-lease-per-client\s+true\s*;', raw))
         self.deny_declines   = bool(re.search(r'\bdeny\s+declines\s*;', raw))
         self.ping_check      = bool(re.search(r'\bping-check\s+true\s*;', raw))
 
@@ -910,11 +932,6 @@ class LeaseManager:
         self.leases[ip] = lease
         return dict(self.leases)
 
-    def _create_lease(self, ip, mac, hostname, duration):
-        with self.lock:
-            snapshot = self._create_lease_locked(ip, mac, hostname, duration)
-        self._save_snapshot(snapshot)
-
     def _save_snapshot(self, snapshot):
         if snapshot is None:
             return
@@ -952,19 +969,6 @@ class LeaseManager:
                 except OSError:
                     pass
                 raise
-
-    def release(self, mac):
-        mac = mac.lower()
-        with self.lock:
-            to_del = [ip for ip, l in self.leases.items() if l.mac == mac]
-            for ip in to_del:
-                del self.leases[ip]
-            if to_del:
-                snapshot = dict(self.leases)
-            else:
-                snapshot = None
-        if snapshot is not None:
-            self._save_snapshot(snapshot)
 
     def release_owned(self, mac, ip):
         # Release a single lease only when it is currently held by this MAC.
@@ -1246,7 +1250,7 @@ def ping_check(ip, timeout=1):
                 ["ping", "-c", "1", "-W", str(timeout), "-q", ip],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=1.5,
+                timeout=timeout + 0.5,
             )
             alive = result.returncode == 0
         except Exception:
@@ -1280,6 +1284,8 @@ class DHCPServer:
         self._inflight     = threading.Semaphore(self.MAX_INFLIGHT)
         self._dropped      = 0
         self._config_lock = threading.RLock()
+        self._shutdown = threading.Event()
+        self._cleanup_thread = None
 
     def apply_config(self, new_config):
         with self._config_lock:
@@ -1336,8 +1342,8 @@ class DHCPServer:
         self.running = True
         log.info("Listening on %s (DHCP port %d)", self.interface, DHCP_SERVER_PORT)
 
-        cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
-        cleanup_thread.start()
+        self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
+        self._cleanup_thread.start()
 
         while self.running:
             try:
@@ -1397,6 +1403,9 @@ class DHCPServer:
 
     def stop(self):
         self.running = False
+        self._shutdown.set()
+        if self._cleanup_thread is not None:
+            self._cleanup_thread.join(timeout=5)
         # Wait for in-flight worker tasks to finish before closing the
         # sockets they may still be using to send responses and persist
         # leases. This guarantees main()'s remove_pid() only runs once no
@@ -1412,7 +1421,8 @@ class DHCPServer:
         while self.running:
             with self._config_lock:
                 interval = self.config.cleanup_interval
-            time.sleep(interval)
+            if self._shutdown.wait(interval):
+                return
             self.leases.cleanup_expired()
 
     def _handle(self, data, src_mac, src_ip):
@@ -1570,14 +1580,11 @@ class DHCPServer:
             config_ping_timeout = config_snapshot.ping_timeout
             config_pool_def_lease = config_snapshot.pool_def_lease
 
-        if config_deny_duplicates:
+        if config_deny_duplicates and not config_snapshot.static_hosts.get(mac):
             existing = self.leases.get_by_mac(mac)
             if existing and not self.leases.is_blocked(mac):
                 offered_ip  = existing.ip
-                if config_snapshot.static_hosts.get(mac) == existing.ip:
-                    lease_time = config_snapshot.default_lease
-                else:
-                    lease_time = config_pool_def_lease
+                lease_time = config_pool_def_lease
                 alloc_reason = None
             else:
                 offered_ip, lease_time, alloc_reason = self.leases.allocate(
@@ -1695,21 +1702,18 @@ class DHCPServer:
             config_snapshot = self.config
             server_ip_snapshot = self.server_ip
             config_auth = config_snapshot.authoritative
-            config_one_per_client = config_snapshot.one_per_client
 
-        if config_auth and target_ip:
+        if target_ip:
             static_ip = self.leases.get_static(mac)
             if static_ip and target_ip != static_ip:
-                log.info("NAK (authoritative) → %s requested %s but assigned %s",
-                         mac, target_ip, static_ip)
-                self._send_nak(pkt, mac, "Not authorized for this IP")
+                if config_auth:
+                    log.info("NAK (authoritative) → %s requested %s but assigned %s",
+                             mac, target_ip, static_ip)
+                    self._send_nak(pkt, mac, "Not authorized for this IP")
+                else:
+                    log.info("REQUEST from %s for %s but assigned %s — "
+                             "not authoritative, staying silent", mac, target_ip, static_ip)
                 return
-
-        old_ip_to_release = None
-        if config_one_per_client and target_ip:
-            existing = self.leases.get_by_mac(mac)
-            if existing and existing.ip != target_ip and not self.leases.is_blocked(mac):
-                old_ip_to_release = existing.ip
 
         offered_ip, lease_time, alloc_reason = self.leases.allocate(mac, hostname, requested_ip=target_ip)
 
@@ -1725,14 +1729,6 @@ class DHCPServer:
                           "not authoritative, staying silent",
                           mac, alloc_reason or "no address available")
             return
-
-        if old_ip_to_release and old_ip_to_release != offered_ip:
-            # Only release the previous lease now that the new one is
-            # confirmed, so a failed allocate() never leaves the client
-            # with neither (was: release-then-allocate). This also keeps
-            # release()'s disk fsync out of any lock allocate() needs for
-            # other clients, instead of nesting it inside one long-held lock.
-            self.leases.release_owned(mac, old_ip_to_release)
 
         with self._pending_lock:
             self._pending.pop(xid_key, None)
@@ -1870,6 +1866,14 @@ def main():
     defaults = parse_defaults(PYDHCP_ENV)
     global _PING_CACHE_TTL
     _PING_CACHE_TTL = defaults["ping_cache_ttl"]
+    if defaults["log_file"] != LOG_FILE:
+        log.error("LOG_FILE in pydhcp.env does not match daemon")
+        log.error("  declared: %s", defaults["log_file"])
+        log.error("  daemon:   %s", LOG_FILE)
+        log.error("This path is fixed by logrotate and systemd unit")
+        log.error("Restore the original LOG_FILE in pydhcp.env")
+        sys.exit(1)
+
     interface = defaults["interface"]
     if not interface:
         log.error("No interface defined in %s (INTERFACESv4)", PYDHCP_ENV)

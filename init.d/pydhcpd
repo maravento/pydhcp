@@ -19,7 +19,7 @@ NAME=pydhcpd
 # Defaults; may be overridden from DEFAULTS_FILE below.
 DAEMON=/usr/bin/python3
 DAEMON_ARGS=/etc/pydhcp/pydhcpd.py
-LOG_FILE="/var/log/pydhcpd.log"
+LOG_FILE="/var/log/pydhcp.log"
 PID_FILE="/etc/pydhcp/pydhcpd.pid"
 DAEMON_USER="pydhcpd"
 DAEMON_GROUP="pydhcpd"
@@ -43,7 +43,8 @@ fi
 
 # Detect whether systemd is the active init. When it is, defer to systemctl so
 # the daemon runs under the exact security context defined in the unit
-# (unprivileged user + ambient capabilities) instead of as unconfined root.
+# (the pydhcpd account plus CAP_NET_RAW and CAP_NET_BIND_SERVICE) instead
+# of as root.
 have_systemd() {
     [ -d /run/systemd/system ]
 }
@@ -73,16 +74,16 @@ start_daemon() {
         echo "ERROR: must be run as root" >&2
         exit 1
     fi
-    # Prefer setpriv to drop to the unprivileged user while granting only the
+    # Prefer setpriv to switch to the pydhcpd account while granting only the
     # capabilities the daemon needs (raw socket + bind on port 67). Refuse to
-    # start as unconfined root if no privilege-dropping mechanism is available.
+    # start as root if no such mechanism is available.
     if command -v setpriv >/dev/null 2>&1; then
         setpriv --reuid "$DAEMON_USER" --regid "$DAEMON_GROUP" --init-groups \
             --inh-caps +net_raw,+net_bind_service \
             --ambient-caps +net_raw,+net_bind_service \
             "$DAEMON" "$DAEMON_ARGS" &
     else
-        echo "ERROR: setpriv not found; refusing to start $NAME as unconfined root." >&2
+        echo "ERROR: setpriv not found; refusing to start $NAME as root." >&2
         echo "       Install util-linux (setpriv) or start via systemd: systemctl start $NAME" >&2
         exit 1
     fi
@@ -121,8 +122,8 @@ case "${1:-}" in
         pid=$(read_pid)
         if pid_is_pydhcpd "$pid"; then
             kill "$pid" 2>/dev/null || true
-            # Wait up to 5 seconds for the process to terminate.
-            for _ in $(seq 1 20); do
+            # Wait up to 20 seconds for the process to terminate.
+            for _ in $(seq 1 80); do
                 kill -0 "$pid" 2>/dev/null || break
                 sleep 0.25
             done
