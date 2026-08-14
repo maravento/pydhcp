@@ -380,7 +380,7 @@ for i in "${!IFACES[@]}"; do
 done
 echo ""
 ask_interface_number "Select interface number" "1" SEL "${#IFACES[@]}"
-IFACE="${IFACES[$((10#$SEL-1))]}"
+IFACE="${IFACES[$((SEL-1))]}"
 info "Using interface: $IFACE"
 
 # DHCP server IP
