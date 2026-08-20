@@ -210,6 +210,9 @@ my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/pydhcpd.py";
 my $LEASES_FILE = $defaults->{PYDHCPD_LEASES} || "/etc/pydhcp/pydhcpd.leases";
 my $SERVICE = "pydhcpd";
 
+my $_UH_MAC  = qr/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/;
+my $_UH_IPV4 = qr/^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$/;
+
 # Per-install CSRF secret: a random value stored 0600 and embedded in every
 # state-changing form, required back on submission. A cross-site attacker
 # cannot read it, so it cannot forge a valid request.
@@ -462,17 +465,20 @@ sub parse_active_leases {
 
     while ($raw =~ /lease\s+([\d.]+)\s*\{(.*?)\}/gs) {
         my ($ip, $body) = ($1, $2);
+        next unless $ip =~ $_UH_IPV4;
         my ($mac) = $body =~ /hardware\s+ethernet\s+([\da-f:]+)\s*;/i;
         my ($hostname) = $body =~ /client-hostname\s+"([^"]+)"\s*;/;
         my ($ends_str) = $body =~ /ends\s+\d+\s+([\d\/]+\s[\d:]+)\s*;/;
         my ($binding) = $body =~ /binding\s+state\s+(\w+)\s*;/;
         next unless $mac && $ends_str;
+        next unless $mac =~ $_UH_MAC;
 
         # Convert ends date string to epoch
-        my ($date, $time) = split(/\s/, $ends_str);
-        my ($year, $month, $day) = split(/\//, $date);
-        my ($hour, $min, $sec) = split(/:/, $time);
-        my $ends_epoch = timegm($sec, $min, $hour, $day, $month-1, $year-1900);
+        my ($year, $month, $day, $hour, $min, $sec) =
+            $ends_str =~ m{^(\d{4})/(\d{2})/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$};
+        next unless defined $sec;
+        my $ends_epoch = eval { timegm($sec, $min, $hour, $day, $month - 1, $year - 1900) };
+        next unless defined $ends_epoch;
 
         next unless $ends_epoch > $now;
 

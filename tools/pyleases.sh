@@ -16,9 +16,12 @@
 #
 # FEATURES:
 # - Locking mechanism to prevent concurrent executions (flock)
-# - Lease filtering and selective persistence
+# - Removes from pydhcpd.leases every client it blocks, so the IP it was
+#   using is free at that same instant
 # - Automatic cleanup and normalization of ACL files
 # - Duplicate detection with fail-safe abort
+# - mac-*.txt IPs checked against the blockdhcp pool range, aborting before
+#   the daemon is stopped or pydhcpd.conf is rewritten
 # - Network configuration read from pydhcp.env (created by pysetup.sh --
 #   pyleases.sh never asks for it; aborts if pydhcp.env or its network keys
 #   are missing)
@@ -91,7 +94,8 @@ fi
 # DEPENDENCIES
 for dep in python3 gawk coreutils util-linux curl grep sed systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: Required dependency '$dep' is not installed."
+        log "ERROR: Required dependency not installed"
+        log "ERROR: ($dep)"
         exit 1
     fi
 done
@@ -110,6 +114,15 @@ _UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
 _UH_MAC='^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$'
 _UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
+# IPv4 <-> integer. Callers validate with _UH_IPV4 before calling, which
+# rejects leading zeros. Ranges are compared as integers, so nothing below
+# assumes a particular netmask or a three-octet prefix.
+_ip_to_int() {
+    local a b c d
+    IFS='.' read -r a b c d <<< "$1"
+    echo $(( (a << 24) + (b << 16) + (c << 8) + d ))
+}
+
 TEMP_FILES_TO_CLEAN=()
 PYDHCPD_NEEDS_RESTART=0
 cleanup_temp() {
@@ -126,7 +139,8 @@ trap cleanup_temp EXIT
 
 ENV_FILE="/etc/pydhcp/pydhcp.env"
 if [ ! -f "$ENV_FILE" ]; then
-    log "ERROR: $ENV_FILE not found. Run pysetup.sh first (a fresh install creates it)."
+    log "ERROR: $ENV_FILE not found"
+    log "ERROR: run pysetup.sh first (creates it)"
     exit 1
 fi
 
@@ -137,7 +151,9 @@ for _k in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SE
     grep -q "^${_k}=" "$ENV_FILE" || _missing_pysetup_keys+=("$_k")
 done
 if (( ${#_missing_pysetup_keys[@]} > 0 )); then
-    log "ERROR: $ENV_FILE is missing pysetup.sh's own keys: ${_missing_pysetup_keys[*]} -- refusing to proceed. Re-run pysetup.sh (or restore $ENV_FILE from backup)."
+    log "ERROR: $ENV_FILE is missing pysetup.sh keys"
+    log "ERROR: (${_missing_pysetup_keys[*]})"
+    log "ERROR: refusing to proceed, re-run pysetup.sh"
     exit 1
 fi
 unset _missing_pysetup_keys _k
@@ -198,13 +214,14 @@ ensure_own_keys() {
         if ! grep -q "^${key}=" "$file"; then
             if (( ! added )); then
                 cp -f "$file" "${file}.bak"
-                log "INFO: backed up $file to ${file}.bak before adding missing keys"
+                log "INFO: backed up $file"
+                log "INFO: to ${file}.bak"
             fi
             insert_before_closing_delimiter "$file" "${key}=${own_defaults[$key]}"
             added=1
         fi
     done
-    (( added )) && log "INFO: added missing pyleases.sh default(s) to $file"
+    (( added )) && log "INFO: added missing defaults to $file"
 }
 ensure_own_keys "$ENV_FILE"
 
@@ -236,17 +253,21 @@ load_env_file "$ENV_FILE"
 
 for _ip_var in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK; do
     if ! [[ "${!_ip_var}" =~ $_UH_IPV4 ]]; then
-        log "ERROR: $_ip_var is not a valid IPv4 address: '${!_ip_var}' in $ENV_FILE"
+        log "ERROR: $_ip_var is not a valid IPv4 address"
+        log "ERROR: ('${!_ip_var}') in $ENV_FILE"
         exit 1
     fi
 done
 unset _ip_var
 if ! [[ "$SERV_MASK" =~ $_UH_NETMASK ]]; then
-    log "ERROR: SERV_MASK is not a valid netmask: '$SERV_MASK' in $ENV_FILE"
+    log "ERROR: SERV_MASK is not a valid netmask"
+    log "ERROR: ('$SERV_MASK') in $ENV_FILE"
     exit 1
 fi
 if ! [[ "$SERV_DNS" =~ $_UH_DNS ]]; then
-    log "ERROR: SERV_DNS is not a valid comma-separated IPv4 list: '$SERV_DNS' in $ENV_FILE"
+    log "ERROR: SERV_DNS is not a valid IPv4 list"
+    log "ERROR: ('$SERV_DNS')"
+    log "ERROR: in $ENV_FILE"
     exit 1
 fi
 
@@ -287,13 +308,16 @@ start = ipaddress.IPv4Address(sys.argv[2])
 end = ipaddress.IPv4Address(sys.argv[3])
 print('1' if start <= server <= end else '0')
 " "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" 2>/dev/null | grep -q '^1$'; then
-    log "ERROR: SERVER_IP ($SERVER_IP) overlaps the block-pool range ($SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK) in $ENV_FILE -- refusing to proceed"
+    log "ERROR: SERVER_IP overlaps the block-pool range"
+    log "ERROR: ($SERVER_IP in $SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK)"
+    log "ERROR: refusing to proceed"
     exit 1
 fi
 
 wpad_port="${WPAD_PORT:-18100}"
 if ! [[ "$wpad_port" =~ $_UH_UINT ]] || (( wpad_port < 1 || wpad_port > 65535 )); then
-    log "ERROR: WPAD_PORT is not a valid port: '$wpad_port' in $ENV_FILE"
+    log "ERROR: WPAD_PORT is not a valid port"
+    log "ERROR: ('$wpad_port') in $ENV_FILE"
     exit 1
 fi
 wpad_url="http://$SERVER_IP:$wpad_port/wpad.pac"
@@ -303,8 +327,11 @@ if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
     if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
         wpad_ready=1
     else
-        log "WARNING: WPAD_ENABLED=true but $wpad_url is not being served"
-        log "WARNING: WPAD not activated -- set WPAD_ENABLED=false in $ENV_FILE or see README"
+        log "WARNING: WPAD_ENABLED=true but not served:"
+        log "WARNING: $wpad_url"
+        log "WARNING: WPAD not activated -- set"
+        log "WARNING: WPAD_ENABLED=false in $ENV_FILE"
+        log "WARNING: check README"
     fi
 fi
 
@@ -344,7 +371,8 @@ verify_dhcp_files() {
 
 verify_dhcp_config() {
     if [ ! -f "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}" ]; then
-        log "ERROR: ${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf} does not exist"
+        log "ERROR: config file does not exist"
+        log "ERROR: (${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf})"
         exit 1
     fi
     chmod 640 "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
@@ -395,7 +423,8 @@ dedup_acl_mac_lines() {
     if (( after < before )); then
         mv "$tmp" "$f"
         chmod 600 "$f"
-        log "INFO: removed $(( before - after )) duplicate MAC line(s) from $(basename "$f")"
+        log "INFO: removed $(( before - after )) duplicate lines"
+        log "INFO: from $(basename "$f")"
     fi
 }
 
@@ -406,7 +435,8 @@ validate_block_file() {
         n=$((n + 1))
         [[ -z "$line" ]] && continue
         if [[ "$line" == \#* ]]; then
-            log "ERROR: malformed line $n in $(basename "$f"): $line -- blockdhcp.txt has no comment/disable syntax, delete the line to unblock instead of commenting it"
+            # blockdhcp.txt has no comment syntax -- delete the line to unblock
+            log "ERROR: malformed line $n in $(basename "$f"): $line"
             exit 1
         fi
     done < "$f"
@@ -430,7 +460,7 @@ function is_pydhcp() {
     # Log lines below do not carry this function's name -- they use short,
     # generic phrasing instead.
     function read_leases() {
-        local temp_leases
+        local temp_leases parsed=0
         temp_leases=$(mktemp)
         TEMP_FILES_TO_CLEAN+=("$temp_leases")
         local current_lease="" lease_content=""
@@ -459,6 +489,7 @@ function is_pydhcp() {
                     fi
 
                     if [[ -n "$mac_address" && -n "$ip_address" ]]; then
+                        parsed=$((parsed + 1))
                         line_lease="a;$mac_address;$ip_address;$host;"
 
                         shopt -s nullglob
@@ -475,7 +506,6 @@ function is_pydhcp() {
                             log "INFO: add $mac_address to blockdhcp"
                             log "INFO: ip=$ip_address host=${host:0:30}"
                             echo "$line_lease" >> "$ACL_BLOCK_FILE"
-                            echo "$lease_content" >> "$temp_leases"
                         fi
                     fi
                     current_lease=""
@@ -492,17 +522,14 @@ function is_pydhcp() {
             mv -f "$temp_leases" "$dhcpd"
             chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$dhcpd"
             chmod 640 "$dhcpd"
-        elif [[ -s "$dhcpd" ]]; then
-            # Parser kept nothing but the source file was not empty: this can
-            # mean every lease was genuinely blocked, but it can just as
-            # easily mean the parser failed to recognize the format. Either
-            # way, silently truncating a non-empty leases file is worse than
-            # leaving stale data for pydhcpd's own expiry to clean up.
-            log "WARNING: kept 0 leases, source not empty -- untouched"
-        else
+        elif (( parsed > 0 )); then
             : > "$dhcpd"
             chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$dhcpd"
             chmod 640 "$dhcpd"
+        elif [[ -s "$dhcpd" ]]; then
+            # Nothing was parsed at all: the file did not look like leases.
+            # Truncating it here would throw away data over a parser failure.
+            log "WARNING: kept 0 leases, none parsed -- untouched"
         fi
     }
 
@@ -519,7 +546,7 @@ deny duplicates;
 deny declines;
 $ping_check_line
 $ping_timeout_line
-        " >"$dhcp_conf_temp"
+" >"$dhcp_conf_temp"
 
         shopt -s nullglob
         acl_files=("$ACL_MAC_PATH"/mac-*.txt)
@@ -547,28 +574,29 @@ $ping_timeout_line
                     continue
                 fi
                 if ! [[ $usersource =~ ^[A-Za-z0-9._-]{1,63}$ ]]; then
-                    log "WARNING: skipping entry, invalid hostname: $usersource"
+                    log "WARNING: skipping entry, invalid hostname"
+                    log "WARNING: ($usersource)"
                     continue
                 fi
                 echo "
-    host $usersource {
+host $usersource {
     hardware ethernet $macsource;
     fixed-address $ipsource;
-                }" >>"$dhcp_conf_temp"
+}" >>"$dhcp_conf_temp"
             fi
         done <<< "$acl_sources"
 
         echo '
 class "blockdhcp" {
-     match pick-first-value (option dhcp-client-identifier, hardware);
-        }' >>"$dhcp_conf_temp"
+    match pick-first-value (option dhcp-client-identifier, hardware);
+}' >>"$dhcp_conf_temp"
 
         {
             cut -d ';' -f 2 "$ACL_BLOCK_FILE" 2>/dev/null
             grep -h '^#a;' "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null | cut -d ';' -f 2 || true
         } | grep -E "$_UH_MAC" | tr '[:upper:]' '[:lower:]' | sort -u \
           | while IFS= read -r macs; do
-                printf ' subclass "blockdhcp" 1:%s;\n' "$macs" >>"$dhcp_conf_temp"
+                printf 'subclass "blockdhcp" 1:%s;\n' "$macs" >>"$dhcp_conf_temp"
             done || true
 
         echo "" >>"$dhcp_conf_temp"
@@ -577,11 +605,12 @@ class "blockdhcp" {
     $wpad_subnet
     option routers $SERVER_IP;
     option broadcast-address $SERV_BROADCAST;
-    #option domain-name \"example.org\";
     option domain-name-servers $SERV_DNS;
     min-lease-time $AUTHORIZED_LEASE_TIME;
     default-lease-time $AUTHORIZED_LEASE_TIME;
     max-lease-time $AUTHORIZED_LEASE_TIME;
+    # Pool for unknown clients only — a blocked MAC gets no IP at all, and
+    # authorized hosts use the fixed-address reservations above
     pool {
         min-lease-time $CLEANUP_INTERVAL;
         default-lease-time $CLEANUP_INTERVAL;
@@ -589,8 +618,7 @@ class "blockdhcp" {
         deny members of \"blockdhcp\";
         range $SERV_INI_RANGE_BLOCK $SERV_END_RANGE_BLOCK;
     }
-}
-        " >>"$dhcp_conf_temp"
+}" >>"$dhcp_conf_temp"
 
         # Keep a backup of the previous config in case the new one is faulty.
         [ -f "$dhcp_conf" ] && cp -f "$dhcp_conf" "${dhcp_conf}.bak"
@@ -618,8 +646,14 @@ class "blockdhcp" {
 
         while read -r mac_actual; do
             [ -z "$mac_actual" ] && continue
+            if ! [[ "$mac_actual" =~ $_UH_MAC ]]; then
+                log "WARNING: skipping malformed mac from ACL source"
+                log "WARNING: ($mac_actual)"
+                continue
+            fi
             if grep -qiF ";${mac_actual};" "$ACL_BLOCK_FILE" 2>/dev/null; then
-                log "INFO: removing $mac_actual from blockdhcp (found in acl_mac)"
+                log "INFO: removing $mac_actual from blockdhcp"
+                log "INFO: (found in acl_mac)"
                 printf ';%s;\n' "$mac_actual" >> "$patterns"
                 (( removed++ )) || true
             fi
@@ -631,7 +665,8 @@ class "blockdhcp" {
             TEMP_FILES_TO_CLEAN+=("${block_tmp}")
             grep -viFf "$patterns" "$ACL_BLOCK_FILE" > "$block_tmp" || _grep_rc=$?
             if (( _grep_rc > 1 )); then
-                log "ERROR: grep failed (rc=$_grep_rc) -- skipping update of blockdhcp"
+                log "ERROR: grep failed (rc=$_grep_rc)"
+                log "ERROR: skipping update of blockdhcp"
                 rm -f "$block_tmp"
             else
                 chmod 600 "$block_tmp"
@@ -655,7 +690,8 @@ class "blockdhcp" {
         while IFS= read -r pat; do
             local mac_actual="${pat//;/}"
             if grep -qiF "$pat" "$ACL_MAC_PROXY" 2>/dev/null; then
-                log "INFO: removing $mac_actual from mac-proxy (found in mac-unlimited)"
+                log "INFO: removing $mac_actual from mac-proxy"
+                log "INFO: (found in mac-unlimited)"
                 (( removed++ )) || true
             fi
         done < "$patterns"
@@ -667,7 +703,8 @@ class "blockdhcp" {
             local _grep_rc=0
             grep -viFf "$patterns" "$ACL_MAC_PROXY" > "$file_temp" || _grep_rc=$?
             if (( _grep_rc > 1 )); then
-                log "ERROR: grep failed (rc=$_grep_rc) -- skipping update of mac-proxy"
+                log "ERROR: grep failed (rc=$_grep_rc)"
+                log "ERROR: skipping update of mac-proxy"
                 rm -f "$file_temp"
             else
                 mv "$file_temp" "$ACL_MAC_PROXY"
@@ -690,10 +727,8 @@ class "blockdhcp" {
 
     function order_files_acl {
         sort -V "$ACL_BLOCK_FILE" -o "$ACL_BLOCK_FILE"
-        # mac-*.txt: sorted by IP (field 3) -- lost in the rewrite from the
-        # original isc-dhcp-server-era leases.sh, which sorted these too.
-        # Purely cosmetic (update_dhcp_conf() and pydhcpd.py's host{} parsing
-        # are both order-independent), restored for admin readability.
+        # mac-*.txt: sorted by IP (field 3). Purely cosmetic -- update_dhcp_conf()
+        # and pydhcpd.py's host{} parsing are both order-independent.
         shopt -s nullglob
         local _order_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
         shopt -u nullglob
@@ -710,7 +745,8 @@ class "blockdhcp" {
     log "INFO: stopping pydhcpd"
     systemctl stop pydhcpd
     if systemctl is-active --quiet pydhcpd; then
-        log "ERROR: stopping pydhcpd FAILED -- still active, aborting before touching config/ACLs"
+        log "ERROR: stopping pydhcpd FAILED -- still active"
+        log "ERROR: aborting before touching config/ACLs"
         exit 1
     fi
     log "INFO: stopping pydhcpd: done"
@@ -724,19 +760,22 @@ class "blockdhcp" {
     log "INFO: starting pydhcpd"
     systemctl start pydhcpd
     if ! systemctl is-active --quiet pydhcpd; then
-        log "ERROR: pydhcpd failed to start after config rebuild -- attempting backup config restore"
+        log "ERROR: pydhcpd failed to start after rebuild"
+        log "ERROR: attempting backup config restore"
         if [ -f "${dhcp_conf}.bak" ]; then
             cp -f "${dhcp_conf}.bak" "$dhcp_conf"
             log "INFO: restored ${dhcp_conf}.bak -- retrying pydhcpd start"
             systemctl start pydhcpd
             if ! systemctl is-active --quiet pydhcpd; then
-                log "ERROR: pydhcpd failed to start even with backup config -- manual intervention required"
+                log "ERROR: pydhcpd failed to start with backup config"
+                log "ERROR: manual intervention required"
                 exit 1
             else
                 log "INFO: pydhcpd recovered with backup config"
             fi
         else
-            log "ERROR: No backup config found -- manual intervention required"
+            log "ERROR: No backup config found"
+            log "ERROR: manual intervention required"
             exit 1
         fi
     fi
@@ -745,6 +784,7 @@ class "blockdhcp" {
 }
 
 function duplicate() {
+    local has_error=0
     aclall=$(
         shopt -s nullglob
         acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
@@ -763,17 +803,63 @@ function duplicate() {
     )
     if [ "${aclall}" == "" ]; then
         log "INFO: duplicate check: OK"
+    else
+        log "ERROR: duplicate data detected"
+        log "ERROR: ($aclall)"
+        has_error=1
+    fi
+
+    shopt -s nullglob
+    local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    shopt -u nullglob
+    if [[ ${#mac_files[@]} -gt 0 ]]; then
+        local _pool_i _pool_e _ip_n _srv_n _mask_n _net_n _bcast_n
+        _pool_i=$(_ip_to_int "$SERV_INI_RANGE_BLOCK"); _pool_e=$(_ip_to_int "$SERV_END_RANGE_BLOCK")
+        _srv_n=$(_ip_to_int "$SERVER_IP"); _mask_n=$(_ip_to_int "$SERV_MASK")
+        _net_n=$(( $(_ip_to_int "$SERV_SUBNET") & _mask_n ))
+        _bcast_n=$(( _net_n | (0xFFFFFFFF ^ _mask_n) ))
+        local mac ip status
+        while IFS=';' read -r status mac ip _; do
+            [[ "$status" != "a" || -z "$ip" ]] && continue
+            [[ "$ip" =~ $_UH_IPV4 ]] || continue
+            _ip_n=$(_ip_to_int "$ip")
+            if (( (_ip_n & _mask_n) != _net_n )); then
+                log "ERROR: mac-*.txt IP conflict: $mac"
+                log "ERROR: outside subnet ${SERV_SUBNET}/${SERV_MASK}"
+                log "ERROR: move $mac inside the subnet"
+                has_error=1
+            elif (( _ip_n == _net_n || _ip_n == _bcast_n )); then
+                log "ERROR: mac-*.txt IP conflict: $mac"
+                log "ERROR: network/broadcast of ${SERV_SUBNET}/${SERV_MASK}"
+                log "ERROR: move $mac to a usable address"
+                has_error=1
+            elif (( _ip_n == _srv_n )); then
+                log "ERROR: mac-*.txt IP conflict: $mac"
+                log "ERROR: same as SERVER_IP ${SERVER_IP}"
+                log "ERROR: move $mac to another address"
+                has_error=1
+            elif (( _ip_n >= _pool_i && _ip_n <= _pool_e )); then
+                log "ERROR: mac-*.txt IP conflict: $mac"
+                log "ERROR: inside blockdhcp pool ${SERV_INI_RANGE_BLOCK}-${SERV_END_RANGE_BLOCK}"
+                log "ERROR: move $mac outside blockdhcp"
+                has_error=1
+            fi
+        done < <(cat "${mac_files[@]}" 2>/dev/null)
+    fi
+
+    if (( has_error == 0 )); then
         is_pydhcp
     else
-        log "ERROR: duplicate data detected: $aclall"
-        log "ERROR: duplicate data: $aclall"
+        log "ERROR: ACL configuration error detected -- aborting"
         exit 1
     fi
 }
 duplicate
 
 _count() { local c; c=$(grep -c '^a;' "$1" 2>/dev/null) || true; echo "${c:-0}"; }
-log "INFO: blockdhcp=$(_count "$ACL_BLOCK_FILE") | proxy=$(_count "$ACL_MAC_PROXY") | unlimited=$(_count "$ACL_MAC_UNLIMITED")"
+log "INFO: blockdhcp=$(_count "$ACL_BLOCK_FILE")"
+log "INFO: proxy=$(_count "$ACL_MAC_PROXY")"
+log "INFO: unlimited=$(_count "$ACL_MAC_UNLIMITED")"
 
 # End
 log "pyleases done at: $(date)"

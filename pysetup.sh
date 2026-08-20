@@ -41,9 +41,10 @@ if ! flock -n 200; then
 fi
 
 # DEPENDENCIES
-for dep in python3 iproute2 gawk passwd util-linux coreutils iputils-ping systemd; do
+for dep in python3 iproute2 gawk passwd util-linux coreutils grep sed iputils-ping systemd; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: Required dependency '$dep' is not installed."
+        log "ERROR: Required dependency not installed"
+        log "ERROR: ($dep)"
         exit 1
     fi
 done
