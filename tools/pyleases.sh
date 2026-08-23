@@ -7,11 +7,11 @@
 #
 # DESCRIPTION:
 # DHCP lease management script for pydhcpd that:
-# - Parses and cleans /etc/pydhcp/pydhcpd.leases
+# - Parses and cleans pydhcpd.leases
 # - Detects unauthorized clients and adds them to the block list
-# - Dynamically rebuilds /etc/pydhcp/pydhcpd.conf based on ACL sources
+# - Dynamically rebuilds pydhcpd.conf based on ACL sources
 # - Applies static MAC->IP mappings from ACL files
-# - Removes duplicates and enforces consistency across data sources
+# - Detects duplicate or conflicting entries across ACL sources and aborts
 # - Safely restarts the pydhcpd service
 #
 # FEATURES:
@@ -19,12 +19,13 @@
 # - Removes from pydhcpd.leases every client it blocks, so the IP it was
 #   using is free at that same instant
 # - Automatic cleanup and normalization of ACL files
-# - Duplicate detection with fail-safe abort
+# - Duplicate MAC/IP/hostname detection across mac-*.txt (active and
+#   commented lines alike) with fail-safe abort -- naming the field, the
+#   value and the file(s) involved; never resolved automatically
 # - mac-*.txt IPs checked against the blockdhcp pool range, aborting before
 #   the daemon is stopped or pydhcpd.conf is rewritten
-# - Network configuration read from pydhcp.env (created by pysetup.sh --
-#   pyleases.sh never asks for it; aborts if pydhcp.env or its network keys
-#   are missing)
+# - Network configuration read from pydhcp.env; aborts if pydhcp.env or its
+#   network keys are missing
 # - All paths, ACL files and network settings read from pydhcp.env
 #
 # REQUIREMENTS:
@@ -38,25 +39,21 @@
 # NOTES:
 # - Designed for environments enforcing DHCP-based access control
 # - Incorrect ACL data may disrupt IP assignments
-# - pydhcp.env must already exist (created by pysetup.sh) -- pyleases.sh
-#   only adds its own keys (ACL paths, timers, etc.) if missing, never the
-#   network ones
+# - pydhcp.env must already exist -- pyleases.sh only adds its own keys
+#   (ACL paths, timers, etc.) if missing, never the network ones
 #
 # WPAD/PAC OPTION (option 252)
 # If you need WPAD/PAC for proxy auto-configuration:
 # 1. Install and configure Apache2
 # 2. Create virtual host on port 18100
 # 3. Create wpad.pac file in Apache document root
-# 4. Set WPAD_ENABLED=true in /etc/pydhcp/pydhcp.env
+# 4. Set WPAD_ENABLED=true in pydhcp.env
 #
 # NOTE on logging:
-# - Writes to /var/log/pydhcp.log, the single log shared by the whole
-# project: pydhcpd.py, pysetup.sh and this script all write to it.
-# The path is declared as LOG_FILE in pydhcp.env; the file and its
-# rotation config (/etc/logrotate.d/pydhcp, daily) are created by
-# pysetup.sh. It is owned by pydhcpd:pydhcpd 640 so the daemon, which
-# runs as the pydhcpd account and not as root, can write to it; the
-# other two run as root.
+# - Writes to the log path declared as LOG_FILE in pydhcp.env, shared with
+# the rest of the project. It is owned by pydhcpd:pydhcpd 640 so the
+# daemon, which runs as the pydhcpd account and not as root, can write
+# to it; this script runs as root.
 #
 ################################################################################
 
@@ -681,43 +678,6 @@ class "blockdhcp" {
 
     # Log lines below do not carry this function's name -- they use short,
     # generic phrasing instead.
-    function clean_proxy_list {
-        local removed=0 patterns
-        patterns=$(mktemp)
-        TEMP_FILES_TO_CLEAN+=("${patterns}")
-        awk -F';' '$1=="a" && NF>=2 && $2!="" {print ";"tolower($2)";"}' "$ACL_MAC_UNLIMITED" | sort -u > "$patterns"
-
-        while IFS= read -r pat; do
-            local mac_actual="${pat//;/}"
-            if grep -qiF "$pat" "$ACL_MAC_PROXY" 2>/dev/null; then
-                log "INFO: removing $mac_actual from mac-proxy"
-                log "INFO: (found in mac-unlimited)"
-                (( removed++ )) || true
-            fi
-        done < "$patterns"
-
-        if (( removed > 0 )); then
-            local file_temp
-            file_temp=$(mktemp)
-            TEMP_FILES_TO_CLEAN+=("${file_temp}")
-            local _grep_rc=0
-            grep -viFf "$patterns" "$ACL_MAC_PROXY" > "$file_temp" || _grep_rc=$?
-            if (( _grep_rc > 1 )); then
-                log "ERROR: grep failed (rc=$_grep_rc)"
-                log "ERROR: skipping update of mac-proxy"
-                rm -f "$file_temp"
-            else
-                mv "$file_temp" "$ACL_MAC_PROXY"
-            fi
-        fi
-        rm -f "$patterns"
-        if (( removed > 0 )); then
-            log "INFO: done (removed=$removed)"
-        fi
-    }
-
-    # Log lines below do not carry this function's name -- they use short,
-    # generic phrasing instead.
     function clean_acl {
         log "INFO: removing empty lines from ACL files"
         sed '/^$/d' -i "$ACL_BLOCK_FILE"
@@ -740,7 +700,6 @@ class "blockdhcp" {
 
     clean_acl
     clean_block_list
-    clean_proxy_list
 
     log "INFO: stopping pydhcpd"
     systemctl stop pydhcpd
@@ -785,28 +744,32 @@ class "blockdhcp" {
 
 function duplicate() {
     local has_error=0
-    aclall=$(
-        shopt -s nullglob
-        acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
-        shopt -u nullglob
-        if [ ${#acl_mac_files[@]} -gt 0 ]; then
-            for field in 2 3 4; do
-                if [ "$field" = 2 ]; then
-                    awk -F';' '/^a;/' "${acl_mac_files[@]}" 2>/dev/null \
-                        | cut -d\; -f${field} | tr '[:upper:]' '[:lower:]' | sort | uniq -d
-                else
-                    awk -F';' '/^a;/' "${acl_mac_files[@]}" 2>/dev/null \
-                        | cut -d\; -f${field} | sort | uniq -d
-                fi
-            done
-        fi
-    )
-    if [ "${aclall}" == "" ]; then
+    shopt -s nullglob
+    local acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    shopt -u nullglob
+
+    if [ ${#acl_mac_files[@]} -gt 0 ]; then
+        local field field_name dups dup locations
+        for field in 2 3 4; do
+            case $field in 2) field_name="MAC" ;; 3) field_name="IP" ;; 4) field_name="hostname" ;; esac
+            if [ "$field" = 2 ]; then
+                dups=$(cut -d';' -f2 "${acl_mac_files[@]}" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
+            else
+                dups=$(cut -d';' -f${field} "${acl_mac_files[@]}" 2>/dev/null | sort | uniq -d)
+            fi
+            if [[ -n "$dups" ]]; then
+                while IFS= read -r dup; do
+                    [[ -z "$dup" ]] && continue
+                    locations=$(grep -liF ";${dup};" "${acl_mac_files[@]}" 2>/dev/null | tr '\n' ' ')
+                    log "ERROR: duplicate $field_name '$dup'"
+                    log "ERROR: in: $locations"
+                    has_error=1
+                done <<< "$dups"
+            fi
+        done
+    fi
+    if (( has_error == 0 )); then
         log "INFO: duplicate check: OK"
-    else
-        log "ERROR: duplicate data detected"
-        log "ERROR: ($aclall)"
-        has_error=1
     fi
 
     shopt -s nullglob

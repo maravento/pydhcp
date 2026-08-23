@@ -10,8 +10,8 @@
 # Usage:
 # sudo bash pysetup.sh # install
 # sudo bash pysetup.sh --update # update code only (preserves user config,
-#   backs up replaced files to /etc/pydhcp/bak/; aborts if pydhcp.env is
-#   missing -- run without flags first)
+#   backs up replaced files; aborts if pydhcp.env is missing -- run without
+#   flags first)
 # sudo bash pysetup.sh --remove # uninstall
 #
 ################################################################################
@@ -90,7 +90,7 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 ask_interface_number() {
     local prompt="$1" default="$2" var="$3" max="$4" answer
     while true; do
-        read -rp " ${prompt} [1-${max}] [${default}]: " answer
+        read -rp " ${prompt} [1-${max}] [Default: ${default}]: " answer
         answer="${answer:-$default}"
         if [[ "$answer" =~ $_UH_UINT ]] && (( answer >= 1 && answer <= max )); then
             printf -v "$var" '%s' "$answer"
@@ -102,7 +102,11 @@ ask_interface_number() {
 
 ask_ip() {
     local prompt="$1" default="$2" var="$3" answer hint
-    hint="${default:-e.g. 192.168.0.10}"
+    if [[ -n "$default" ]]; then
+        hint="Default: $default"
+    else
+        hint="Default: 192.168.0.10"
+    fi
     while true; do
         read -rp " ${prompt} [${hint}]: " answer
         answer="${answer:-$default}"
@@ -117,7 +121,7 @@ ask_ip() {
 ask_netmask() {
     local prompt="$1" default="$2" var="$3" answer
     while true; do
-        read -rp " ${prompt} [${default}]: " answer
+        read -rp " ${prompt} [Default: ${default}]: " answer
         answer="${answer:-$default}"
         if [[ "$answer" =~ $_UH_NETMASK ]]; then
             printf -v "$var" '%s' "$answer"
@@ -131,7 +135,7 @@ ask_netmask() {
 ask_octet() {
     local prompt="$1" default="$2" var="$3" ref_start="${4:-}" answer
     while true; do
-        read -rp " ${prompt} [${default}]: " answer
+        read -rp " ${prompt} [Default: ${default}]: " answer
         answer="${answer:-$default}"
         if [[ "$answer" =~ $_UH_OCT ]] && (( answer >= 1 && answer <= 254 )); then
             if [[ -n "$ref_start" ]] && (( answer <= ref_start )); then
@@ -148,7 +152,7 @@ ask_octet() {
 ask_dns() {
     local prompt="$1" default="$2" var="$3" answer
     while true; do
-        read -rp " ${prompt} [${default}]: " answer
+        read -rp " ${prompt} [Default: ${default}]: " answer
         answer="${answer:-$default}"
         if [[ "$answer" =~ $_UH_DNS ]]; then
             printf -v "$var" '%s' "$answer"
@@ -161,7 +165,7 @@ ask_dns() {
 ask_number() {
     local prompt="$1" default="$2" var="$3" answer
     while true; do
-        read -rp " ${prompt} [${default}]: " answer
+        read -rp " ${prompt} [Default: ${default}]: " answer
         answer="${answer:-$default}"
         if [[ "$answer" =~ $_UH_UINT ]] && (( answer >= 1 )); then
             printf -v "$var" '%s' "$answer"
@@ -174,7 +178,7 @@ ask_number() {
 ask_port() {
     local prompt="$1" default="$2" var="$3" answer
     while true; do
-        read -rp " ${prompt} [${default}]: " answer
+        read -rp " ${prompt} [Default: ${default}]: " answer
         answer="${answer:-$default}"
         if [[ "$answer" =~ $_UH_UINT ]] && (( answer >= 1 && answer <= 65535 )); then
             printf -v "$var" '%s' "$answer"
@@ -352,7 +356,7 @@ EOF
     echo ""
     success "pydhcpd updated. Backup saved in $BACKUP_DIR"
     info "$INSTALL_DIR/pydhcpd.conf -- unchanged"
-    info "$INSTALL_DIR/pydhcp.env -- unchanged"
+    info "$INSTALL_DIR/pydhcp.env -- LOG_FILE kept in sync, rest unchanged"
     info "$INSTALL_DIR/pydhcpd.leases -- unchanged"
     warn "NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in /etc/pydhcp/pydhcp.env"
     warn "(not by editing pyleases.sh) and is unaffected by this update."
@@ -450,7 +454,7 @@ ask_dns "Enter DNS server(s), comma-separated" "8.8.8.8,1.1.1.1" DNS_SERVERS
 info "DNS servers: $DNS_SERVERS"
 
 # Pool lease cleanup interval
-ask_number "DHCP pool lease cleanup interval in seconds (CLEANUP_INTERVAL)" "60" CLEANUP_INTERVAL
+ask_number "DHCP pool lease cleanup interval in seconds" "60" CLEANUP_INTERVAL
 
 # Optional features
 WPAD_ENABLED="false"

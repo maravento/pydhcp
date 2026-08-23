@@ -5,16 +5,15 @@
 # DHCP daemon for those migrating from isc-dhcp-server (EOL 2022), using
 # compatible configuration syntax and lease file format. Not a full
 # replacement — see README Scope section for what is and isn't implemented.
-# Reads /etc/pydhcp/pydhcpd.conf and /etc/pydhcp/pydhcp.env. pydhcp.env holds
-# two distinct groups: (1) daemon bootstrap -- the equivalent of the old
-# /etc/default/isc-dhcp-server (config/pid/leases paths, interface, user/
-# group); (2) pydhcp's own extra features with no isc-dhcp-server/dhcpd.conf
-# equivalent (ping cache TTL, allocation rate-limit, DISCOVER reservation
-# TTL -- see parse_defaults()). Every directive below that DOES have a
-# dhcpd.conf equivalent lives in pydhcpd.conf instead, same as
-# isc-dhcp-server -- never in pydhcp.env. Writes the leases and pid files at
-# the paths those resolve to (default /etc/pydhcp/pydhcpd.leases and
-# /etc/pydhcp/pydhcpd.pid).
+# Reads pydhcpd.conf and pydhcp.env. pydhcp.env holds two distinct groups:
+# (1) daemon bootstrap -- the equivalent of the old isc-dhcp-server default
+# file (config/pid/leases paths, interface, user/group); (2) pydhcp's own
+# extra features with no isc-dhcp-server/dhcpd.conf equivalent (ping cache
+# TTL, allocation rate-limit, DISCOVER reservation TTL -- see
+# parse_defaults()). Every directive below that DOES have a dhcpd.conf
+# equivalent lives in pydhcpd.conf instead, same as isc-dhcp-server -- never
+# in pydhcp.env. Writes the leases and pid files at the paths those resolve
+# to.
 #
 # Supported dhcpd.conf directives:
 #   authoritative, not authoritative, server-identifier, deny duplicates,
@@ -768,6 +767,24 @@ class LeaseManager:
             log.warning("(%.8s:%.8s) chown of leases skipped", daemon_user, daemon_group)
         self._load()
         self._build_pool()
+        self._prune_stale_leases()
+
+    def _prune_stale_leases(self):
+        # A lease loaded from disk whose IP is no longer in the pool (e.g.
+        # the admin edited pydhcpd.conf's range and restarted instead of
+        # reloading) must not survive in memory -- apply_config() already
+        # prunes this on SIGHUP reload; do the same here so a restart leaves
+        # the same guarantee.
+        with self.lock:
+            stale = [ip for ip in list(self.leases)
+                     if ip not in self.pool
+                     and ip not in self.config.static_hosts.values()]
+            for ip in stale:
+                log.info("Removing lease %.15s (outside pool)", ip)
+                del self.leases[ip]
+            snapshot = dict(self.leases) if stale else None
+        if snapshot is not None:
+            self._save_snapshot(snapshot)
 
     def _load(self):
         if not os.path.isfile(self.path):
@@ -899,6 +916,18 @@ class LeaseManager:
                 return True
             return False
         return True
+
+    def pool_lease_for(self, mac):
+        # Same pool-selection logic as allocate(): the first pool that admits
+        # this MAC, not always the first pool declared. Used by the "deny
+        # duplicates" re-offer path in _handle_discover(), which never calls
+        # allocate() (it re-offers an existing lease instead), so the
+        # announced lease-time would otherwise always be the first pool's.
+        with self.lock:
+            for entry, _addrs in self.pool_list:
+                if self._pool_admits(entry, mac):
+                    return entry["def"]
+            return self.config.pool_def_lease
 
     @staticmethod
     def _ip_key(ip):
@@ -1773,13 +1802,12 @@ class DHCPServer:
             config_deny_duplicates = config_snapshot.deny_duplicates
             config_ping_check = config_snapshot.ping_check
             config_ping_timeout = config_snapshot.ping_timeout
-            config_pool_def_lease = config_snapshot.pool_def_lease
 
         if config_deny_duplicates and not config_snapshot.static_hosts.get(mac):
             existing = self.leases.get_by_mac(mac)
             if existing and not self.leases.is_blocked(mac):
                 offered_ip  = existing.ip
-                lease_time = config_pool_def_lease
+                lease_time = self.leases.pool_lease_for(mac)
                 alloc_reason = None
             else:
                 offered_ip, lease_time, alloc_reason = self.leases.allocate(

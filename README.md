@@ -26,6 +26,7 @@
 
 - Python 3.8+
 - systemd
+- iproute2, gawk, passwd, util-linux, coreutils, grep, sed, iputils-ping
 
 ## Scope
 
@@ -189,7 +190,7 @@ sudo bash pysetup.sh --remove
 | `tools/pywebmin.sh` | ✅ overwritten | ✅ removed (also uninstalls the Webmin module, if installed) |
 | `pydhcpd.conf` | ⛔ preserved | ✅ removed |
 | `pydhcpd.leases` | ⛔ preserved | ✅ removed |
-| `pydhcp.env` | ⛔ preserved | ✅ removed |
+| `pydhcp.env` | ⛔ preserved (except `LOG_FILE`, kept in sync) | ✅ removed |
 | `/var/log/pydhcp.log` (shared by the daemon, `pysetup.sh` and `tools/pyleases.sh`) | ⛔ preserved | ✅ removed |
 | `/etc/logrotate.d/pydhcp` | ⛔ preserved | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
@@ -297,7 +298,7 @@ sudo systemctl status pydhcpd
 #      CGroup: /system.slice/pydhcpd.service
 #              └─2356158 /usr/bin/python3 /etc/pydhcp/pydhcpd.py
 # jun 09 17:51:49 host systemd[1]: Started pydhcpd.service - pydhcpd - Python DHCP Daemon.
-# jun 09 17:51:49 host python3[1411247]: 2026-06-09 17:51:49,068 [INFO] Attached BPF filter to raw socket (udp dst port 67)
+# jun 09 17:51:49 host python3[1411247]: 2026-06-09 17:51:49,068 [INFO] Attached BPF filter to raw socket (dst port 67)
 # jun 09 17:51:49 host python3[1449863]: 2026-06-09 16:20:31,317 [INFO] Config loaded: 158 hosts, 208 blocked
 # jun 09 17:51:49 host python3[1449863]: 2026-06-09 16:20:31,323 [INFO] Leases loaded: 2 entries
 # jun 09 17:51:49 host python3[1411247]: 2026-06-09 17:51:49,068 [INFO] Listening on enpXsX (DHCP port 67)
@@ -441,6 +442,7 @@ A third group in `pydhcp.env`, distinct from the two above: input values for `py
       <b>pyleases.sh</b> — Advanced DHCP lease and ACL manager for pydhcpd. Parses <code>pydhcpd.leases</code>, detects unauthorized clients, rebuilds <code>pydhcpd.conf</code> from ACL files, and restarts the daemon. Designed for environments enforcing DHCP-based access control.<br><br>
       ACL directories: <code>/etc/acl/acl_mac/</code> (authorized: <code>mac-proxy.txt</code>, <code>mac-unlimited.txt</code>) and <code>/etc/acl/acl_dhcp/</code> (blocked: <code>blockdhcp.txt</code>).<br>
       Entry format: <code>a;MAC;IP;HOSTNAME;</code>. The leading <code>a</code> means "active" and is what marks a well-formed entry — any other leading character aborts parsing. There is no opposite value: for the <code>mac-*.txt</code> lists, to deactivate an entry, comment out the whole line by prefixing it with <code>#</code> (<code>#a;MAC;IP;HOSTNAME;</code>) instead of editing the <code>a</code> itself. <code>blockdhcp.txt</code> is the exception: it has no active/inactive state and no <code>#</code> syntax — an entry's mere presence blocks the MAC. To unblock, delete the line; a <code>#</code>-prefixed line there is rejected as malformed.<br>
+      <code>mac-proxy.txt</code> and <code>mac-unlimited.txt</code> are both administrator-maintained, so a MAC, IP or hostname repeated between them (or within the same file) is treated as an admin mistake, never resolved automatically: <code>pyleases.sh</code> aborts, naming the field (MAC, IP or hostname), the duplicated value, and the file(s) where it appears. This comparison is on the value alone — a commented (<code>#a;</code>) line counts the same as an active one, since deactivating an entry does not remove it from the file (see above).<br>
       When <code>pyleases.sh</code> blocks a client it also removes it from <code>pydhcpd.leases</code>, so the IP it was using is free for another client at that same instant: a MAC in <code>blockdhcp.txt</code> never holds a lease.<br>
       An <code>IP</code> in <code>mac-*.txt</code> that falls inside the blockdhcp pool range is a misconfiguration: <code>pyleases.sh</code> aborts the run before the daemon is stopped or <code>pydhcpd.conf</code> is rewritten, naming the MAC to move. Commented-out lines are not checked.
     </td>
@@ -448,6 +450,7 @@ A third group in `pydhcp.env`, distinct from the two above: input values for `py
       <b>pyleases.sh</b> — Gestor avanzado de concesiones y ACLs DHCP para pydhcpd. Parsea <code>pydhcpd.leases</code>, detecta clientes no autorizados, reconstruye <code>pydhcpd.conf</code> a partir de archivos ACL y reinicia el demonio. Diseñado para entornos que aplican control de acceso basado en DHCP.<br><br>
       Directorios ACL: <code>/etc/acl/acl_mac/</code> (autorizados: <code>mac-proxy.txt</code>, <code>mac-unlimited.txt</code>) y <code>/etc/acl/acl_dhcp/</code> (bloqueados: <code>blockdhcp.txt</code>).<br>
       Formato: <code>a;MAC;IP;HOSTNAME;</code>. La `a` inicial significa "active" (activo) y es lo que marca una entrada bien formada — cualquier otro carácter inicial aborta el parseo. No existe un valor opuesto: para las listas <code>mac-*.txt</code>, para desactivar una entrada se comenta la línea completa agregando <code>#</code> al inicio (<code>#a;MAC;IP;HOSTNAME;</code>) en vez de editar la `a` misma. <code>blockdhcp.txt</code> es la excepción: no tiene estado activo/inactivo ni sintaxis <code>#</code> — la sola presencia de una entrada bloquea la MAC. Para desbloquear, se borra la línea; una línea con <code>#</code> ahí se rechaza por malformada.<br>
+      <code>mac-proxy.txt</code> y <code>mac-unlimited.txt</code> son ambas mantenidas por el administrador, así que una MAC, IP u hostname repetida entre ellas (o dentro del mismo archivo) se trata como un error del administrador, nunca se resuelve automáticamente: <code>pyleases.sh</code> aborta, nombrando el campo (MAC, IP u hostname), el valor duplicado y el/los archivo(s) donde aparece. Esta comparación es sobre el valor únicamente — una línea comentada (<code>#a;</code>) cuenta igual que una activa, ya que desactivar una entrada no la saca del archivo (ver arriba).<br>
       Cuando <code>pyleases.sh</code> bloquea a un cliente, además lo elimina de <code>pydhcpd.leases</code>, de modo que la IP que estaba usando queda libre para otro cliente en ese mismo instante: una MAC de <code>blockdhcp.txt</code> nunca tiene un lease.<br>
       Una <code>IP</code> de <code>mac-*.txt</code> que caiga dentro del rango del pool blockdhcp es un error de configuración: <code>pyleases.sh</code> aborta la corrida antes de detener el demonio y antes de reescribir <code>pydhcpd.conf</code>, nombrando la MAC que hay que mover. Las líneas comentadas no se revisan.
     </td>
@@ -464,14 +467,14 @@ sudo bash tools/pyleases.sh
   <tr>
     <td style="width: 50%; vertical-align: top;">
       <ul>
-        <li><code>--update</code> backs up replaced files to <code>/etc/pydhcp/bak/TIMESTAMP/</code> before overwriting them. <code>pydhcpd.conf</code> and <code>pydhcp.env</code> are <b>never overwritten</b> by <code>--update</code> (user config is preserved). Any manual edit to the code files (<code>pydhcpd.py</code>, <code>pyleases.sh</code>, <code>pywebmin.sh</code>) will be replaced.</li>
+        <li><code>--update</code> backs up replaced files to <code>/etc/pydhcp/bak/TIMESTAMP/</code> before overwriting them. <code>pydhcpd.conf</code> is <b>never overwritten</b>. <code>pydhcp.env</code> keeps every user config value except <code>LOG_FILE</code>, which is kept in sync to the shipped path on every <code>--update</code>. Any manual edit to the code files (<code>pydhcpd.py</code>, <code>pyleases.sh</code>, <code>pywebmin.sh</code>) will be replaced.</li>
         <li>⚠️ <b>WARNING:</b> <code>pyleases.sh</code> fully rebuilds <code>/etc/pydhcp/pydhcpd.conf</code> on every run from its ACL files and <code>pydhcp.env</code>. Any manual edits to <code>pydhcpd.conf</code> — including custom lease times, pools, or directives — will be lost. If you manage <code>pydhcpd.conf</code> manually, do not use <code>pyleases.sh</code>.</li>
         <li><b>Classes and pools:</b> the daemon supports several <code>pool { }</code> blocks and any number of <code>class</code>/<code>subclass</code> declarations, exactly as <code>isc-dhcp-server</code> does. <code>pyleases.sh</code>, by design, only ever writes what this project documents: one pool with <code>deny members of "blockdhcp";</code>, plus the <code>fixed-address</code> reservations from the <code>mac-*.txt</code> lists. Any extra class or pool added by hand is discarded on the next run. Neither is a hard limit: <code>pyleases.sh</code> is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes <code>pydhcpd.conf</code> and emit them there — the daemon will honour whatever the file ends up containing. Keep your own copy of any such change: <code>pysetup.sh --update</code> replaces the script with the shipped version, and although it saves the previous one under <code>/etc/pydhcp/bak/&lt;TIMESTAMP&gt;/</code>, the edit has to be reapplied by hand after every update.</li>
       </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
       <ul>
-        <li><code>--update</code> respalda los archivos reemplazados en <code>/etc/pydhcp/bak/TIMESTAMP/</code> antes de sobrescribirlos. <code>pydhcpd.conf</code> y <code>pydhcp.env</code> <b>nunca se sobreescriben</b> (la configuración del usuario se preserva). Cualquier edición manual a los archivos de código (<code>pydhcpd.py</code>, <code>pyleases.sh</code>, <code>pywebmin.sh</code>) será reemplazada.</li>
+        <li><code>--update</code> respalda los archivos reemplazados en <code>/etc/pydhcp/bak/TIMESTAMP/</code> antes de sobrescribirlos. <code>pydhcpd.conf</code> <b>nunca se sobreescribe</b>. <code>pydhcp.env</code> conserva cada valor de configuración del usuario excepto <code>LOG_FILE</code>, que se mantiene sincronizado con la ruta del paquete en cada <code>--update</code>. Cualquier edición manual a los archivos de código (<code>pydhcpd.py</code>, <code>pyleases.sh</code>, <code>pywebmin.sh</code>) será reemplazada.</li>
         <li>⚠️ <b>ADVERTENCIA:</b> <code>pyleases.sh</code> reconstruye completamente <code>/etc/pydhcp/pydhcpd.conf</code> en cada ejecución a partir de sus archivos ACL y <code>pydhcp.env</code>. Cualquier edición manual a <code>pydhcpd.conf</code> — incluyendo lease times, pools o directivas personalizadas — se perderá. Si gestiona <code>pydhcpd.conf</code> manualmente, no utilice <code>pyleases.sh</code>.</li>
         <li><b>Clases y pools:</b> el demonio soporta varios bloques <code>pool { }</code> y cualquier cantidad de declaraciones <code>class</code>/<code>subclass</code>, igual que <code>isc-dhcp-server</code>. <code>pyleases.sh</code>, por diseño, solo escribe lo que este proyecto documenta: un pool con <code>deny members of "blockdhcp";</code>, más las reservas <code>fixed-address</code> de las listas <code>mac-*.txt</code>. Cualquier clase o pool agregado a mano se descarta en la siguiente ejecución. Ninguna de las dos es una camisa de fuerza: <code>pyleases.sh</code> es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe <code>pydhcpd.conf</code> y emitirlos ahí — el demonio va a respetar lo que el archivo termine conteniendo. Guarde su propia copia de ese cambio: <code>pysetup.sh --update</code> reemplaza el script por la versión del repositorio y, aunque respalda el anterior en <code>/etc/pydhcp/bak/&lt;TIMESTAMP&gt;/</code>, la edición hay que volver a aplicarla a mano tras cada actualización.</li>
       </ul>

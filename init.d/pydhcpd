@@ -24,8 +24,7 @@ PID_FILE="/etc/pydhcp/pydhcpd.pid"
 DAEMON_USER="pydhcpd"
 DAEMON_GROUP="pydhcpd"
 
-# Read daemon path, log path, PID path, user and group from pydhcp.env so
-# this wrapper stays in sync with the systemd unit and pysetup.sh.
+# Read daemon path, log path, PID path, user and group from pydhcp.env.
 if [ -f "$DEFAULTS_FILE" ]; then
     val=$(grep '^DHCPDv4_BIN=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
     [ -n "$val" ] && DAEMON="$val"
