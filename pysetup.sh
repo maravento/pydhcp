@@ -8,18 +8,34 @@
 # or removes them cleanly from the system.
 #
 # Usage:
-# sudo bash pysetup.sh # install
-# sudo bash pysetup.sh --update # update code only (preserves user config,
-#   backs up replaced files; aborts if pydhcp.env is missing -- run without
-#   flags first)
-# sudo bash pysetup.sh --remove # uninstall
+# sudo bash pysetup.sh            Install
+# sudo bash pysetup.sh --update   Update code only. Preserves user config
+#                                 and backs up replaced files. Aborts if
+#                                 pydhcp.env is missing -- run without
+#                                 flags first.
+# sudo bash pysetup.sh --remove   Uninstall
+#
+# LOG: pysetup.log, in the same directory this script is run from. Kept
+# separate from /var/log/pydhcp.log (the daemon's operational log) so
+# install, update and remove runs never mix with daily operation. Appended
+# across runs. Not covered by logrotate; empty it by hand when needed:
+# truncate -s 0 pysetup.log
 #
 ################################################################################
 
 set -euo pipefail
 
+# Source directory (where this script lives) -- needed by the logging block
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # logging
-LOG_FILE="/var/log/pydhcp.log"
+# The installer keeps its own log, separate from /var/log/pydhcp.log (the
+# daemon's operational log) so install, update and remove runs never mix
+# with daily operation. Appended across runs, so an install can be compared
+# against the updates that followed it. Not covered by logrotate; empty it
+# by hand when needed: truncate -s 0 pysetup.log
+LOG_FILE="${SCRIPT_DIR}/pysetup.log"
+PYDHCP_LOG_FILE="/var/log/pydhcp.log"
 log() {
     local msg="$1"
     echo "$(date '+%Y-%m-%d %H:%M:%S') $msg" | tee -a "$LOG_FILE" 2>/dev/null || true
@@ -27,7 +43,7 @@ log() {
 
 ## root check
 if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root"
+    log "ERROR: This script must be run as root -- abort"
     exit 1
 fi
 
@@ -36,15 +52,17 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    log "Script $(basename "$0") is already running"
+    log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
 fi
 
 # DEPENDENCIES
-for dep in python3 iproute2 gawk passwd util-linux coreutils grep sed iputils-ping systemd; do
+# Project-wide list: this installer verifies every package the deployed
+# components need at runtime, not just the ones it invokes itself -- e.g.
+# iputils-ping is used by pydhcpd.py when it cannot open a raw ICMP socket.
+for dep in python3 iproute2 mawk passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: Required dependency not installed"
-        log "ERROR: ($dep)"
+        log "ERROR: dependency $dep not installed -- abort"
         exit 1
     fi
 done
@@ -64,14 +82,18 @@ SERVICE_FILE="/etc/systemd/system/pydhcpd.service"
 INIT_FILE="/etc/init.d/pydhcpd"
 SYSTEM_USER="pydhcpd"
 
-# ACL layout: composed from ACL_PATH so the base directory is named once.
+# ACL layout. Two groups, by who owns the list:
+# - ACL_PATH holds the administrator's own lists (mac-*.txt), edited by hand.
+# - ACL_DHCP_PATH holds pydhcp's own list (blockdhcp.txt), written by
+#   pyleases.sh alone, so it lives under INSTALL_DIR -- same arrangement uhm
+#   uses for its own lists under /etc/uhm/acl.
 # pydhcp.env itself is written with these already resolved -- it is parsed
 # key=value (never sourced), so a "$VAR" inside it would be stored as that
 # literal string, not as a path.
 ACL_PATH="/etc/acl"
 ACL_MAC_PATH="${ACL_PATH}/acl_mac"
-ACL_DHCP_PATH="${ACL_PATH}/acl_dhcp"
-ACL_MAC_PROXY="${ACL_MAC_PATH}/mac-proxy.txt"
+ACL_DHCP_PATH="${INSTALL_DIR}/acl"
+ACL_MAC_LIMITED="${ACL_MAC_PATH}/mac-limited.txt"
 ACL_MAC_UNLIMITED="${ACL_MAC_PATH}/mac-unlimited.txt"
 ACL_BLOCK_FILE="${ACL_DHCP_PATH}/blockdhcp.txt"
 
@@ -81,10 +103,10 @@ CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-info() { echo -e "${CYAN}[INFO]${NC} $*"; }
-success() { echo -e "${GREEN}[OK]${NC} $*"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+info() { echo -e "${CYAN}[INFO]${NC} $*"; log "INFO: $*"; }
+success() { echo -e "${GREEN}[OK]${NC} $*"; log "INFO: $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*"; log "WARNING: $*"; }
+error() { echo -e "${RED}[ERROR]${NC} $*" >&2; log "ERROR: $*"; exit 1; }
 
 # --- Interactive prompts ------------------------------------------------------
 ask_interface_number() {
@@ -202,29 +224,36 @@ confirm() {
 verify_source() {
     local f="$1"
     local real
-    real=$(realpath "$f" 2>/dev/null) || error "Cannot resolve path: $f"
-    [[ "$real" == "$SCRIPT_DIR"/* ]] || error "Source file outside SCRIPT_DIR: $f"
-    [ -f "$real" ] || error "Source is not a regular file: $f"
-    [ -s "$real" ] || error "Source file is empty: $f"
+    real=$(realpath "$f" 2>/dev/null) || error "cannot resolve source path -- abort"
+    [[ "$real" == "$SCRIPT_DIR"/* ]] || error "source file outside the repo -- abort"
+    [ -f "$real" ] || error "source is not a regular file -- abort"
+    [ -s "$real" ] || error "source file is empty -- abort"
     local mode owner
     mode=$(stat -c '%a' "$real")
     owner=$(stat -c '%u' "$real")
     if (( (8#$mode & 8#002) != 0 )); then
-        error "Source file is world-writable (mode $mode): $f"
+        { echo -e "${RED}[ERROR]${NC} world-writable source file (mode $mode)" >&2; error "$f -- abort"; }
     fi
     if [[ "$owner" != "0" && "$owner" != "${SUDO_UID:-$(id -u)}" ]]; then
-        error "Source file owned by unexpected uid $owner: $f"
+        { echo -e "${RED}[ERROR]${NC} source file owned by unexpected uid $owner" >&2; error "$f -- abort"; }
     fi
 }
-
-# --- Source directory (where this script lives) ------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Start
 log "pysetup start..."
 
 # --- UNINSTALL ---------------------------------------------------------------
 if [[ "${1:-}" == "--remove" ]]; then
+    echo ""
+    warn "This removes pydhcp completely: $INSTALL_DIR,"
+    warn "the service, the init.d wrapper, the log and"
+    warn "the Webmin module."
+    warn "Run tools/bkstack.sh first if you want a backup."
+    warn "Package dependencies are NOT removed."
+    echo ""
+    confirm "Proceed with uninstall? This cannot be undone." "n" \
+        || { info "Aborted by user."; exit 0; }
+
     info "Stopping and disabling pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
     systemctl disable pydhcpd 2>/dev/null || true
@@ -237,14 +266,23 @@ if [[ "${1:-}" == "--remove" ]]; then
     rm -f /etc/logrotate.d/pydhcpd
     rm -f /var/log/pydhcpd.log
 
+    if [ -x "$INSTALL_DIR/tools/bkstack.sh" ]; then
+        info "Removing bkstack.sh cron entry ..."
+        "$INSTALL_DIR/tools/bkstack.sh" uninstall || true
+    fi
+
     if [ -x "$INSTALL_DIR/tools/pywebmin.sh" ]; then
         info "Removing Webmin module ..."
         "$INSTALL_DIR/tools/pywebmin.sh" uninstall || true
     fi
 
+    [[ "$INSTALL_DIR" == "/etc/pydhcp" ]] || error "unexpected install dir: $INSTALL_DIR -- abort"
+
+    # Everything under INSTALL_DIR goes, including the config and the block
+    # list: uninstalling means removing the project. Only bak/ survives, and
+    # tools/bkstack.sh is the way to keep a copy of anything else.
     info "Removing $INSTALL_DIR ..."
-    [[ "$INSTALL_DIR" == "/etc/pydhcp" ]] || error "Unexpected install dir: $INSTALL_DIR"
-    rm -rf "$INSTALL_DIR"
+    find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 ! -name bak -exec rm -rf {} +
 
     info "Removing system user and group $SYSTEM_USER ..."
     userdel "$SYSTEM_USER" 2>/dev/null || warn "User $SYSTEM_USER not found or already removed"
@@ -254,32 +292,32 @@ if [[ "${1:-}" == "--remove" ]]; then
 
     success "pydhcpd has been removed from the system."
     log "pysetup done at: $(date)"
-    rm -f "$LOG_FILE"
+    rm -f "$PYDHCP_LOG_FILE"
     exit 0
 fi
 
 # --- UPDATE ------------------------------------------------------------------
 if [[ "${1:-}" == "--update" ]]; then
     if [ ! -d "$INSTALL_DIR" ]; then
-        error "No existing installation found in $INSTALL_DIR. Run without --update to install first."
+        { echo -e "${RED}[ERROR]${NC} no installation found in $INSTALL_DIR" >&2; error "run without --update to install first -- abort"; }
     fi
     if [ ! -f "$INSTALL_DIR/pydhcp.env" ]; then
-        echo -e "${RED}[ERROR]${NC} $INSTALL_DIR/pydhcp.env not found (pre-dates config persistence)." >&2
-        error "Run 'pysetup.sh --remove' then reinstall."
+        echo -e "${RED}[ERROR]${NC} $INSTALL_DIR/pydhcp.env not found" >&2
+        echo -e "${RED}[ERROR]${NC} it pre-dates config persistence" >&2
+        error "run 'pysetup.sh --remove' then reinstall -- abort"
     fi
     if [ ! -d "$INSTALL_DIR/tools" ]; then
-        echo -e "${RED}[ERROR]${NC} $INSTALL_DIR/tools not found (unexpected state for an existing installation)." >&2
-        error "Run 'pysetup.sh --remove' then reinstall."
+        echo -e "${RED}[ERROR]${NC} $INSTALL_DIR/tools not found" >&2
+        echo -e "${RED}[ERROR]${NC} unexpected state for an existing install" >&2
+        error "run 'pysetup.sh --remove' then reinstall -- abort"
     fi
 
-    BACKUP_DIR="/etc/pydhcp/bak/$(date +%Y%m%d_%H%M%S)"
-    info "Creating backup in $BACKUP_DIR ..."
-    mkdir -p "$BACKUP_DIR/tools" "$BACKUP_DIR/init.d"
-    for f in pydhcpd.py tools/pyleases.sh tools/pywebmin.sh; do
-        [ -f "$INSTALL_DIR/$f" ] && cp "$INSTALL_DIR/$f" "$BACKUP_DIR/$f"
-    done
-    [ -f "$SERVICE_FILE" ] && cp "$SERVICE_FILE" "$BACKUP_DIR/pydhcpd.service"
-    [ -f "$INIT_FILE" ] && cp "$INIT_FILE" "$BACKUP_DIR/init.d/pydhcpd"
+    if [ -x "$INSTALL_DIR/tools/bkstack.sh" ]; then
+        info "Creating backup with bkstack.sh ..."
+        "$INSTALL_DIR/tools/bkstack.sh" || warn "backup failed, continuing -- alert"
+    else
+        warn "bkstack.sh not found, no backup -- alert"
+    fi
 
     info "Stopping pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
@@ -310,6 +348,14 @@ if [[ "${1:-}" == "--update" ]]; then
         chmod 755 "$INSTALL_DIR/tools/pyleases.sh"
     fi
 
+    if [ -f "$SCRIPT_DIR/tools/bkstack.sh" ]; then
+        info "Updating tools/bkstack.sh ..."
+        verify_source "$SCRIPT_DIR/tools/bkstack.sh"
+        cp "$SCRIPT_DIR/tools/bkstack.sh" "$INSTALL_DIR/tools/bkstack.sh"
+        chown root:root "$INSTALL_DIR/tools/bkstack.sh"
+        chmod 755 "$INSTALL_DIR/tools/bkstack.sh"
+    fi
+
     if [ -f "$SCRIPT_DIR/tools/pywebmin.sh" ]; then
         info "Updating tools/pywebmin.sh ..."
         verify_source "$SCRIPT_DIR/tools/pywebmin.sh"
@@ -318,15 +364,15 @@ if [[ "${1:-}" == "--update" ]]; then
         chmod 755 "$INSTALL_DIR/tools/pywebmin.sh"
     fi
 
-    info "Consolidating logs into $LOG_FILE ..."
+    info "Consolidating logs into $PYDHCP_LOG_FILE ..."
     if [ -f /var/log/pydhcpd.log ]; then
-        cat /var/log/pydhcpd.log >> "$LOG_FILE"
+        cat /var/log/pydhcpd.log >> "$PYDHCP_LOG_FILE"
         rm -f /var/log/pydhcpd.log
     fi
     rm -f /etc/logrotate.d/pydhcpd
-    [ -f "$LOG_FILE" ] || touch "$LOG_FILE"
-    chown "$SYSTEM_USER":"$SYSTEM_USER" "$LOG_FILE"
-    chmod 640 "$LOG_FILE"
+    [ -f "$PYDHCP_LOG_FILE" ] || touch "$PYDHCP_LOG_FILE"
+    chown "$SYSTEM_USER":"$SYSTEM_USER" "$PYDHCP_LOG_FILE"
+    chmod 640 "$PYDHCP_LOG_FILE"
     cat > /etc/logrotate.d/pydhcp << 'EOF'
 /var/log/pydhcp.log {
     daily
@@ -344,22 +390,19 @@ EOF
     chmod 644 /etc/logrotate.d/pydhcp
     chown root:root /etc/logrotate.d/pydhcp
 
-    if grep -q '^LOG_FILE=' "$INSTALL_DIR/pydhcp.env"; then
-        sed -i "s|^LOG_FILE=.*|LOG_FILE=$LOG_FILE|" "$INSTALL_DIR/pydhcp.env"
-    fi
-
     systemctl daemon-reload
     if ! systemctl start pydhcpd; then
-        error "pydhcpd failed to start after update. Check logs with: journalctl -u pydhcpd -n 50"
+        { echo -e "${RED}[ERROR]${NC} pydhcpd failed to start after update" >&2; error "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
     fi
 
     echo ""
-    success "pydhcpd updated. Backup saved in $BACKUP_DIR"
-    info "$INSTALL_DIR/pydhcpd.conf -- unchanged"
-    info "$INSTALL_DIR/pydhcp.env -- LOG_FILE kept in sync, rest unchanged"
-    info "$INSTALL_DIR/pydhcpd.leases -- unchanged"
-    warn "NOTE: WPAD/option 252 is controlled by WPAD_ENABLED in /etc/pydhcp/pydhcp.env"
-    warn "(not by editing pyleases.sh) and is unaffected by this update."
+    success "pydhcpd updated. Backups in /etc/bak"
+    info "$INSTALL_DIR/pydhcpd.conf unchanged"
+    info "$INSTALL_DIR/pydhcp.env unchanged"
+    info "$INSTALL_DIR/pydhcpd.leases unchanged"
+    warn "WPAD/option 252 is set by WPAD_ENABLED,"
+    warn "in pydhcp.env, not by editing pyleases.sh."
+    warn "This update does not change it."
     echo ""
     log "pysetup done at: $(date)"
     exit 0
@@ -369,7 +412,7 @@ fi
 
 if [ -f "$INSTALL_DIR/pydhcpd.py" ]; then
     echo -e "${RED}[ERROR]${NC} pydhcpd is already installed at $INSTALL_DIR." >&2
-    error "Use --update to upgrade, or --remove to reinstall."
+    error "use --update or --remove instead -- abort"
 fi
 
 # Detect and select network interface
@@ -377,7 +420,7 @@ echo ""
 info "Available network interfaces:"
 mapfile -t IFACES < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
 if [[ ${#IFACES[@]} -eq 0 ]]; then
-    error "No network interfaces found"
+    error "no network interfaces found -- abort"
 fi
 for i in "${!IFACES[@]}"; do
     STATE=$(ip -br link show "${IFACES[$i]}" | awk '{print $2}')
@@ -429,7 +472,7 @@ sys.exit(0 if start in net and end in net else 1)
 " "$SUBNET" "$NETMASK" "$NET_BASE" "$POOL_START" "$POOL_END"; then
         break
     fi
-    warn "Pool range ${NET_BASE}.${POOL_START}-${POOL_END} falls outside subnet ${SUBNET}/${NETMASK} -- try again"
+    { warn "pool ${NET_BASE}.${POOL_START}-${POOL_END} is outside the subnet"; warn "subnet is ${SUBNET}/${NETMASK}, try again"; }
 done
 info "Pool range: ${NET_BASE}.${POOL_START} -> ${NET_BASE}.${POOL_END}"
 
@@ -445,7 +488,7 @@ start = ipaddress.IPv4Address(sys.argv[2])
 end = ipaddress.IPv4Address(sys.argv[3])
 print('1' if start <= server <= end else '0')
 " "$SERVER_IP" "${NET_BASE}.${POOL_START}" "${NET_BASE}.${POOL_END}" 2>/dev/null | grep -q '^1$'; then
-    error "Server IP ($SERVER_IP) overlaps the pool range (${NET_BASE}.${POOL_START}-${NET_BASE}.${POOL_END}) -- choose a server IP outside the pool"
+    { echo -e "${RED}[ERROR]${NC} server IP $SERVER_IP overlaps the pool range" >&2; echo -e "${RED}[ERROR]${NC} pool: ${NET_BASE}.${POOL_START}-${NET_BASE}.${POOL_END}" >&2; error "choose a server IP outside the pool -- abort"; }
 fi
 
 # DNS servers
@@ -465,7 +508,7 @@ if dpkg -s apache2 &>/dev/null; then
         ask_port "WPAD/PAC port" "18100" WPAD_PORT
     fi
 else
-    info "apache2 not installed -- WPAD/PAC not offered (WPAD_ENABLED=false)"
+    info "apache2 not installed, WPAD/PAC not offered -- skip"
 fi
 # ping-check matches isc-dhcp-server's own default (on unless explicitly
 # disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
@@ -474,7 +517,7 @@ PING_CHECK_ENABLED="true"
 
 # Verify source files exist
 for f in pydhcpd.py pydhcpd.conf pydhcpd.service init.d/pydhcpd; do
-    [ -f "$SCRIPT_DIR/$f" ] || error "Missing source file: $f (run from the project directory)"
+    [ -f "$SCRIPT_DIR/$f" ] || { echo -e "${RED}[ERROR]${NC} missing source file: $f" >&2; error "run pysetup.sh from the project directory -- abort"; }
 done
 
 # Create system group and user
@@ -507,7 +550,7 @@ chmod 755 "$INSTALL_DIR/pydhcpd.py"
 
 # Deploy pydhcpd.conf (preserved on update -- never overwritten)
 if [ -f "$INSTALL_DIR/pydhcpd.conf" ]; then
-    warn "pydhcpd.conf already exists in $INSTALL_DIR -- static hosts and blocked MACs kept, network parameters will be updated with your answers"
+    { warn "pydhcpd.conf already exists in $INSTALL_DIR"; warn "static hosts and blocked MACs kept"; warn "network parameters updated with your answers"; }
 else
     info "Deploying pydhcpd.conf ..."
     verify_source "$SCRIPT_DIR/pydhcpd.conf"
@@ -524,12 +567,13 @@ mkdir -p "$ACL_MAC_PATH" "$ACL_DHCP_PATH"
 chmod 700 "$ACL_MAC_PATH" "$ACL_DHCP_PATH"
 
 if [ ! -f "$ACL_BLOCK_FILE" ]; then
-    touch "$ACL_BLOCK_FILE"
+    verify_source "$SCRIPT_DIR/acl/blockdhcp.txt"
+    cp "$SCRIPT_DIR/acl/blockdhcp.txt" "$ACL_BLOCK_FILE"
     chmod 600 "$ACL_BLOCK_FILE"
     chown root:root "$ACL_BLOCK_FILE"
 fi
 
-for f in "$ACL_MAC_PROXY" "$ACL_MAC_UNLIMITED"; do
+for f in "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED"; do
     if [ ! -f "$f" ]; then
         touch "$f"
         chmod 600 "$f"
@@ -543,8 +587,8 @@ info "ACL directories/files present in $ACL_PATH"
 # any other future script read these from here instead of asking again,
 # adding only their own keys if missing.
 if [ -f "$INSTALL_DIR/pydhcp.env" ]; then
-    warn "pydhcp.env already exists in $INSTALL_DIR -- skipping (not overwritten)"
-    info "Interface NOT changed -- still using the value in pydhcp.env"
+    warn "pydhcp.env already exists, not overwritten -- skip"
+    info "interface not changed, keeping the value in pydhcp.env"
 else
     info "Creating pydhcp.env ..."
     cat > "$INSTALL_DIR/pydhcp.env" <<ENVEOF
@@ -554,10 +598,8 @@ else
 # =============================================================================
 # -- Daemon bootstrap (/etc/default/isc-dhcp-server migration) ----------------
 DHCPDv4_CONF=/etc/pydhcp/pydhcpd.conf
-DHCPDv4_PID=/etc/pydhcp/pydhcpd.pid
 DHCPDv4_BIN=/usr/bin/python3
 DHCPDv4_SCRIPT=/etc/pydhcp/pydhcpd.py
-LOG_FILE=/var/log/pydhcp.log
 PYDHCPD_LEASES=$INSTALL_DIR/pydhcpd.leases
 INTERFACESv4="$IFACE"
 DAEMON_USER="pydhcpd"
@@ -570,12 +612,13 @@ SERV_MASK=$NETMASK
 SERV_INI_RANGE_BLOCK=${NET_BASE}.${POOL_START}
 SERV_END_RANGE_BLOCK=${NET_BASE}.${POOL_END}
 SERV_DNS=$DNS_SERVERS
-# -- ACL paths (files created above; only consumed by pyleases.sh) ------------
+# -- ACL paths, administrator's own lists (edited by hand) --------------------
 ACL_PATH=$ACL_PATH
 ACL_MAC_PATH=$ACL_MAC_PATH
-ACL_DHCP_PATH=$ACL_DHCP_PATH
-ACL_MAC_PROXY=$ACL_MAC_PROXY
+ACL_MAC_LIMITED=$ACL_MAC_LIMITED
 ACL_MAC_UNLIMITED=$ACL_MAC_UNLIMITED
+# -- ACL paths, pydhcp's own list (written by pyleases.sh) --------------------
+ACL_DHCP_PATH=$ACL_DHCP_PATH
 ACL_BLOCK_FILE=$ACL_BLOCK_FILE
 # -- Lease timers (pyleases.sh -> pydhcpd.conf pool/subnet directives) --------
 CLEANUP_INTERVAL=$CLEANUP_INTERVAL
@@ -593,13 +636,13 @@ RATE_LIMIT_MAX=5
 RESERVATION_TTL_SECONDS=30
 # =============================================================================
 ENVEOF
-    info "Network, ACL-path and daemon-defaults values set in pydhcp.env"
+    info "Network, ACL and daemon defaults set in pydhcp.env"
 fi
 chown root:"$SYSTEM_USER" "$INSTALL_DIR/pydhcp.env"
 chmod 640 "$INSTALL_DIR/pydhcp.env"
 
 # Apply network parameters to pydhcpd.conf
-CONF_TMP=$(mktemp "$INSTALL_DIR/.pydhcpd.conf.XXXXXX")
+CONF_TMP=$(mktemp "$INSTALL_DIR/.pydhcpd.conf.XXXXXX") || error "cannot create temp file -- abort"
 cp -f "$INSTALL_DIR/pydhcpd.conf" "$CONF_TMP"
 sed -i "s|^server-identifier .*|server-identifier ${SERVER_IP};|" "$CONF_TMP"
 sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${SUBNET} netmask ${NETMASK}|" "$CONF_TMP"
@@ -632,18 +675,13 @@ if [ ! -f "$INSTALL_DIR/pydhcpd.leases" ]; then
     chmod 640 "$INSTALL_DIR/pydhcpd.leases"
 fi
 
-# Pre-create pid file with correct permissions
-touch "$INSTALL_DIR/pydhcpd.pid"
-chown "$SYSTEM_USER":"$SYSTEM_USER" "$INSTALL_DIR/pydhcpd.pid"
-chmod 640 "$INSTALL_DIR/pydhcpd.pid"
-
 # Deploy tools
 info "Creating $INSTALL_DIR/tools ..."
 mkdir -p "$INSTALL_DIR/tools"
 chown root:root "$INSTALL_DIR/tools"
 chmod 755 "$INSTALL_DIR/tools"
 
-for tool in pyleases.sh pywebmin.sh; do
+for tool in pyleases.sh pywebmin.sh bkstack.sh; do
     if [ -f "$SCRIPT_DIR/tools/$tool" ]; then
         info "Deploying tools/$tool ..."
         verify_source "$SCRIPT_DIR/tools/$tool"
@@ -652,6 +690,11 @@ for tool in pyleases.sh pywebmin.sh; do
         chmod 755 "$INSTALL_DIR/tools/$tool"
     fi
 done
+
+if [ -x "$INSTALL_DIR/tools/bkstack.sh" ]; then
+    info "Registering bkstack.sh monthly cron entry ..."
+    "$INSTALL_DIR/tools/bkstack.sh" install || warn "cron entry not registered -- alert"
+fi
 
 # Deploy systemd service
 info "Deploying systemd unit ..."
@@ -668,9 +711,9 @@ chown root:root "$INIT_FILE"
 chmod 755 "$INIT_FILE"
 
 # Create log file if it does not exist, ensure correct ownership/permissions
-[ -f "$LOG_FILE" ] || touch "$LOG_FILE"
-chown "$SYSTEM_USER":"$SYSTEM_USER" "$LOG_FILE"
-chmod 640 "$LOG_FILE"
+[ -f "$PYDHCP_LOG_FILE" ] || touch "$PYDHCP_LOG_FILE"
+chown "$SYSTEM_USER":"$SYSTEM_USER" "$PYDHCP_LOG_FILE"
+chmod 640 "$PYDHCP_LOG_FILE"
 
 # Deploy logrotate config
 info "Deploying logrotate config ..."
@@ -697,7 +740,7 @@ info "Enabling and starting pydhcpd ..."
 systemctl daemon-reload
 systemctl enable --force pydhcpd
 if ! systemctl start pydhcpd; then
-    error "pydhcpd failed to start. Check logs with: journalctl -u pydhcpd -n 50"
+    { echo -e "${RED}[ERROR]${NC} pydhcpd failed to start" >&2; error "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
 fi
 
 echo ""

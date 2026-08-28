@@ -7,13 +7,13 @@
 # replacement — see README Scope section for what is and isn't implemented.
 # Reads pydhcpd.conf and pydhcp.env. pydhcp.env holds two distinct groups:
 # (1) daemon bootstrap -- the equivalent of the old isc-dhcp-server default
-# file (config/pid/leases paths, interface, user/group); (2) pydhcp's own
+# file (config and leases paths, interface, user/group); (2) pydhcp's own
 # extra features with no isc-dhcp-server/dhcpd.conf equivalent (ping cache
 # TTL, allocation rate-limit, DISCOVER reservation TTL -- see
 # parse_defaults()). Every directive below that DOES have a dhcpd.conf
 # equivalent lives in pydhcpd.conf instead, same as isc-dhcp-server -- never
-# in pydhcp.env. Writes the leases and pid files at the paths those resolve
-# to.
+# in pydhcp.env. Writes the leases file at the path those resolve to; the
+# PID path is fixed, see FIXED VALUES below.
 #
 # Supported dhcpd.conf directives:
 #   authoritative, not authoritative, server-identifier, deny duplicates,
@@ -45,8 +45,19 @@
 #     state, no observable effect on behavior.
 #   - Main-loop shutdown poll timeout (5s socket timeout) -- controls how
 #     fast a stop request is noticed, not DHCP behavior.
+#   - Log file path (/var/log/pydhcp.log) -- pyleases.sh and the Webmin
+#     module already carry it hardcoded, so a configurable value could only
+#     ever diverge from them, never redirect the whole project.
+#   - PID file path (/run/pydhcp/pydhcpd.pid) -- systemd creates and owns
+#     that directory via RuntimeDirectory=pydhcp, and the init.d wrapper
+#     creates it before dropping privileges. A configurable path would let
+#     the PID land somewhere neither of them prepares, so there is exactly
+#     one location.
 # Anything else in pydhcp.env is a real, admin-adjustable value; this list
 # exists so a missing knob here isn't mistaken for an oversight.
+#
+# LEASE FILE:
+# Corrupt entries are removed from the leases file at startup.
 #
 # Requirements: Python 3.8+, no external dependencies.
 # Runs as a systemd service under the pydhcpd user (AmbientCapabilities
@@ -81,7 +92,9 @@ BASE_DIR        = "/etc/pydhcp"
 PYDHCP_ENV      = os.path.join(BASE_DIR, "pydhcp.env")
 CONF_FILE       = os.path.join(BASE_DIR, "pydhcpd.conf")
 LEASES_FILE     = os.path.join(BASE_DIR, "pydhcpd.leases")
-PID_FILE        = os.path.join(BASE_DIR, "pydhcpd.pid")
+# Fixed, not configurable -- see FIXED VALUES above.
+PID_FILE        = "/run/pydhcp/pydhcpd.pid"
+# Fixed, not configurable -- see FIXED VALUES above.
 LOG_FILE        = "/var/log/pydhcp.log"
 
 # =============================================================================
@@ -101,13 +114,10 @@ if not _TEST_MODE:
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s %(levelname)s: %(message)s",
     handlers=_log_handlers,
 )
 log = logging.getLogger("pydhcpd")
-
-def _err(e):
-    return getattr(e, "strerror", None) or str(e)
 
 # =============================================================================
 # DHCP CONSTANTS
@@ -155,10 +165,8 @@ def _attach_dhcp_bpf(sock):
                             ctypes.cast(buf, ctypes.c_void_p).value)
         sock.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, fprog)
         log.info("Attached BPF filter to raw socket (dst port 67)")
-    except OSError as e:
-        log.warning("Could not attach BPF filter")
-        log.warning("(%.40s)", _err(e))
-        log.warning("falling back to userspace filtering only")
+    except OSError:
+        log.info("BPF attach failed -- degraded")
 
 MSG_DISCOVER = 1
 MSG_OFFER    = 2
@@ -209,7 +217,7 @@ _UH_MAC = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
 # both read directly here (the file is never sourced/eval'd, so a tampered
 # pydhcp.env cannot execute code):
 #   1. Bootstrap values -- the equivalent of the old /etc/default/isc-dhcp-server
-#      (config/pid/leases paths, interface, user/group). Shared with
+#      (config and leases paths, interface, user/group). Shared with
 #      pyleases.sh/pywebmin.sh.
 #   2. pydhcp's own extra features, with no isc-dhcp-server/dhcpd.conf
 #      equivalent (ping cache TTL, allocation rate-limit, DISCOVER
@@ -221,7 +229,6 @@ def parse_defaults(path):
         "conf":        CONF_FILE,
         "pid":         PID_FILE,
         "leases":      LEASES_FILE,
-        "log_file":    LOG_FILE,
         "interface":   "",
         "user":        "pydhcpd",
         "group":       "pydhcpd",
@@ -231,7 +238,7 @@ def parse_defaults(path):
         "reservation_ttl":   LeaseManager._RESERVATION_TTL,
     }
     if not os.path.isfile(path):
-        log.warning("pydhcp.env not found: %.24s", path)
+        log.warning("pydhcp.env missing -- fallback")
         return defaults
     with open(path) as f:
         for line in f:
@@ -246,12 +253,8 @@ def parse_defaults(path):
             key = key.strip()
             if key == "DHCPDv4_CONF":
                 defaults["conf"] = val
-            elif key == "DHCPDv4_PID":
-                defaults["pid"] = val
             elif key == "PYDHCPD_LEASES":
                 defaults["leases"] = val
-            elif key == "LOG_FILE":
-                defaults["log_file"] = val
             elif key == "INTERFACESv4":
                 defaults["interface"] = val.split()[0] if val.split() else ""
             elif key == "DAEMON_USER":
@@ -269,14 +272,10 @@ def parse_defaults(path):
                 try:
                     parsed = int(val)
                 except ValueError:
-                    log.warning("Invalid value, using default")
-                    log.warning("(%.26s = %.12s)", key, val)
-                    log.warning("in %.24s", path)
+                    log.warning("%.26s invalid -- fallback", key)
                 else:
                     if parsed < 1:
-                        log.warning("value below minimum, using default")
-                        log.warning("(%.26s = %d)", key, parsed)
-                        log.warning("in %.24s", path)
+                        log.warning("%.26s low -- fallback", key)
                     else:
                         defaults[dest] = parsed
     return defaults
@@ -468,10 +467,8 @@ class DHCPConfig:
                     "must satisfy 0 < min <= default <= max")
 
         if self.cleanup_interval > self.pool_min_lease:
-            log.warning("cleanup-interval too high for the pool")
-            log.warning("(cleanup-interval %d, pool min %d)",
+            log.warning("cleanup-interval %d > pool min %d -- alert",
                         self.cleanup_interval, self.pool_min_lease)
-            log.warning("expired leases may hold the pool")
 
     @staticmethod
     def _balanced_braces(text, start):
@@ -508,8 +505,7 @@ class DHCPConfig:
             requested = int(m.group(1))
             self.cleanup_interval = max(5, requested)
             if requested < 5:
-                log.warning("cleanup-interval below minimum 5, using 5")
-                log.warning("(requested %d)", requested)
+                log.warning("cleanup-interval %d < 5 -- fallback", requested)
 
         m = re.search(r'\babandon-lease-time\s+(\d+)\s*;', raw)
         if m:
@@ -545,15 +541,11 @@ class DHCPConfig:
             mac_m = re.search(r'hardware\s+ethernet\s+([^\s;]+)\s*;', block, re.IGNORECASE)
             ip_m  = re.search(r'fixed-address\s+([\d.]+)\s*;', block, re.IGNORECASE)
             if not mac_m or not ip_m:
-                log.warning("Incomplete host, skipped")
-                log.warning("(%.20s)", host_name)
-                log.warning("hardware ethernet or fixed-address missing")
+                log.info("Incomplete host %.20s -- skip", host_name)
                 continue
             mac = mac_m.group(1).lower()
             if not _UH_MAC.match(mac):
-                log.warning("Invalid hardware ethernet, skipped")
-                log.warning("(host %.20s)", host_name)
-                log.warning("(%.20s)", mac_m.group(1))
+                log.info("Invalid MAC %.17s -- skip", mac_m.group(1))
                 continue
             if mac in self.static_hosts:
                 raise ConfigError(
@@ -569,9 +561,7 @@ class DHCPConfig:
             cls = m.group(1)
             mac = m.group(2).lower()
             if not _UH_MAC.match(mac):
-                log.warning("Invalid subclass MAC (skipped)")
-                log.warning("(class %.20s)", cls)
-                log.warning("(%.20s)", m.group(2))
+                log.info("Invalid MAC %.17s -- skip", m.group(2))
                 continue
             self.classes.setdefault(cls.lower(), set()).add(mac)
         self.blocked_macs = self.classes.get("blockdhcp", set())
@@ -593,10 +583,10 @@ class DHCPConfig:
                 if re.match(r'^\d+\.\d+\.\d+\.\d+$', first):
                     self.routers = first
                     if len(entries) > 1:
-                        log.warning("option routers: only the first IP is used")
-                        log.warning("(%d extra entries ignored)", len(entries) - 1)
+                        log.info("option routers: %d extra ignored -- skip",
+                                 len(entries) - 1)
                 else:
-                    log.warning("Invalid router IP: %.17s (skipped)", first)
+                    log.info("Invalid router IP: %.17s -- skip", first)
 
         m = re.search(r'option\s+broadcast-address\s+([\d.]+)\s*;', body)
         if m:
@@ -612,13 +602,11 @@ class DHCPConfig:
                         ipaddress.IPv4Address(entry)
                         resolved.append(entry)
                     except ValueError:
-                        log.warning("Invalid DNS server IP (skipped)")
-                        log.warning("(%.24s)", entry)
+                        log.info("DNS entry invalid: %.20s -- skip", entry)
                 else:
                     # Hostnames are not accepted: resolving them blocks the main
                     # thread (including SIGHUP reload) for an unbounded time.
-                    log.warning("DNS server must be an IP, not a hostname")
-                    log.warning("(%.24s) skipped", entry)
+                    log.info("DNS entry invalid: %.20s -- skip", entry)
             self.dns_servers = resolved
 
         m = re.search(r'option\s+wpad\s+"([^"]+)"\s*;', body)
@@ -759,12 +747,13 @@ class LeaseManager:
         self._rate    = {}   # mac -> deque of timestamps
         self._uid   = None
         self._gid   = None
+        self._daemon_user  = daemon_user
+        self._daemon_group = daemon_group
         try:
             self._uid = pwd.getpwnam(daemon_user).pw_uid
             self._gid = grp.getgrnam(daemon_group).gr_gid
         except KeyError:
-            log.warning("User/group not found")
-            log.warning("(%.8s:%.8s) chown of leases skipped", daemon_user, daemon_group)
+            log.info("%.10s:%.10s missing, chown -- skip", daemon_user, daemon_group)
         self._load()
         self._build_pool()
         self._prune_stale_leases()
@@ -782,11 +771,14 @@ class LeaseManager:
             for ip in stale:
                 log.info("Removing lease %.15s (outside pool)", ip)
                 del self.leases[ip]
-            snapshot = dict(self.leases) if stale else None
+            snapshot = dict(self.leases) if (stale or self._dropped_on_load) else None
+        if self._dropped_on_load:
+            log.info("Removed %d unreadable lease(s)", self._dropped_on_load)
         if snapshot is not None:
             self._save_snapshot(snapshot)
 
     def _load(self):
+        self._dropped_on_load = 0
         if not os.path.isfile(self.path):
             return
         with open(self.path) as f:
@@ -801,7 +793,8 @@ class LeaseManager:
             try:
                 ipaddress.IPv4Address(ip)
             except ValueError:
-                log.warning("Invalid lease IP: %.15s (skipped)", ip)
+                log.info("Invalid lease IP: %.15s -- skip", ip)
+                self._dropped_on_load += 1
                 continue
 
             mac_m  = re.search(r'hardware\s+ethernet\s+([\da-f:]+)\s*;', body, re.IGNORECASE)
@@ -811,15 +804,18 @@ class LeaseManager:
             end_m  = re.search(r'ends\s+\d+\s+([\d/]+ [\d:]+)\s*;', body)
 
             if not mac_m:
-                log.warning("Lease %.15s: no MAC line (skipped)", ip)
+                log.info("Lease %.15s: no MAC line -- skip", ip)
+                self._dropped_on_load += 1
                 continue
             if not end_m:
-                log.warning("Lease %.15s: no ends line (skipped)", ip)
+                log.info("Lease %.15s: no ends line -- skip", ip)
+                self._dropped_on_load += 1
                 continue
 
             mac      = mac_m.group(1).lower()
             if not _UH_MAC.match(mac):
-                log.warning("Lease %.15s: invalid MAC (skipped)", ip)
+                log.info("Lease %.15s: invalid MAC -- skip", ip)
+                self._dropped_on_load += 1
                 continue
             hostname = host_m.group(1) if host_m else ""
             binding  = bind_m.group(1) if bind_m else "active"
@@ -827,7 +823,8 @@ class LeaseManager:
                 end = datetime.strptime(end_m.group(1), LEASE_DATE_FMT).replace(
                     tzinfo=timezone.utc).timestamp()
             except ValueError:
-                log.warning("Lease %.15s: bad ends date (skipped)", ip)
+                log.info("Lease %.15s: bad ends date -- skip", ip)
+                self._dropped_on_load += 1
                 continue
 
             if start_m:
@@ -846,7 +843,7 @@ class LeaseManager:
         log.info("Leases loaded: %d entries", len(self.leases))
 
     @staticmethod
-    def _pool_addresses(config, ranges):
+    def _pool_addresses(config, ranges, pool_num):
         addrs = set()
         network_addr = None
         broadcast_addr = None
@@ -861,9 +858,9 @@ class LeaseManager:
             try:
                 ip = ipaddress.IPv4Address(r_start)
                 end = ipaddress.IPv4Address(r_end)
-            except ValueError as e:
-                log.error("Invalid pool range")
-                log.error("(%.40s)", _err(e))
+            except ValueError:
+                log.info("pool %d: %.15s-%.15s -- skip",
+                         pool_num, r_start, r_end)
                 continue
             while ip <= end:
                 ip_str = str(ip)
@@ -880,8 +877,8 @@ class LeaseManager:
 
     @staticmethod
     def _compute_pools(config):
-        return [(entry, LeaseManager._pool_addresses(config, entry["ranges"]))
-                for entry in config.pools]
+        return [(entry, LeaseManager._pool_addresses(config, entry["ranges"], pool_num))
+                for pool_num, entry in enumerate(config.pools, start=1)]
 
     @staticmethod
     def _compute_pool(config):
@@ -1010,9 +1007,7 @@ class LeaseManager:
                         if resv and resv[0] == mac and resv[1] > now:
                             renewing_own_ip = True
                 if len(bucket) >= self._RATE_LIMIT_MAX and not renewing_own_ip:
-                    log.warning("Rate-limit: %.17s dropped", rate_key)
-                    log.warning("(exceeded %d allocations in %ds)",
-                                self._RATE_LIMIT_MAX, self._RATE_LIMIT_WINDOW)
+                    log.warning("Rate-limit hit: %.17s -- alert", rate_key)
                     return None, None, "rate limited"
 
                 def _held_by_other(ip):
@@ -1163,10 +1158,9 @@ class LeaseManager:
                 if self._uid is not None and self._gid is not None:
                     try:
                         os.chown(tmp_path, self._uid, self._gid)
-                    except OSError as e:
-                        log.warning("Cannot chown %.24s", tmp_path)
-                        log.warning("to %d:%d", self._uid, self._gid)
-                        log.warning("(%.40s)", _err(e))
+                    except OSError:
+                        log.info("Chown %.10s:%.10s failed -- skip",
+                                 self._daemon_user, self._daemon_group)
                 os.chmod(tmp_path, 0o640)
                 os.replace(tmp_path, self.path)
             except Exception:
@@ -1294,8 +1288,7 @@ def parse_packet(data):
         length = data[i + 1]
 
         if i + 2 + length > data_len:
-            log.warning("Malformed DHCP option %d", opt)
-            log.warning("(length %d exceeds packet)", length)
+            log.info("Malformed option %d, len %d -- skip", opt, length)
             break
 
         value = data[i + 2: i + 2 + length]
@@ -1322,12 +1315,12 @@ def parse_packet(data):
 def build_packet(msg_type, xid, mac_str, offered_ip, server_ip, config, lease_time,
                  broadcast=True, giaddr="0.0.0.0"):
     if not config.netmask:
-        log.error("Cannot build packet: netmask not configured")
+        log.warning("netmask not configured -- alert")
         return b""
 
     mac_bytes = mac_str_to_bytes(mac_str)
     if mac_bytes is None:
-        log.error("Invalid MAC address format: %.17s", mac_str)
+        log.info("Invalid MAC %.17s -- skip", mac_str)
         return b""
 
     pkt = bytearray(236)
@@ -1348,8 +1341,7 @@ def build_packet(msg_type, xid, mac_str, offered_ip, server_ip, config, lease_ti
     def add_opt(code, value):
         nonlocal options
         if len(value) > 255:  # DHCP option format, see FIXED VALUES header
-            log.error("DHCP option %d value too long, skipped", code)
-            log.error("(%d bytes)", len(value))
+            log.info("Option %d too long (%d B) -- skip", code, len(value))
             return
         options += bytes([code, len(value)]) + value
 
@@ -1453,9 +1445,7 @@ def ping_check(ip, timeout=1):
     try:
         alive = _icmp_ping(ip, timeout)
     except PermissionError:
-        log.warning("Raw ICMP socket not permitted")
-        log.warning("(missing CAP_NET_RAW)")
-        log.warning("falling back to subprocess ping")
+        log.info("ICMP raw socket denied, using ping -- degraded")
         try:
             result = subprocess.run(
                 ["ping", "-c", "1", "-W", str(timeout), "-q", ip],
@@ -1527,7 +1517,7 @@ class DHCPServer:
 
     def start(self):
         if not self.interface:
-            log.error("No interface configured")
+            log.error("No interface configured -- abort")
             sys.exit(1)
 
         try:
@@ -1536,9 +1526,8 @@ class DHCPServer:
             self.raw_sock.bind((self.interface, 0))
             _attach_dhcp_bpf(self.raw_sock)
             self.raw_sock.settimeout(5.0)  # shutdown poll only, see FIXED VALUES header
-        except OSError as e:
-            log.error("Failed to open raw socket on %.10s", self.interface)
-            log.error("(%.40s)", _err(e))
+        except OSError:
+            log.error("Raw socket failed on %.15s -- abort", self.interface)
             sys.exit(1)
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1547,11 +1536,8 @@ class DHCPServer:
         try:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
                                  self.interface.encode() + b"\0")
-        except (OSError, AttributeError) as e:
-            log.warning("Cannot bind UDP socket to interface")
-            log.warning("(%.10s)", self.interface)
-            log.warning("(%.40s)", _err(e))
-            log.warning("replies rely on the kernel routing table")
+        except (OSError, AttributeError):
+            log.info("UDP bind to %.15s failed -- degraded", self.interface)
         self.sock.bind(("", DHCP_SERVER_PORT))
 
         self.running = True
@@ -1601,9 +1587,7 @@ class DHCPServer:
             if not self._inflight.acquire(blocking=False):
                 self._dropped += 1
                 if self._dropped % 100 == 1:
-                    log.warning("Worker backlog full (%d)", self.MAX_INFLIGHT)
-                    log.warning("dropping packets")
-                    log.warning("(total dropped: %d)", self._dropped)
+                    log.warning("Worker backlog full, %d dropped -- alert", self._dropped)
                 continue
             try:
                 self._thread_pool.submit(self._handle_packet, data, src_mac, src_ip)
@@ -1613,9 +1597,8 @@ class DHCPServer:
     def _handle_packet(self, data, src_mac, src_ip):
         try:
             self._handle(data, src_mac, src_ip)
-        except Exception as e:
-            log.exception("Unhandled error in worker")
-            log.error("(%.44s)", _err(e))
+        except Exception:
+            log.info("Worker error from %.17s -- skip", src_mac)
         finally:
             self._inflight.release()
 
@@ -1652,9 +1635,7 @@ class DHCPServer:
 
         if dhcp_giaddr == "0.0.0.0":
             if pkt["chaddr"] != src_mac:
-                log.warning("chaddr spoofing detected, dropped")
-                log.warning("(frame src=%.17s)", src_mac)
-                log.warning("(chaddr=%.17s)", pkt["chaddr"])
+                log.warning("Spoofed chaddr from %.17s -- alert", src_mac)
                 return
         else:
             # Relayed traffic: a genuine relay agent increments hops and sources
@@ -1662,9 +1643,7 @@ class DHCPServer:
             # cannot be steered into replying to an arbitrary giaddr (UDP
             # reflection) nor used to bypass the chaddr check above.
             if pkt.get("hops", 0) < 1 or dhcp_giaddr != src_ip:
-                log.warning("Spoofed relay dropped")
-                log.warning("(giaddr=%.15s hops=%d)", dhcp_giaddr, pkt.get("hops", 0))
-                log.warning("(frame src=%.15s)", src_ip)
+                log.warning("Spoofed relay from %.15s -- alert", src_ip)
                 return
 
         mac      = pkt["chaddr"]
@@ -1683,8 +1662,7 @@ class DHCPServer:
                 config_deny_declines = self.config.deny_declines
 
             if config_deny_declines:
-                log.warning("DECLINE ignored (deny declines)")
-                log.warning("(%.17s)", mac)
+                log.info("DECLINE from %.17s ignored -- skip", mac)
             else:
                 # RFC 2131 4.4.5: the declined address travels in the
                 # requested-ip option (falling back to ciaddr). Only act on it
@@ -1698,8 +1676,7 @@ class DHCPServer:
                     log.info("DECLINE: IP %.15s quarantined", declined_ip)
                     log.info("(%.17s)", mac)
                 else:
-                    log.warning("DECLINE not owned by the client, ignored")
-                    log.warning("(%.17s for %.15s)", mac, declined_ip)
+                    log.info("DECLINE from %.17s not owned -- skip", mac)
 
         elif msg_type == MSG_RELEASE:
             # RFC 2131 4.4.4: honour RELEASE only from the current lease holder.
@@ -1709,23 +1686,19 @@ class DHCPServer:
             ciaddr  = pkt.get("ciaddr", "0.0.0.0")
             sid_opt = pkt["options"].get(OPT_SERVER_ID, b"")
             if len(sid_opt) == 4 and bytes_to_ip(sid_opt) != self.server_ip:
-                log.debug("RELEASE targets another server, ignored")
-                log.debug("(%.17s)", mac)
+                log.info("RELEASE wrong server, %.17s -- skip", mac)
             elif ciaddr == "0.0.0.0":
-                log.warning("RELEASE without ciaddr, ignored")
-                log.warning("(%.17s)", mac)
+                log.info("RELEASE from %.17s no ciaddr -- skip", mac)
             elif self.leases.release_owned(mac, ciaddr):
                 log.info("RELEASE from %.17s: %.15s", mac, ciaddr)
             else:
-                log.warning("RELEASE not owned by the client, ignored")
-                log.warning("(%.17s for %.15s)", mac, ciaddr)
+                log.info("RELEASE from %.17s not owned -- skip", mac)
 
         elif msg_type == MSG_INFORM:
             self._handle_inform(pkt, mac, hostname, log_hostname)
 
         else:
-            log.debug("Unknown message type %d", msg_type)
-            log.debug("from %.17s", mac)
+            log.info("Unknown msg %d from %.17s -- skip", msg_type, mac)
 
     def _handle_inform(self, pkt, mac, hostname, log_hostname):
         log.info("INFORM from %.17s (%.15s)", mac, log_hostname)
@@ -1739,13 +1712,12 @@ class DHCPServer:
             config_wpad_url = self.config.wpad_url
 
         if not config_netmask:
-            log.error("Cannot build INFORM packet")
-            log.error("(netmask not configured)")
+            log.warning("netmask not configured -- alert")
             return
 
         mac_bytes = mac_str_to_bytes(mac)
         if mac_bytes is None:
-            log.error("Invalid MAC address format: %.17s", mac)
+            log.info("Invalid MAC %.17s -- skip", mac)
             return
 
         pkt_buf = bytearray(236)
@@ -1766,8 +1738,7 @@ class DHCPServer:
         def add_opt(code, value):
             nonlocal options
             if len(value) > 255:  # DHCP option format, see FIXED VALUES header
-                log.error("DHCP option %d value too long, skipped", code)
-                log.error("(%d bytes)", len(value))
+                log.info("Option %d too long (%d B) -- skip", code, len(value))
                 return
             options += bytes([code, len(value)]) + value
 
@@ -1820,9 +1791,9 @@ class DHCPServer:
 
         if not offered_ip:
             if alloc_reason and "blockdhcp" in alloc_reason:
-                log.warning("Blocked: %.17s (deny blockdhcp)", mac)
+                log.info("Blocked %.17s -- skip", mac)
             else:
-                log.warning("No IP available for %.17s", mac)
+                log.info("No IP for %.17s -- skip", mac)
             return
 
         is_static = bool(self.leases.get_static(mac))
@@ -1854,8 +1825,7 @@ class DHCPServer:
                     finally:
                         _ping_inflight.release()
                     if alive:
-                        log.warning("PING-CHECK: in use, quarantined")
-                        log.warning("(%.15s)", offered_ip)
+                        log.info("PING-CHECK %.15s in use -- skip", offered_ip)
                         self.leases.quarantine_ip(offered_ip)
                         self.leases.release_reservation_owned(mac, offered_ip)
                         return
@@ -1873,8 +1843,7 @@ class DHCPServer:
                 # Ping subsystem saturated: fail open rather than blocking
                 # (or dropping) the DISCOVER — an occasional missed conflict
                 # check is far cheaper than starving the main pool.
-                log.debug("Ping-check backlog full, OFFER without check")
-                log.debug("(%.15s)", offered_ip)
+                log.info("Ping-check full, %.15s no check -- skip", offered_ip)
 
         _send_offer()
 
@@ -1900,16 +1869,14 @@ class DHCPServer:
             # lease on record for this MAC is not a real client state —
             # honoring it would hand out a full, persisted lease with no
             # DISCOVER/ping-check and no proof of possession.
-            log.debug("REQUEST without requested-ip/ciaddr, dropped")
-            log.debug("(%.17s) no existing lease", mac)
+            log.info("REQUEST from %.17s no ciaddr -- skip", mac)
             return
 
         server_id_opt = pkt["options"].get(OPT_SERVER_ID, b"")
         if len(server_id_opt) == 4:
             selected_server = bytes_to_ip(server_id_opt)
             if selected_server != self.server_ip:
-                log.debug("REQUEST is for another server, ignoring")
-                log.debug("(%.17s wants %.15s)", mac, selected_server)
+                log.info("REQUEST wrong server, %.17s -- skip", mac)
                 return
 
         with self._pending_lock:
@@ -1954,8 +1921,7 @@ class DHCPServer:
                 # whose requested IP it cannot itself confirm/allocate — the
                 # lease may be valid and issued by another DHCP server on the
                 # segment. Stay silent instead of forcing the client to drop it.
-                log.debug("REQUEST could not be satisfied, staying silent")
-                log.debug("(%.17s) %.25s", mac, alloc_reason or "no address available")
+                log.info("REQUEST failed for %.17s -- skip", mac)
             return
 
         with self._pending_lock:
@@ -1980,7 +1946,7 @@ class DHCPServer:
         nak[24:28] = ip_to_bytes(pkt.get("giaddr", "0.0.0.0"))
         mac_bytes = mac_str_to_bytes(mac)
         if mac_bytes is None:
-            log.error("Invalid MAC address format: %.17s", mac)
+            log.info("Invalid MAC %.17s -- skip", mac)
             return
         nak[28:34] = mac_bytes
         opts = bytearray(DHCP_MAGIC)
@@ -2009,9 +1975,8 @@ class DHCPServer:
             dest = (self.broadcast_ip, DHCP_CLIENT_PORT)
         try:
             self.sock.sendto(data, dest)
-        except OSError as e:
-            log.error("Send error")
-            log.error("(%.40s)", _err(e))
+        except OSError:
+            log.info("Send failed -- skip")
 
 # =============================================================================
 # PID / SIGNAL
@@ -2047,14 +2012,12 @@ def write_pid(path):
             # Process exists but we cannot signal it (different owner).
             alive = True
         if alive and _pid_is_pydhcpd(old_pid):
-            log.error("pydhcpd already running (pid %d)", old_pid)
-            log.error("refusing to start a second instance")
+            log.error("pydhcpd already running (pid %d) -- abort", old_pid)
             sys.exit(1)
         elif alive:
-            log.warning("PID is alive but not pydhcpd, overwriting")
-            log.warning("(pid %d in %.24s)", old_pid, path)
+            log.warning("PID %d alive, not pydhcpd -- alert", old_pid)
 
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o640)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, "w") as f:
         f.write(str(os.getpid()))
 
@@ -2100,35 +2063,25 @@ def main():
     defaults = parse_defaults(PYDHCP_ENV)
     global _PING_CACHE_TTL
     _PING_CACHE_TTL = defaults["ping_cache_ttl"]
-    if defaults["log_file"] != LOG_FILE:
-        log.error("LOG_FILE in pydhcp.env does not match daemon")
-        log.error("  declared: %.17s", defaults["log_file"])
-        log.error("  daemon:   %.24s", LOG_FILE)
-        log.error("This path is fixed by logrotate and systemd unit")
-        log.error("Restore the original LOG_FILE in pydhcp.env")
-        sys.exit(1)
-
     interface = defaults["interface"]
     if not interface:
-        log.error("No interface defined (INTERFACESv4)")
-        log.error("in %.24s", PYDHCP_ENV)
+        log.error("No interface defined (INTERFACESv4) -- abort")
         sys.exit(1)
     if not os.path.isdir(f"/sys/class/net/{interface}"):
-        log.error("Interface does not exist on this system")
-        log.error("(%.10s)", interface)
+        log.error("Interface %.15s missing -- abort", interface)
         sys.exit(1)
 
     config = DHCPConfig()
     try:
         config.load(defaults["conf"])
     except ConfigError as e:
-        log.error("Configuration error")
+        log.error("Configuration error -- abort")
         for _line in str(e).splitlines():
             log.error("%.46s", _line)
         sys.exit(1)
 
     if not config.server_id:
-        log.error("server-identifier not set in %.17s", defaults["conf"])
+        log.error("server-identifier missing in config -- abort")
         sys.exit(1)
 
     lease_mgr = LeaseManager(defaults["leases"], config,
@@ -2156,18 +2109,15 @@ def main():
             new_config = DHCPConfig()
             new_config.load(defaults["conf"])
             if not new_config.server_id:
-                log.error("Reloaded config has no server-identifier")
-                log.error("keeping current config")
+                log.warning("Reload failed, no server-id -- fallback")
                 return
             server.apply_config(new_config)
             log.info("Configuration reloaded")
             log.info("%d static hosts, %d blocked MACs",
                      len(new_config.static_hosts), len(new_config.blocked_macs))
             log.info("%d pool IPs", len(server.leases.pool))
-        except Exception as e:
-            log.error("Failed to reload configuration")
-            log.error("keeping current config")
-            log.error("(%.40s)", _err(e))
+        except Exception:
+            log.warning("Reload failed -- fallback")
 
     signal.signal(signal.SIGTERM, signal_shutdown)
     signal.signal(signal.SIGINT,  signal_shutdown)

@@ -19,21 +19,22 @@ NAME=pydhcpd
 # Defaults; may be overridden from DEFAULTS_FILE below.
 DAEMON=/usr/bin/python3
 DAEMON_ARGS=/etc/pydhcp/pydhcpd.py
+# Fixed, not read from DEFAULTS_FILE: pyleases.sh and the Webmin module
+# carry this path hardcoded too, so one location, always.
 LOG_FILE="/var/log/pydhcp.log"
-PID_FILE="/etc/pydhcp/pydhcpd.pid"
+# Fixed, not read from DEFAULTS_FILE: systemd owns this path via
+# RuntimeDirectory=pydhcp, and start_daemon() creates it below when there
+# is no systemd. One location, always.
+PID_FILE="/run/pydhcp/pydhcpd.pid"
 DAEMON_USER="pydhcpd"
 DAEMON_GROUP="pydhcpd"
 
-# Read daemon path, log path, PID path, user and group from pydhcp.env.
+# Read daemon path, user and group from pydhcp.env.
 if [ -f "$DEFAULTS_FILE" ]; then
     val=$(grep '^DHCPDv4_BIN=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
     [ -n "$val" ] && DAEMON="$val"
     val=$(grep '^DHCPDv4_SCRIPT=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
     [ -n "$val" ] && DAEMON_ARGS="$val"
-    val=$(grep '^LOG_FILE=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
-    [ -n "$val" ] && LOG_FILE="$val"
-    val=$(grep '^DHCPDv4_PID=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
-    [ -n "$val" ] && PID_FILE="$val"
     val=$(grep '^DAEMON_USER=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
     [ -n "$val" ] && DAEMON_USER="$val"
     val=$(grep '^DAEMON_GROUP=' "$DEFAULTS_FILE" | cut -d= -f2- | tr -d '"' | xargs 2>/dev/null || true)
@@ -73,6 +74,18 @@ start_daemon() {
         echo "ERROR: must be run as root" >&2
         exit 1
     fi
+    # Without systemd there is no RuntimeDirectory=, so the PID directory is
+    # created here, while still root, and handed to the daemon account.
+    _pid_dir=$(dirname "$PID_FILE")
+    if [ ! -d "$_pid_dir" ]; then
+        mkdir -p "$_pid_dir" || {
+            echo "ERROR: cannot create $_pid_dir -- abort" >&2
+            exit 1
+        }
+    fi
+    chown "$DAEMON_USER":"$DAEMON_GROUP" "$_pid_dir" 2>/dev/null || true
+    chmod 755 "$_pid_dir" 2>/dev/null || true
+
     # Prefer setpriv to switch to the pydhcpd account while granting only the
     # capabilities the daemon needs (raw socket + bind on port 67). Refuse to
     # start as root if no such mechanism is available.
@@ -131,6 +144,15 @@ case "${1:-}" in
             if pid_is_pydhcpd "$pid"; then
                 echo "WARNING: Process $pid did not terminate, forcing..."
                 kill -9 "$pid" 2>/dev/null || true
+                sleep 1
+            fi
+            # Both kills swallow their exit status, so the only reliable
+            # check is whether the process is still there. Leaving the PID
+            # file in place on failure keeps status honest and stops a
+            # second daemon from being started over the first.
+            if pid_is_pydhcpd "$pid"; then
+                echo "ERROR: could not stop $NAME (pid $pid) -- abort" >&2
+                exit 1
             fi
             echo "$NAME stopped"
         else

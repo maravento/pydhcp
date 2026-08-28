@@ -18,6 +18,11 @@ StandardOutput=journal
 StandardError=journal
 User=pydhcpd
 Group=pydhcpd
+# systemd creates /run/pydhcp owned by User/Group above on every start and
+# removes it on stop -- the daemon writes its PID there, same shape as
+# isc-dhcp-server's RuntimeDirectory=dhcp-server.
+RuntimeDirectory=pydhcp
+RuntimeDirectoryMode=0755
 AmbientCapabilities=CAP_NET_RAW CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_BIND_SERVICE
 NoNewPrivileges=true

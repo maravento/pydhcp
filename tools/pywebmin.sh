@@ -3,20 +3,25 @@
 #
 ################################################################################
 #
-# PyDHCP module installation/uninstallation script for Webmin
+# pywebmin - module installation/uninstallation script for Webmin
 #
-# Description:
-# Installs or uninstalls the PyDHCP module for Webmin.
-# Provides a web interface to manage the pydhcpd daemon:
-# service control, active leases table, and configuration editor.
+# DESCRIPTION:
+# Installs or uninstalls the PyDHCP module for Webmin. Provides a web
+# interface to manage the pydhcpd daemon: service control, active leases
+# table, and configuration editor.
 #
-# Usage:
+# USAGE:
 # sudo ./pywebmin.sh [OPTIONS]
 #
-# Options:
-# install Install the module
-# uninstall Uninstall the module
-# -h, --help Show help message
+# OPTIONS:
+# install      Install the module
+# uninstall    Uninstall the module
+# -h, --help   Show help message
+#
+# EXIT CODES:
+# 0 - Normal exit, or module installed/uninstalled successfully
+# 1 - Not root, already running, missing dependency, Webmin not
+#     installed, pydhcpd not installed, or invalid option
 #
 ################################################################################
 
@@ -26,16 +31,16 @@ show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "install Install the PyDHCP Webmin module"
-    echo "uninstall Uninstall the PyDHCP Webmin module"
-    echo "-h, --help Show this help message"
+    echo "  install      Install the PyDHCP Webmin module"
+    echo "  uninstall    Uninstall the PyDHCP Webmin module"
+    echo "  -h, --help   Show this help message"
     echo ""
     echo "If no option is provided, interactive menu will be shown."
     echo ""
     echo "Examples:"
-    echo "$0 install"
-    echo "$0 uninstall"
-    echo "$0"
+    echo "  $0 install"
+    echo "  $0 uninstall"
+    echo "  $0"
     echo ""
 }
 
@@ -48,7 +53,7 @@ esac
 
 ## root check
 if [ "$(id -u)" != "0" ]; then
-    echo "ERROR: This script must be run as root"
+    echo "ERROR: This script must be run as root -- abort" >&2
     exit 1
 fi
 
@@ -57,14 +62,14 @@ SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$SCRIPT_LOCK")
 exec 200>"$SCRIPT_LOCK"
 if ! flock -n 200; then
-    echo "Script $(basename "$0") is already running"
+    echo "ERROR: script $(basename "$0") is already running -- abort" >&2
     exit 1
 fi
 
 # DEPENDENCIES
-for dep in coreutils util-linux systemd grep sed; do
+for dep in coreutils util-linux systemd grep sed mawk ncurses-bin; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        echo "ERROR: Required dependency '$dep' is not installed." >&2
+        echo "ERROR: missing dependency '$dep' -- abort" >&2
         exit 1
     fi
 done
@@ -72,15 +77,54 @@ done
 # DEPENDENCIES (external repo)
 for dep in webmin; do
     if ! dpkg -s "$dep" &>/dev/null; then
-        echo "ERROR: 'webmin' is not installed." >&2
+        echo "ERROR: 'webmin' is not installed -- abort" >&2
         exit 1
     fi
 done
 
 if [ ! -f "/etc/pydhcp/pydhcpd.py" ]; then
-    echo "ERROR: pydhcpd is not installed on this system"
-    echo "Please install pydhcpd first"
+    echo "ERROR: pydhcpd is not installed" >&2
+    echo "ERROR: install pydhcpd first -- abort" >&2
     exit 1
+fi
+
+# LOCAL USER detection
+detect_local_user() {
+    local uid_min uid_max
+    local user uid best_user="" best_uid=999999
+
+    uid_min=$(awk '/^UID_MIN/{print $2}' /etc/login.defs 2>/dev/null)
+    uid_max=$(awk '/^UID_MAX/{print $2}' /etc/login.defs 2>/dev/null)
+    uid_min=${uid_min:-1000}
+    uid_max=${uid_max:-60000}
+
+    while IFS=: read -r user _ uid _ _ _ shell; do
+        [ "$user" = "root" ] && continue
+        [ -z "$uid" ] && continue
+        [ "$uid" -lt "$uid_min" ] && continue
+        [ "$uid" -gt "$uid_max" ] && continue
+
+        case "$shell" in
+            */false|*/nologin) continue ;;
+        esac
+
+        id -nG "$user" 2>/dev/null | grep -qw sudo || continue
+
+        if [ "$uid" -lt "$best_uid" ]; then
+            best_uid="$uid"
+            best_user="$user"
+        fi
+    done </etc/passwd
+
+    [ -n "$best_user" ] || return 1
+    echo "$best_user"
+}
+
+# The Webmin module is a read-only log viewer, so a missing local user is not
+# fatal: the module stays installed and usable by the Webmin root account.
+if ! local_user=$(detect_local_user); then
+    local_user=""
+    echo "WARNING: no local user with sudo found -- alert" >&2
 fi
 
 MODNAME="pydhcp"
@@ -95,10 +139,13 @@ install_module() {
     echo ""
 
     echo "Creating PyDHCP module structure..."
-    mkdir -p "$MODDIR/images"
-    mkdir -p "$MODDIR/lang"
-    mkdir -p "$MODDIR/help"
-    mkdir -p "$ETCDIR"
+    for _d in "$MODDIR/images" "$MODDIR/lang" "$MODDIR/help" "$ETCDIR"; do
+        if ! mkdir -p "$_d"; then
+            echo "ERROR: cannot create $_d -- abort" >&2
+            exit 1
+        fi
+    done
+    unset _d
 
     cat > "$MODDIR/module.info" <<'EOF'
 desc=PyDHCP Server
@@ -499,6 +546,8 @@ INDEXCGI
 use strict;
 use warnings;
 use File::Copy;
+use File::Path qw(make_path);
+use File::Basename;
 use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 
 do '../web-lib.pl';
@@ -529,7 +578,7 @@ sub read_defaults {
 
 my $defaults = read_defaults();
 my $CONF_FILE = $defaults->{DHCPDv4_CONF} || "/etc/pydhcp/pydhcpd.conf";
-my $BACKUP_FILE = "/etc/pydhcp/pydhcpd.conf.bak";
+my $BACKUP_DIR = "/etc/pydhcp/bak/webmin";
 my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/pydhcpd.py";
 
 # Per-install CSRF secret (see index.cgi): unpredictable to a cross-site
@@ -603,14 +652,19 @@ if (($in{'action'} || '') eq 'save' && defined $in{'conf_content'}) {
                 $message = "<div style='margin:10px 0;padding:10px 14px;background:#f8d7da;color:#721c24;border-radius:4px;border:1px solid #f5c6cb;font-size:13px;'>$text{'config_error'}: refusing to write through symlink</div>\n";
             } else {
                 if (-f $CONF_FILE) {
-                    my $ts = time();
-                    unless (-l "$BACKUP_FILE.$ts") {
-                        copy($CONF_FILE, "$BACKUP_FILE.$ts");
-                        chmod(0640, "$BACKUP_FILE.$ts");
+                    my @t = localtime();
+                    my $ts = sprintf("%04d%02d%02d_%02d%02d%02d",
+                        $t[5]+1900, $t[4]+1, $t[3], $t[2], $t[1], $t[0]);
+                    if (make_path($BACKUP_DIR) || -d $BACKUP_DIR) {
+                        my $dest = "$BACKUP_DIR/" . basename($CONF_FILE) . ".$ts";
+                        unless (-l $dest) {
+                            copy($CONF_FILE, $dest);
+                            chmod(0640, $dest);
+                        }
                     }
-                    my @backups = sort glob("$BACKUP_FILE.*");
-                    if (@backups > 5) {
-                        unlink(@backups[0 .. (@backups - 6)]);
+                    my @backups = sort glob("$BACKUP_DIR/*");
+                    if (@backups > 3) {
+                        unlink(@backups[0 .. (@backups - 4)]);
                     }
                 }
                 if (rename($tmpfile, $CONF_FILE)) {
@@ -713,13 +767,13 @@ Version 1.0 (2025)
 - Detects pydhcpd installation status
 EOF
 
-    local icon_tmp
-    icon_tmp=$(mktemp --suffix=.b64)
-    cat > "$icon_tmp" <<'ICONEOF'
+    if ! base64 -d > "$MODDIR/images/icon.gif" <<'ICONEOF'
 R0lGODlhMAAwAPAAAAAAAAAAACH5BAEAAAAALAAAAAAwADAAAAKrhI+py+0Po5wqJEszCpyf7mkUiAGkOJJqiUKr2krvGS/zDdYGzusmj6vdLjPfynb0/XIVmnLZQTKfsOZU95I6W8NNUQj8yq5hcWRbzk62xOA5BIX/Pj0XML6rP9JuvJ3v4cTGAChncpFR+JSXtshIlgSm5mWWWPlYJdLVFqmxSdlpOQmayRU6isXnGHfnqEhVyBITazgbuxiFWXKlxFJ6uGpVGywsS3yMHFMAADs=
 ICONEOF
-    base64 -d "$icon_tmp" > "$MODDIR/images/icon.gif" 2>/dev/null || true
-    rm -f "$icon_tmp"
+    then
+        rm -f "$MODDIR/images/icon.gif"
+        echo "INFO: could not write module icon -- degraded" >&2
+    fi
 
     chown -R root:root "$MODDIR" "$ETCDIR"
     chmod -R 755 "$MODDIR"
@@ -728,12 +782,20 @@ ICONEOF
     chmod 644 "$MODDIR/images/"* 2>/dev/null || true
 
     if [ -f /etc/webmin/webmin.acl ]; then
-        if ! grep -qE "^root:.*\b${MODNAME}\b" /etc/webmin/webmin.acl 2>/dev/null; then
-            sed -i.bak "s/\(^root:.*\)/\1 $MODNAME/" /etc/webmin/webmin.acl
-            echo "Module added to webmin.acl (backup: /etc/webmin/webmin.acl.bak)"
-        fi
+        for _acct in root "$local_user"; do
+            [ -z "$_acct" ] && continue
+            if ! grep -qE "^${_acct}:" /etc/webmin/webmin.acl; then
+                echo "WARNING: no ${_acct}: line in webmin.acl -- alert" >&2
+                echo "WARNING: grant access to the pydhcp module manually" >&2
+                continue
+            fi
+            grep -qE "^${_acct}:.*\b${MODNAME}\b" /etc/webmin/webmin.acl && continue
+            sed -i "s/\(^${_acct}:.*\)/\1 ${MODNAME}/" /etc/webmin/webmin.acl
+            echo "Module added to webmin.acl for ${_acct}"
+        done
+        unset _acct
     else
-        echo "Warning: /etc/webmin/webmin.acl not found, skipping ACL update"
+        echo "WARNING: webmin.acl not found -- alert" >&2
     fi
 
     rm -f /var/webmin/module.infos.cache
@@ -776,12 +838,12 @@ uninstall_module() {
     echo "Module directories removed"
 
     if [ -f /etc/webmin/webmin.acl ]; then
-        if grep -qw "$MODNAME" /etc/webmin/webmin.acl 2>/dev/null; then
-            sed -i.bak "s/[[:space:]]\+${MODNAME}\b//g" /etc/webmin/webmin.acl
-            echo "Module removed from webmin.acl (backup: /etc/webmin/webmin.acl.bak)"
+        if grep -qw "$MODNAME" /etc/webmin/webmin.acl; then
+            sed -i "s/[[:space:]]\+${MODNAME}\b//g" /etc/webmin/webmin.acl
+            echo "Module removed from webmin.acl"
         fi
     else
-        echo "Warning: /etc/webmin/webmin.acl not found, skipping ACL update"
+        echo "WARNING: webmin.acl not found -- alert" >&2
     fi
 
     rm -f /var/webmin/module.infos.cache
@@ -825,7 +887,7 @@ main() {
                 exit 0
                 ;;
             *)
-                echo "Error: Invalid option '$1'"
+                echo "ERROR: invalid option '$1' -- abort" >&2
                 echo ""
                 show_usage
                 exit 1
