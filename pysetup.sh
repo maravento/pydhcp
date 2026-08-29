@@ -60,7 +60,7 @@ fi
 # Project-wide list: this installer verifies every package the deployed
 # components need at runtime, not just the ones it invokes itself -- e.g.
 # iputils-ping is used by pydhcpd.py when it cannot open a raw ICMP socket.
-for dep in python3 iproute2 mawk passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron; do
+for dep in python3 iproute2 mawk passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl; do
     if ! dpkg -s "$dep" &>/dev/null; then
         log "ERROR: dependency $dep not installed -- abort"
         exit 1
@@ -78,6 +78,7 @@ _UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:
 
 # VARIABLES
 INSTALL_DIR="/etc/pydhcp"
+CORE_DIR="${INSTALL_DIR}/core"
 SERVICE_FILE="/etc/systemd/system/pydhcpd.service"
 INIT_FILE="/etc/init.d/pydhcpd"
 SYSTEM_USER="pydhcpd"
@@ -91,7 +92,7 @@ SYSTEM_USER="pydhcpd"
 # key=value (never sourced), so a "$VAR" inside it would be stored as that
 # literal string, not as a path.
 ACL_PATH="/etc/acl"
-ACL_MAC_PATH="${ACL_PATH}/acl_mac"
+ACL_MAC_PATH="${ACL_PATH}/mac"
 ACL_DHCP_PATH="${INSTALL_DIR}/acl"
 ACL_MAC_LIMITED="${ACL_MAC_PATH}/mac-limited.txt"
 ACL_MAC_UNLIMITED="${ACL_MAC_PATH}/mac-unlimited.txt"
@@ -194,19 +195,6 @@ ask_number() {
             break
         fi
         warn "Invalid value, enter a positive integer"
-    done
-}
-
-ask_port() {
-    local prompt="$1" default="$2" var="$3" answer
-    while true; do
-        read -rp " ${prompt} [Default: ${default}]: " answer
-        answer="${answer:-$default}"
-        if [[ "$answer" =~ $_UH_UINT ]] && (( answer >= 1 && answer <= 65535 )); then
-            printf -v "$var" '%s' "$answer"
-            break
-        fi
-        warn "Invalid port, enter a number between 1 and 65535"
     done
 }
 
@@ -323,14 +311,14 @@ if [[ "${1:-}" == "--update" ]]; then
     systemctl stop pydhcpd 2>/dev/null || true
 
     info "Updating pydhcpd.py ..."
-    verify_source "$SCRIPT_DIR/pydhcpd.py"
-    cp "$SCRIPT_DIR/pydhcpd.py" "$INSTALL_DIR/pydhcpd.py"
-    chown root:root "$INSTALL_DIR/pydhcpd.py"
-    chmod 755 "$INSTALL_DIR/pydhcpd.py"
+    verify_source "$SCRIPT_DIR/core/pydhcpd.py"
+    cp "$SCRIPT_DIR/core/pydhcpd.py" "$CORE_DIR/pydhcpd.py"
+    chown root:root "$CORE_DIR/pydhcpd.py"
+    chmod 755 "$CORE_DIR/pydhcpd.py"
 
     info "Updating systemd unit ..."
-    verify_source "$SCRIPT_DIR/pydhcpd.service"
-    cp "$SCRIPT_DIR/pydhcpd.service" "$SERVICE_FILE"
+    verify_source "$SCRIPT_DIR/service/pydhcpd.service"
+    cp "$SCRIPT_DIR/service/pydhcpd.service" "$SERVICE_FILE"
     chown root:root "$SERVICE_FILE"
     chmod 644 "$SERVICE_FILE"
 
@@ -397,9 +385,9 @@ EOF
 
     echo ""
     success "pydhcpd updated. Backups in /etc/bak"
-    info "$INSTALL_DIR/pydhcpd.conf unchanged"
+    info "$CORE_DIR/pydhcpd.conf unchanged"
     info "$INSTALL_DIR/pydhcp.env unchanged"
-    info "$INSTALL_DIR/pydhcpd.leases unchanged"
+    info "$CORE_DIR/pydhcpd.leases unchanged"
     warn "WPAD/option 252 is set by WPAD_ENABLED,"
     warn "in pydhcp.env, not by editing pyleases.sh."
     warn "This update does not change it."
@@ -410,7 +398,7 @@ fi
 
 # --- INSTALL -----------------------------------------------------------------
 
-if [ -f "$INSTALL_DIR/pydhcpd.py" ]; then
+if [ -f "$CORE_DIR/pydhcpd.py" ]; then
     echo -e "${RED}[ERROR]${NC} pydhcpd is already installed at $INSTALL_DIR." >&2
     error "use --update or --remove instead -- abort"
 fi
@@ -500,15 +488,17 @@ info "DNS servers: $DNS_SERVERS"
 ask_number "DHCP pool lease cleanup interval in seconds" "60" CLEANUP_INTERVAL
 
 # Optional features
-WPAD_ENABLED="false"
 WPAD_PORT="18100"
-if dpkg -s apache2 &>/dev/null; then
-    if confirm "Enable WPAD/PAC proxy auto-configuration? (requires an Apache2 VirtualHost serving wpad.pac)" "n"; then
-        WPAD_ENABLED="true"
-        ask_port "WPAD/PAC port" "18100" WPAD_PORT
-    fi
+# Same check pyleases.sh repeats on every reload -- but this is the only time
+# it ever runs for an admin who manages pydhcpd.conf by hand and never
+# invokes pyleases.sh afterward. No need to ask: if something is already
+# serving wpad.pac on the default port, WPAD is enabled; otherwise it isn't.
+if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://${SERVER_IP}:${WPAD_PORT}/wpad.pac"; then
+    WPAD_ENABLED="true"
+    info "wpad.pac detected on port $WPAD_PORT -- WPAD enabled"
 else
-    info "apache2 not installed, WPAD/PAC not offered -- skip"
+    WPAD_ENABLED="false"
+    info "wpad.pac not detected on port $WPAD_PORT -- WPAD not enabled"
 fi
 # ping-check matches isc-dhcp-server's own default (on unless explicitly
 # disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
@@ -516,7 +506,7 @@ fi
 PING_CHECK_ENABLED="true"
 
 # Verify source files exist
-for f in pydhcpd.py pydhcpd.conf pydhcpd.service init.d/pydhcpd; do
+for f in core/pydhcpd.py core/pydhcpd.conf service/pydhcpd.service init.d/pydhcpd; do
     [ -f "$SCRIPT_DIR/$f" ] || { echo -e "${RED}[ERROR]${NC} missing source file: $f" >&2; error "run pysetup.sh from the project directory -- abort"; }
 done
 
@@ -540,24 +530,27 @@ info "Creating $INSTALL_DIR ..."
 mkdir -p "$INSTALL_DIR"
 chown root:"$SYSTEM_USER" "$INSTALL_DIR"
 chmod 770 "$INSTALL_DIR"
+mkdir -p "$CORE_DIR"
+chown root:"$SYSTEM_USER" "$CORE_DIR"
+chmod 770 "$CORE_DIR"
 
 # Deploy daemon and config files
 info "Deploying pydhcpd.py ..."
-verify_source "$SCRIPT_DIR/pydhcpd.py"
-cp "$SCRIPT_DIR/pydhcpd.py" "$INSTALL_DIR/pydhcpd.py"
-chown root:root "$INSTALL_DIR/pydhcpd.py"
-chmod 755 "$INSTALL_DIR/pydhcpd.py"
+verify_source "$SCRIPT_DIR/core/pydhcpd.py"
+cp "$SCRIPT_DIR/core/pydhcpd.py" "$CORE_DIR/pydhcpd.py"
+chown root:root "$CORE_DIR/pydhcpd.py"
+chmod 755 "$CORE_DIR/pydhcpd.py"
 
 # Deploy pydhcpd.conf (preserved on update -- never overwritten)
-if [ -f "$INSTALL_DIR/pydhcpd.conf" ]; then
+if [ -f "$CORE_DIR/pydhcpd.conf" ]; then
     { warn "pydhcpd.conf already exists in $INSTALL_DIR"; warn "static hosts and blocked MACs kept"; warn "network parameters updated with your answers"; }
 else
     info "Deploying pydhcpd.conf ..."
-    verify_source "$SCRIPT_DIR/pydhcpd.conf"
-    cp "$SCRIPT_DIR/pydhcpd.conf" "$INSTALL_DIR/pydhcpd.conf"
+    verify_source "$SCRIPT_DIR/core/pydhcpd.conf"
+    cp "$SCRIPT_DIR/core/pydhcpd.conf" "$CORE_DIR/pydhcpd.conf"
 fi
-chown root:"$SYSTEM_USER" "$INSTALL_DIR/pydhcpd.conf"
-chmod 640 "$INSTALL_DIR/pydhcpd.conf"
+chown root:"$SYSTEM_USER" "$CORE_DIR/pydhcpd.conf"
+chmod 640 "$CORE_DIR/pydhcpd.conf"
 
 # Create pydhcp's own ACL directories/files (preserved on update -- never
 # overwritten). These lists are only consumed by the optional pyleases.sh
@@ -597,10 +590,10 @@ else
 # /etc/pydhcp/pydhcp.env
 # =============================================================================
 # -- Daemon bootstrap (/etc/default/isc-dhcp-server migration) ----------------
-DHCPDv4_CONF=/etc/pydhcp/pydhcpd.conf
+DHCPDv4_CONF=/etc/pydhcp/core/pydhcpd.conf
 DHCPDv4_BIN=/usr/bin/python3
-DHCPDv4_SCRIPT=/etc/pydhcp/pydhcpd.py
-PYDHCPD_LEASES=$INSTALL_DIR/pydhcpd.leases
+DHCPDv4_SCRIPT=/etc/pydhcp/core/pydhcpd.py
+PYDHCPD_LEASES=$CORE_DIR/pydhcpd.leases
 INTERFACESv4="$IFACE"
 DAEMON_USER="pydhcpd"
 DAEMON_GROUP="pydhcpd"
@@ -643,7 +636,7 @@ chmod 640 "$INSTALL_DIR/pydhcp.env"
 
 # Apply network parameters to pydhcpd.conf
 CONF_TMP=$(mktemp "$INSTALL_DIR/.pydhcpd.conf.XXXXXX") || error "cannot create temp file -- abort"
-cp -f "$INSTALL_DIR/pydhcpd.conf" "$CONF_TMP"
+cp -f "$CORE_DIR/pydhcpd.conf" "$CONF_TMP"
 sed -i "s|^server-identifier .*|server-identifier ${SERVER_IP};|" "$CONF_TMP"
 sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${SUBNET} netmask ${NETMASK}|" "$CONF_TMP"
 sed -i "s|option routers .*;|option routers ${SERVER_IP};|" "$CONF_TMP"
@@ -660,19 +653,19 @@ if [[ "$WPAD_ENABLED" == "true" ]]; then
 else
     sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${SERVER_IP}:${WPAD_PORT}/wpad.pac\";|" "$CONF_TMP"
 fi
-mv -f "$CONF_TMP" "$INSTALL_DIR/pydhcpd.conf"
+mv -f "$CONF_TMP" "$CORE_DIR/pydhcpd.conf"
 info "Network parameters set in pydhcpd.conf"
 
 # Re-apply permissions after sed edits
-chown root:"$SYSTEM_USER" "$INSTALL_DIR/pydhcpd.conf"
-chmod 640 "$INSTALL_DIR/pydhcpd.conf"
+chown root:"$SYSTEM_USER" "$CORE_DIR/pydhcpd.conf"
+chmod 640 "$CORE_DIR/pydhcpd.conf"
 
 # Initialize empty leases file if not present
-if [ ! -f "$INSTALL_DIR/pydhcpd.leases" ]; then
+if [ ! -f "$CORE_DIR/pydhcpd.leases" ]; then
     info "Creating empty pydhcpd.leases ..."
-    touch "$INSTALL_DIR/pydhcpd.leases"
-    chown "$SYSTEM_USER":"$SYSTEM_USER" "$INSTALL_DIR/pydhcpd.leases"
-    chmod 640 "$INSTALL_DIR/pydhcpd.leases"
+    touch "$CORE_DIR/pydhcpd.leases"
+    chown "$SYSTEM_USER":"$SYSTEM_USER" "$CORE_DIR/pydhcpd.leases"
+    chmod 640 "$CORE_DIR/pydhcpd.leases"
 fi
 
 # Deploy tools
@@ -698,8 +691,8 @@ fi
 
 # Deploy systemd service
 info "Deploying systemd unit ..."
-verify_source "$SCRIPT_DIR/pydhcpd.service"
-cp "$SCRIPT_DIR/pydhcpd.service" "$SERVICE_FILE"
+verify_source "$SCRIPT_DIR/service/pydhcpd.service"
+cp "$SCRIPT_DIR/service/pydhcpd.service" "$SERVICE_FILE"
 chown root:root "$SERVICE_FILE"
 chmod 644 "$SERVICE_FILE"
 
@@ -746,9 +739,9 @@ fi
 echo ""
 success "pydhcpd installed and running."
 echo ""
-info "Configuration : $INSTALL_DIR/pydhcpd.conf"
+info "Configuration : $CORE_DIR/pydhcpd.conf"
 info "Interface : $(grep INTERFACESv4 "$INSTALL_DIR/pydhcp.env" | cut -d= -f2 | tr -d '"')"
-info "Leases : $INSTALL_DIR/pydhcpd.leases"
+info "Leases : $CORE_DIR/pydhcpd.leases"
 info "Logs : journalctl -u pydhcpd -f"
 echo ""
 info "To remove : sudo bash pysetup.sh --remove"

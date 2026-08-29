@@ -10,7 +10,7 @@ StartLimitBurst=10
 Type=simple
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONDONTWRITEBYTECODE=1"
-ExecStart=/usr/bin/python3 /etc/pydhcp/pydhcpd.py
+ExecStart=/usr/bin/python3 /etc/pydhcp/core/pydhcpd.py
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5

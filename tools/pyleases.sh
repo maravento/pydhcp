@@ -201,7 +201,7 @@ insert_before_closing_delimiter() {
     local file="$1" content="$2" last_line tmp boundary
     # pydhcp's own section never has a blank line in its body -- the first
     # blank line in the file (if any) marks the boundary before anything
-    # appended after it (e.g. gateproxy.sh's own custom-values block).
+    # appended after it (e.g. another script's own custom-values block).
     # Anchor on the last "# ====" line before that boundary, not the last
     # one in the whole file, so appended blocks are never disturbed.
     boundary=$(grep -n '^$' "$file" | head -1 | cut -d: -f1 || true)
@@ -230,12 +230,12 @@ ensure_own_keys() {
     local -a _bak_old
     declare -A own_defaults=(
         [ACL_PATH]="/etc/acl"
-        [ACL_MAC_PATH]="/etc/acl/acl_mac"
-        [ACL_DHCP_PATH]="/etc/acl/acl_dhcp"
-        [ACL_MAC_LIMITED]="/etc/acl/acl_mac/mac-limited.txt"
-        [ACL_MAC_UNLIMITED]="/etc/acl/acl_mac/mac-unlimited.txt"
-        [ACL_BLOCK_FILE]="/etc/acl/acl_dhcp/blockdhcp.txt"
-        [PYDHCPD_LEASES]="/etc/pydhcp/pydhcpd.leases"
+        [ACL_MAC_PATH]="/etc/acl/mac"
+        [ACL_DHCP_PATH]="/etc/pydhcp/acl"
+        [ACL_MAC_LIMITED]="/etc/acl/mac/mac-limited.txt"
+        [ACL_MAC_UNLIMITED]="/etc/acl/mac/mac-unlimited.txt"
+        [ACL_BLOCK_FILE]="/etc/pydhcp/acl/blockdhcp.txt"
+        [PYDHCPD_LEASES]="/etc/pydhcp/core/pydhcpd.leases"
         [CLEANUP_INTERVAL]="60"
         [AUTHORIZED_LEASE_TIME]="2592000"
         [QUARANTINE_DURATION]="60"
@@ -412,12 +412,12 @@ verify_dhcp_files() {
 }
 
 verify_dhcp_config() {
-    if [ ! -f "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}" ]; then
+    if [ ! -f "${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}" ]; then
         log "ERROR: config file not found -- abort"
         exit 1
     fi
-    chmod 640 "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
-    chown root:"${DAEMON_GROUP:-pydhcpd}" "${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
+    chmod 640 "${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
+    chown root:"${DAEMON_GROUP:-pydhcpd}" "${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
 }
 
 verify_directories() {
@@ -677,7 +677,7 @@ log "INFO: verification OK, pydhcpd active and paths valid"
 
 function is_pydhcp() {
     dhcpd="$PYDHCPD_LEASES"
-    dhcp_conf="${DHCPDv4_CONF:-/etc/pydhcp/pydhcpd.conf}"
+    dhcp_conf="${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
     dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX") || { log "ERROR: cannot create temp file in /etc/pydhcp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
     TEMP_FILES_TO_CLEAN+=("$dhcp_conf_temp")
 
@@ -890,7 +890,7 @@ class "blockdhcp" {
                 continue
             fi
             if grep -qiF ";${mac_actual};" "$ACL_BLOCK_FILE" 2>/dev/null; then
-                log "INFO: removing $mac_actual from blockdhcp (acl_mac)"
+                log "INFO: removing $mac_actual from blockdhcp (mac)"
                 printf ';%s;\n' "$mac_actual" >> "$patterns"
                 (( removed++ )) || true
             fi

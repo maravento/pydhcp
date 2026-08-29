@@ -90,8 +90,8 @@ import tempfile
 
 BASE_DIR        = "/etc/pydhcp"
 PYDHCP_ENV      = os.path.join(BASE_DIR, "pydhcp.env")
-CONF_FILE       = os.path.join(BASE_DIR, "pydhcpd.conf")
-LEASES_FILE     = os.path.join(BASE_DIR, "pydhcpd.leases")
+CONF_FILE       = os.path.join(BASE_DIR, "core", "pydhcpd.conf")
+LEASES_FILE     = os.path.join(BASE_DIR, "core", "pydhcpd.leases")
 # Fixed, not configurable -- see FIXED VALUES above.
 PID_FILE        = "/run/pydhcp/pydhcpd.pid"
 # Fixed, not configurable -- see FIXED VALUES above.

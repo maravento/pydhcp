@@ -82,7 +82,7 @@ for dep in webmin; do
     fi
 done
 
-if [ ! -f "/etc/pydhcp/pydhcpd.py" ]; then
+if [ ! -f "/etc/pydhcp/core/pydhcpd.py" ]; then
     echo "ERROR: pydhcpd is not installed" >&2
     echo "ERROR: install pydhcpd first -- abort" >&2
     exit 1
@@ -253,8 +253,8 @@ sub read_defaults {
 }
 
 my $defaults = read_defaults();
-my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/pydhcpd.py";
-my $LEASES_FILE = $defaults->{PYDHCPD_LEASES} || "/etc/pydhcp/pydhcpd.leases";
+my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/core/pydhcpd.py";
+my $LEASES_FILE = $defaults->{PYDHCPD_LEASES} || "/etc/pydhcp/core/pydhcpd.leases";
 my $SERVICE = "pydhcpd";
 
 my $_UH_MAC  = qr/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/;
@@ -326,12 +326,12 @@ print <<'EOCSS';
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 .pyd-section-title {
-    background: linear-gradient(to bottom, #f8f9fa, #e9ecef);
+    background: linear-gradient(to bottom, #553c7b, #3b2a5a);
     padding: 10px 16px;
     font-weight: 600;
     font-size: 14px;
-    border-bottom: 1px solid #dee2e6;
-    color: inherit;
+    border-bottom: 1px solid #2e2147;
+    color: #fff;
 }
 .pyd-status-bar {
     display: flex;
@@ -363,22 +363,22 @@ print <<'EOCSS';
     text-decoration: none;
     display: inline-block;
 }
-.pyd-btn-start { background:#28a745; color:#fff; border-color:#28a745; }
-.pyd-btn-start:hover { background:#218838; }
-.pyd-btn-stop { background:#dc3545; color:#fff; border-color:#dc3545; }
-.pyd-btn-stop:hover { background:#c82333; }
-.pyd-btn-restart { background:#ffc107; color:#212529; border-color:#ffc107; }
-.pyd-btn-restart:hover { background:#e0a800; }
-.pyd-btn-reload { background:#17a2b8; color:#fff; border-color:#17a2b8; }
-.pyd-btn-reload:hover { background:#138496; }
-.pyd-btn-refresh { background:#6c757d; color:#fff; border-color:#6c757d; }
-.pyd-btn-refresh:hover { background:#5a6268; }
+.pyd-btn-start { background:#1e7e34; color:#fff; border-color:#1e7e34; }
+.pyd-btn-start:hover { background:#17632a; }
+.pyd-btn-stop { background:#a71d2a; color:#fff; border-color:#a71d2a; }
+.pyd-btn-stop:hover { background:#8f1a24; }
+.pyd-btn-restart { background:#cc9a06; color:#212529; border-color:#cc9a06; }
+.pyd-btn-restart:hover { background:#a07d00; }
+.pyd-btn-reload { background:#117a8b; color:#fff; border-color:#117a8b; }
+.pyd-btn-reload:hover { background:#0c5460; }
+.pyd-btn-refresh { background:#495057; color:#fff; border-color:#495057; }
+.pyd-btn-refresh:hover { background:#343a40; }
 .pyd-table {
     width: 100%;
     border-collapse: collapse;
 }
 .pyd-table th {
-    background: #f8f9fa;
+    background: #ced4da;
     padding: 10px 14px;
     text-align: left;
     font-weight: 600;
@@ -412,7 +412,7 @@ print <<'EOCSS';
     padding: 14px 16px;
     background: #fff3cd;
     color: #856404;
-    border-left: 4px solid #ffc107;
+    border-left: 4px solid #ffeeba;
     font-size: 13px;
 }
 </style>
@@ -577,9 +577,9 @@ sub read_defaults {
 }
 
 my $defaults = read_defaults();
-my $CONF_FILE = $defaults->{DHCPDv4_CONF} || "/etc/pydhcp/pydhcpd.conf";
+my $CONF_FILE = $defaults->{DHCPDv4_CONF} || "/etc/pydhcp/core/pydhcpd.conf";
 my $BACKUP_DIR = "/etc/pydhcp/bak/webmin";
-my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/pydhcpd.py";
+my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/core/pydhcpd.py";
 
 # Per-install CSRF secret (see index.cgi): unpredictable to a cross-site
 # attacker and required back as a hidden field on save.
@@ -729,10 +729,10 @@ It provides service control, a live view of active DHCP leases, and a built-in e
 <p><b>Reload:</b> Sends SIGHUP to pydhcpd, reloading the configuration without dropping active leases.</p>
 
 <h3>Active Leases</h3>
-<p>Shows all entries currently in <code>/etc/pydhcp/pydhcpd.leases</code>: IP address, MAC address, hostname (if reported by the client), expiry time, and binding state.</p>
+<p>Shows all entries currently in <code>/etc/pydhcp/core/pydhcpd.leases</code>: IP address, MAC address, hostname (if reported by the client), expiry time, and binding state.</p>
 
 <h3>Configuration</h3>
-<p>Opens <code>/etc/pydhcp/pydhcpd.conf</code> for editing directly in the browser. After saving, click Reload to apply changes without restarting the daemon.</p>
+<p>Opens <code>/etc/pydhcp/core/pydhcpd.conf</code> for editing directly in the browser. After saving, click Reload to apply changes without restarting the daemon.</p>
 
 <footer>
 EOF
@@ -749,10 +749,10 @@ Ofrece control del servicio, una vista en tiempo real de las concesiones DHCP ac
 <p><b>Recargar:</b> Envia SIGHUP a pydhcpd, recargando la configuracion sin interrumpir las concesiones activas.</p>
 
 <h3>Concesiones Activas</h3>
-<p>Muestra todas las entradas actuales en <code>/etc/pydhcp/pydhcpd.leases</code>: direccion IP, direccion MAC, nombre de host (si lo reporta el cliente), hora de expiracion y estado de la concesion.</p>
+<p>Muestra todas las entradas actuales en <code>/etc/pydhcp/core/pydhcpd.leases</code>: direccion IP, direccion MAC, nombre de host (si lo reporta el cliente), hora de expiracion y estado de la concesion.</p>
 
 <h3>Configuracion</h3>
-<p>Abre <code>/etc/pydhcp/pydhcpd.conf</code> para edicion directamente en el navegador. Despues de guardar, haga clic en Recargar para aplicar los cambios sin reiniciar el demonio.</p>
+<p>Abre <code>/etc/pydhcp/core/pydhcpd.conf</code> para edicion directamente en el navegador. Despues de guardar, haga clic en Recargar para aplicar los cambios sin reiniciar el demonio.</p>
 
 <footer>
 EOF
@@ -761,8 +761,8 @@ EOF
 Version 1.0 (2025)
 - Initial release
 - Service control: start, stop, restart, reload (SIGHUP)
-- Active leases table from /etc/pydhcp/pydhcpd.leases
-- Built-in editor for /etc/pydhcp/pydhcpd.conf
+- Active leases table from /etc/pydhcp/core/pydhcpd.leases
+- Built-in editor for /etc/pydhcp/core/pydhcpd.conf
 - Multi-language support (English and Spanish)
 - Detects pydhcpd installation status
 EOF

@@ -18,7 +18,7 @@ NAME=pydhcpd
 
 # Defaults; may be overridden from DEFAULTS_FILE below.
 DAEMON=/usr/bin/python3
-DAEMON_ARGS=/etc/pydhcp/pydhcpd.py
+DAEMON_ARGS=/etc/pydhcp/core/pydhcpd.py
 # Fixed, not read from DEFAULTS_FILE: pyleases.sh and the Webmin module
 # carry this path hardcoded too, so one location, always.
 LOG_FILE="/var/log/pydhcp.log"
