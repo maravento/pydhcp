@@ -26,7 +26,7 @@
 # sudo bash bkstack.sh uninstall  Remove the cron entry (keeps archives)
 #
 # OUTPUT:
-# /etc/bak/bkstack_<YYYYMMDD_HHMM>.zip
+# /etc/bak/pydhcp/bkstack_<YYYYMMDD_HHMM>.zip
 #
 # Kept outside /etc/pydhcp and /etc/uhm on purpose: an uninstall of either
 # project never touches it.
@@ -42,42 +42,53 @@
 
 set -euo pipefail
 
-# PATH for cron
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
+# path for cron
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # logging
 log_file="/var/log/pydhcp.log"
 log() {
-    local msg="$1"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $msg" | tee -a "$log_file" 2>/dev/null || true
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
 }
 
-## root check
+# root check
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: This script must be run as root -- abort" >&2
     exit 1
 fi
 
 # prevent overlapping runs
-SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$SCRIPT_LOCK")
-exec 200>"$SCRIPT_LOCK"
+script_lock="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$script_lock")
+exec 200>"$script_lock"
 if ! flock -n 200; then
     log "ERROR: script $(basename "$0") is already running -- abort"
     exit 1
 fi
 
-# DEPENDENCIES
-for dep in zip coreutils util-linux cron; do
-    if ! dpkg -s "$dep" &>/dev/null; then
-        log "ERROR: missing dependency '$dep' -- abort"
+# dependencies
+for dep_pkg in zip coreutils util-linux cron; do
+    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+        log "ERROR: missing dependency '$dep_pkg' -- abort"
         exit 1
     fi
 done
 
-BACKUP_DIR="/etc/bak"
-ARCHIVE="${BACKUP_DIR}/bkstack_$(date +%Y%m%d_%H%M).zip"
-TARGET="/etc/pydhcp/tools/$(basename "$0")"
+# ------------------------------------------------------------------------------
+# VARIABLES
+# ------------------------------------------------------------------------------
+
+backup_dir="/etc/bak/pydhcp"
+backup_zip="${backup_dir}/bkstack_$(date +%Y%m%d_%H%M).zip"
+installed_path="/etc/pydhcp/tools/$(basename "$0")"
+
+# ------------------------------------------------------------------------------
+# FUNCTIONS
+# ------------------------------------------------------------------------------
 
 # Monthly is the floor, not a recommendation: it exists so an untouched
 # system still has a recent copy. Run it by hand before any change.
@@ -85,32 +96,32 @@ register_cron() {
     # Deploy self first, like uhmwatch.sh: the cron entry must point at a
     # path that exists, whether this ran from the repo or from its final
     # location.
-    local self
-    self="$(readlink -f "$0")"
-    if [ "$self" != "$TARGET" ]; then
-        if ! mkdir -p "$(dirname "$TARGET")"; then
-            log "ERROR: cannot create $(dirname "$TARGET") -- abort"
+    local script_path
+    script_path="$(readlink -f "$0")"
+    if [ "$script_path" != "$installed_path" ]; then
+        if ! mkdir -p "$(dirname "$installed_path")"; then
+            log "ERROR: cannot create $(dirname "$installed_path") -- abort"
             exit 1
         fi
-        install -m 755 -o root -g root "$self" "$TARGET"
-        log "INFO: deployed to $TARGET"
+        install -m 755 -o root -g root "$script_path" "$installed_path"
+        log "INFO: deployed to $installed_path"
     fi
 
-    local cron_entry="@monthly $TARGET"
-    local current
-    current=$(crontab -l 2>/dev/null || true)
-    if echo "$current" | grep -vE '^\s*#' | grep -qF "$TARGET"; then
+    local cron_entry="@monthly $installed_path"
+    local current_crontab
+    current_crontab=$(crontab -l 2>/dev/null || true)
+    if echo "$current_crontab" | grep -vE '^\s*#' | grep -qF "$installed_path"; then
         log "INFO: cron entry already present -- skip"
     else
-        { printf '%s\n%s\n' "$current" "$cron_entry"; } | crontab -
+        { printf '%s\n%s\n' "$current_crontab" "$cron_entry"; } | crontab -
         log "INFO: cron entry registered, runs @monthly"
-        log "INFO: $TARGET"
+        log "INFO: $installed_path"
     fi
 }
 
 deregister_cron() {
-    if crontab -l 2>/dev/null | grep -qF "$TARGET"; then
-        crontab -l 2>/dev/null | grep -vF "$TARGET" | crontab -
+    if crontab -l 2>/dev/null | grep -qF "$installed_path"; then
+        crontab -l 2>/dev/null | grep -vF "$installed_path" | crontab -
         log "INFO: cron entry removed, archives kept"
     else
         log "INFO: no cron entry to remove -- skip"
@@ -138,15 +149,19 @@ esac
 # Start
 log "bkstack start..."
 
-if ! mkdir -p "$BACKUP_DIR"; then
-    log "ERROR: cannot create $BACKUP_DIR -- abort"
+# ------------------------------------------------------------------------------
+# BACKUP
+# ------------------------------------------------------------------------------
+
+if ! mkdir -p "$backup_dir"; then
+    log "ERROR: cannot create $backup_dir -- abort"
     exit 1
 fi
 
 # Everything the two projects own. Anything installed outside their own
 # trees is listed explicitly, so a restore brings back a working system.
-paths=()
-for p in \
+backup_list=()
+for backup_item in \
     /etc/uhm \
     /etc/pydhcp \
     /etc/acl \
@@ -161,29 +176,38 @@ for p in \
     /usr/share/webmin/uhm \
     /usr/share/webmin/pydhcp
 do
-    if [ -e "$p" ]; then
-        paths+=("$p")
+    if [ -e "$backup_item" ]; then
+        backup_list+=("$backup_item")
     else
-        log "INFO: $p not present -- skip"
+        log "INFO: $backup_item not present -- skip"
     fi
 done
 
-if (( ${#paths[@]} == 0 )); then
+if (( ${#backup_list[@]} == 0 )); then
     log "ERROR: none of the expected paths exist"
     log "ERROR: is pydhcp installed? -- abort"
     exit 1
 fi
 
-if zip -r -q "$ARCHIVE" "${paths[@]}"; then
-    chmod 600 "$ARCHIVE"
-    log "INFO: backup written to $ARCHIVE"
+if zip -r -q "$backup_zip" "${backup_list[@]}"; then
+    chmod 600 "$backup_zip"
+    log "INFO: backup written to $backup_zip"
+
+    # keep only the last 3
+    old_backups=("$backup_dir"/bkstack_*.zip)
+    if (( ${#old_backups[@]} > 3 )); then
+        printf '%s\n' "${old_backups[@]}" | sort | head -n -3 | xargs -r rm -f
+    fi
 else
-    rm -f "$ARCHIVE"
+    rm -f "$backup_zip"
     log "ERROR: cannot write the archive"
-    log "ERROR: $ARCHIVE"
+    log "ERROR: $backup_zip"
     log "ERROR: check free space and permissions -- abort"
     exit 1
 fi
 
-# End
+# ------------------------------------------------------------------------------
+# END
+# ------------------------------------------------------------------------------
+
 log "bkstack done at: $(date)"

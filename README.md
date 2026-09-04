@@ -18,6 +18,10 @@
   </tr>
 </table>
 
+### Architecture
+
+📐 [Runtime Architecture Diagram](https://htmlpreview.github.io/?https://raw.githubusercontent.com/maravento/pydhcp/master/docs/pydhcp-architecture.html) — visual walkthrough of the lease/reload pipeline.
+
 ## REQUIREMENTS
 
 ---
@@ -650,6 +654,8 @@ sudo bash tools/pyleases.sh
 
 #### pywebmin
 
+[![pywebmin](https://raw.githubusercontent.com/maravento/pydhcp/master/img/pywebmin.png)](https://www.maravento.com/)
+
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
@@ -771,6 +777,14 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | Project | Version | EOL Date |
 | :-----: | :-----: | :------: |
 | [ISC-DHCP](https://github.com/isc-projects/dhcp) | 4.4.3-P1-4ubuntu2 | 2022 |
+
+## WORKTOOLS
+
+---
+
+- [Archify](https://github.com/tt-a1i/archify)
+- [Webmin](https://webmin.com/) (optional, required by `tools/pywebmin.sh`)
+- [Maintenance Scripts (pyleases, bkstack, pywebmin)](https://github.com/maravento/pydhcp/tree/master/tools)
 
 ## NOTICE
 

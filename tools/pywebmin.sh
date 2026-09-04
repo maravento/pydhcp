@@ -27,6 +27,8 @@
 
 set -euo pipefail
 
+# USAGE
+# Answered before any check: --help must work without root
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -51,32 +53,36 @@ case "${1:-}" in
         ;;
 esac
 
-## root check
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
+
+# root check
 if [ "$(id -u)" != "0" ]; then
     echo "ERROR: This script must be run as root -- abort" >&2
     exit 1
 fi
 
 # prevent overlapping runs
-SCRIPT_LOCK="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$SCRIPT_LOCK")
-exec 200>"$SCRIPT_LOCK"
+script_lock="/var/lock/$(basename "$0" .sh).lock"
+(umask 077; : >> "$script_lock")
+exec 200>"$script_lock"
 if ! flock -n 200; then
     echo "ERROR: script $(basename "$0") is already running -- abort" >&2
     exit 1
 fi
 
-# DEPENDENCIES
-for dep in coreutils util-linux systemd grep sed mawk ncurses-bin; do
-    if ! dpkg -s "$dep" &>/dev/null; then
-        echo "ERROR: missing dependency '$dep' -- abort" >&2
+# dependencies
+for dep_pkg in coreutils util-linux systemd grep sed mawk ncurses-bin; do
+    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+        echo "ERROR: missing dependency '$dep_pkg' -- abort" >&2
         exit 1
     fi
 done
 
-# DEPENDENCIES (external repo)
-for dep in webmin; do
-    if ! dpkg -s "$dep" &>/dev/null; then
+# dependencies (external repo)
+for dep_pkg in webmin; do
+    if ! dpkg -s "$dep_pkg" &>/dev/null; then
         echo "ERROR: 'webmin' is not installed -- abort" >&2
         exit 1
     fi
@@ -88,7 +94,7 @@ if [ ! -f "/etc/pydhcp/core/pydhcpd.py" ]; then
     exit 1
 fi
 
-# LOCAL USER detection
+# local_user detection
 detect_local_user() {
     local uid_min uid_max
     local user uid best_user="" best_uid=999999
@@ -127,9 +133,17 @@ if ! local_user=$(detect_local_user); then
     echo "WARNING: no local user with sudo found -- alert" >&2
 fi
 
-MODNAME="pydhcp"
-MODDIR="/usr/share/webmin/$MODNAME"
-ETCDIR="/etc/webmin/$MODNAME"
+# ------------------------------------------------------------------------------
+# VARIABLES
+# ------------------------------------------------------------------------------
+
+module_name="pydhcp"
+module_dir="/usr/share/webmin/$module_name"
+module_conf_dir="/etc/webmin/$module_name"
+
+# ------------------------------------------------------------------------------
+# FUNCTIONS
+# ------------------------------------------------------------------------------
 
 install_module() {
     echo ""
@@ -139,15 +153,15 @@ install_module() {
     echo ""
 
     echo "Creating PyDHCP module structure..."
-    for _d in "$MODDIR/images" "$MODDIR/lang" "$MODDIR/help" "$ETCDIR"; do
-        if ! mkdir -p "$_d"; then
-            echo "ERROR: cannot create $_d -- abort" >&2
+    for module_subdir in "$module_dir/images" "$module_dir/lang" "$module_dir/help" "$module_conf_dir"; do
+        if ! mkdir -p "$module_subdir"; then
+            echo "ERROR: cannot create $module_subdir -- abort" >&2
             exit 1
         fi
     done
-    unset _d
+    unset module_subdir
 
-    cat > "$MODDIR/module.info" <<'EOF'
+    cat > "$module_dir/module.info" <<'EOF'
 desc=PyDHCP Server
 longdesc=Manage the pydhcpd DHCP server daemon
 category=servers
@@ -156,7 +170,7 @@ version=1.0
 depends=webmin
 EOF
 
-    cat > "$MODDIR/module.info.es" <<'EOF'
+    cat > "$module_dir/module.info.es" <<'EOF'
 desc=Servidor PyDHCP
 longdesc=Administra el demonio DHCP pydhcpd
 category=servers
@@ -165,7 +179,7 @@ version=1.0
 depends=webmin
 EOF
 
-    cat > "$MODDIR/lang/en" <<'EOF'
+    cat > "$module_dir/lang/en" <<'EOF'
 index_title=PyDHCP Server
 index_status=Service Status
 index_leases=Active Leases
@@ -192,7 +206,7 @@ config_error=Error saving configuration.
 config_syntax_error=Syntax error in configuration. Not saved.
 EOF
 
-    cat > "$MODDIR/lang/es" <<'EOF'
+    cat > "$module_dir/lang/es" <<'EOF'
 index_title=Servidor PyDHCP
 index_status=Estado del Servicio
 index_leases=Concesiones Activas
@@ -219,7 +233,7 @@ config_error=Error al guardar la configuracion.
 config_syntax_error=Error de sintaxis en la configuracion. No guardado.
 EOF
 
-    cat > "$MODDIR/index.cgi" <<'INDEXCGI'
+    cat > "$module_dir/index.cgi" <<'INDEXCGI'
 #!/usr/bin/perl
 use strict;
 use warnings;
@@ -257,8 +271,8 @@ my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/core/pydhcpd.py";
 my $LEASES_FILE = $defaults->{PYDHCPD_LEASES} || "/etc/pydhcp/core/pydhcpd.leases";
 my $SERVICE = "pydhcpd";
 
-my $_UH_MAC  = qr/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/;
-my $_UH_IPV4 = qr/^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$/;
+my $UH_MAC  = qr/^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/;
+my $UH_IPV4 = qr/^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$/;
 
 # Per-install CSRF secret: a random value stored 0600 and embedded in every
 # state-changing form, required back on submission. A cross-site attacker
@@ -512,13 +526,13 @@ sub parse_active_leases {
 
     while ($raw =~ /lease\s+([\d.]+)\s*\{(.*?)\}/gs) {
         my ($ip, $body) = ($1, $2);
-        next unless $ip =~ $_UH_IPV4;
+        next unless $ip =~ $UH_IPV4;
         my ($mac) = $body =~ /hardware\s+ethernet\s+([\da-f:]+)\s*;/i;
         my ($hostname) = $body =~ /client-hostname\s+"([^"]+)"\s*;/;
         my ($ends_str) = $body =~ /ends\s+\d+\s+([\d\/]+\s[\d:]+)\s*;/;
         my ($binding) = $body =~ /binding\s+state\s+(\w+)\s*;/;
         next unless $mac && $ends_str;
-        next unless $mac =~ $_UH_MAC;
+        next unless $mac =~ $UH_MAC;
 
         # Convert ends date string to epoch
         my ($year, $month, $day, $hour, $min, $sec) =
@@ -541,7 +555,7 @@ sub parse_active_leases {
 }
 INDEXCGI
 
-    cat > "$MODDIR/config.cgi" <<'CONFIGCGI'
+    cat > "$module_dir/config.cgi" <<'CONFIGCGI'
 #!/usr/bin/perl
 use strict;
 use warnings;
@@ -717,7 +731,7 @@ EOFORM
 &ui_print_footer("index.cgi", $text{'index_title'});
 CONFIGCGI
 
-    cat > "$MODDIR/help/intro.en.html" <<'EOF'
+    cat > "$module_dir/help/intro.en.html" <<'EOF'
 <header>PyDHCP Server</header>
 
 <h3>Introduction</h3>
@@ -737,7 +751,7 @@ It provides service control, a live view of active DHCP leases, and a built-in e
 <footer>
 EOF
 
-    cat > "$MODDIR/help/intro.es.html" <<'EOF'
+    cat > "$module_dir/help/intro.es.html" <<'EOF'
 <header>Servidor PyDHCP</header>
 
 <h3>Introduccion</h3>
@@ -757,7 +771,7 @@ Ofrece control del servicio, una vista en tiempo real de las concesiones DHCP ac
 <footer>
 EOF
 
-    cat > "$MODDIR/CHANGELOG" <<'EOF'
+    cat > "$module_dir/CHANGELOG" <<'EOF'
 Version 1.0 (2025)
 - Initial release
 - Service control: start, stop, restart, reload (SIGHUP)
@@ -767,33 +781,32 @@ Version 1.0 (2025)
 - Detects pydhcpd installation status
 EOF
 
-    if ! base64 -d > "$MODDIR/images/icon.gif" <<'ICONEOF'
+    if ! base64 -d > "$module_dir/images/icon.gif" <<'ICONEOF'
 R0lGODlhMAAwAPAAAAAAAAAAACH5BAEAAAAALAAAAAAwADAAAAKrhI+py+0Po5wqJEszCpyf7mkUiAGkOJJqiUKr2krvGS/zDdYGzusmj6vdLjPfynb0/XIVmnLZQTKfsOZU95I6W8NNUQj8yq5hcWRbzk62xOA5BIX/Pj0XML6rP9JuvJ3v4cTGAChncpFR+JSXtshIlgSm5mWWWPlYJdLVFqmxSdlpOQmayRU6isXnGHfnqEhVyBITazgbuxiFWXKlxFJ6uGpVGywsS3yMHFMAADs=
 ICONEOF
     then
-        rm -f "$MODDIR/images/icon.gif"
+        rm -f "$module_dir/images/icon.gif"
         echo "INFO: could not write module icon -- degraded" >&2
     fi
 
-    chown -R root:root "$MODDIR" "$ETCDIR"
-    chmod -R 755 "$MODDIR"
-    chmod 644 "$MODDIR"/module.info* "$MODDIR/lang/"* "$MODDIR/help/"* "$MODDIR/CHANGELOG" 2>/dev/null || true
-    chmod 755 "$MODDIR"/*.cgi 2>/dev/null || true
-    chmod 644 "$MODDIR/images/"* 2>/dev/null || true
+    chown -R root:root "$module_dir" "$module_conf_dir"
+    chmod -R 755 "$module_dir"
+    chmod 644 "$module_dir"/module.info* "$module_dir/lang/"* "$module_dir/help/"* "$module_dir/CHANGELOG" 2>/dev/null || true
+    chmod 755 "$module_dir"/*.cgi 2>/dev/null || true
+    chmod 644 "$module_dir/images/"* 2>/dev/null || true
 
     if [ -f /etc/webmin/webmin.acl ]; then
-        for _acct in root "$local_user"; do
-            [ -z "$_acct" ] && continue
-            if ! grep -qE "^${_acct}:" /etc/webmin/webmin.acl; then
-                echo "WARNING: no ${_acct}: line in webmin.acl -- alert" >&2
-                echo "WARNING: grant access to the pydhcp module manually" >&2
+        for webmin_account in root "$local_user"; do
+            [ -z "$webmin_account" ] && continue
+            if ! grep -qE "^${webmin_account}:" /etc/webmin/webmin.acl; then
+                echo "INFO: no ${webmin_account}: line in webmin.acl -- skip"
                 continue
             fi
-            grep -qE "^${_acct}:.*\b${MODNAME}\b" /etc/webmin/webmin.acl && continue
-            sed -i "s/\(^${_acct}:.*\)/\1 ${MODNAME}/" /etc/webmin/webmin.acl
-            echo "Module added to webmin.acl for ${_acct}"
+            grep -qE "^${webmin_account}:.*\b${module_name}\b" /etc/webmin/webmin.acl && continue
+            sed -i "s/\(^${webmin_account}:.*\)/\1 ${module_name}/" /etc/webmin/webmin.acl
+            echo "Module added to webmin.acl for ${webmin_account}"
         done
-        unset _acct
+        unset webmin_account
     else
         echo "WARNING: webmin.acl not found -- alert" >&2
     fi
@@ -810,8 +823,8 @@ ICONEOF
     echo "PyDHCP module installed successfully!"
     echo "=========================================="
     echo ""
-    echo "Module location : $MODDIR"
-    echo "Config location : $ETCDIR"
+    echo "Module location : $module_dir"
+    echo "Config location : $module_conf_dir"
     echo ""
     echo "Please log out and log back into Webmin to see the new module."
     echo "You can find it under the 'Servers' category."
@@ -826,20 +839,20 @@ uninstall_module() {
     echo "=========================================="
     echo ""
 
-    if [ ! -d "$MODDIR" ]; then
+    if [ ! -d "$module_dir" ]; then
         echo "Module is not installed."
         echo ""
         return 1
     fi
 
     echo "Removing module directories..."
-    rm -rf "$MODDIR"
-    rm -rf "$ETCDIR"
+    rm -rf "$module_dir"
+    rm -rf "$module_conf_dir"
     echo "Module directories removed"
 
     if [ -f /etc/webmin/webmin.acl ]; then
-        if grep -qw "$MODNAME" /etc/webmin/webmin.acl; then
-            sed -i "s/[[:space:]]\+${MODNAME}\b//g" /etc/webmin/webmin.acl
+        if grep -qw "$module_name" /etc/webmin/webmin.acl; then
+            sed -i "s/[[:space:]]\+${module_name}\b//g" /etc/webmin/webmin.acl
             echo "Module removed from webmin.acl"
         fi
     else
@@ -851,7 +864,7 @@ uninstall_module() {
 
     echo "Restarting Webmin service..."
     if ! { systemctl restart webmin.service 2>/dev/null || /etc/webmin/restart 2>/dev/null; }; then
-        echo "WARNING: Webmin restart failed -- reload it manually so the module is removed from the UI"
+        echo "WARNING: Webmin restart failed -- reload it so the module disappears"
     fi
 
     echo ""
@@ -875,6 +888,10 @@ show_menu() {
     echo -n "Select an option [1-3] [3]: "
 }
 
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
+
 main() {
     if [ $# -gt 0 ]; then
         case "$1" in
@@ -897,10 +914,10 @@ main() {
 
     while true; do
         show_menu
-        read -r option
-        option="${option//[[:space:]]/}"
-        [[ -z "$option" ]] && option="3"
-        case $option in
+        read -r menu_option
+        menu_option="${menu_option//[[:space:]]/}"
+        [[ -z "$menu_option" ]] && menu_option="3"
+        case $menu_option in
             1)
                 install_module
                 echo ""
