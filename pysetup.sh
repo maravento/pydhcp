@@ -61,7 +61,7 @@ fi
 # Project-wide list: this installer verifies every package the deployed
 # components need at runtime, not just the ones it invokes itself -- e.g.
 # iputils-ping is used by pydhcpd.py when it cannot open a raw ICMP socket.
-for dep_pkg in python3 iproute2 mawk passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl; do
+for dep_pkg in python3 iproute2 mawk passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: dependency $dep_pkg not installed -- abort"
         exit 1
@@ -248,10 +248,22 @@ if [[ "${1:-}" == "--remove" ]]; then
     warn "the service, the init.d wrapper, the log and"
     warn "the Webmin module."
     warn "Run tools/bkstack.sh first if you want a backup."
+    warn "/etc/bak is NOT touched."
     warn "Package dependencies are NOT removed."
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" \
         || { info "Aborted by user."; exit 0; }
+
+    echo ""
+    echo "Final confirmation required."
+    echo "Type the word YES (uppercase) to remove pydhcp:"
+    echo ""
+    read -rp " > " confirm_answer
+    if [[ "$confirm_answer" != "YES" ]]; then
+        info "Aborted by user."
+        exit 0
+    fi
+    echo ""
 
     info "Stopping and disabling pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
@@ -278,10 +290,10 @@ if [[ "${1:-}" == "--remove" ]]; then
     [[ "$install_dir" == "/etc/pydhcp" ]] || error "unexpected install dir: $install_dir -- abort"
 
     # Everything under install_dir goes, including the config and the block
-    # list: uninstalling means removing the project. Only bak/ survives, and
-    # tools/bkstack.sh is the way to keep a copy of anything else.
+    # list: uninstalling means removing the project. tools/bkstack.sh is the
+    # way to keep a copy, and it writes to /etc/bak, outside this directory.
     info "Removing $install_dir ..."
-    find "$install_dir" -mindepth 1 -maxdepth 1 ! -name bak -exec rm -rf {} +
+    rm -rf "$install_dir"
 
     info "Removing system user and group $daemon_owner ..."
     userdel "$daemon_owner" 2>/dev/null || warn "User $daemon_owner not found or already removed"
@@ -575,14 +587,7 @@ chmod 640 "$core_dir/pydhcpd.conf"
 mkdir -p "$acl_mac_dir" "$acl_dhcp_dir"
 chmod 700 "$acl_mac_dir" "$acl_dhcp_dir"
 
-if [ ! -f "$acl_block_file" ]; then
-    verify_source "$script_dir/acl/blockdhcp.txt"
-    cp "$script_dir/acl/blockdhcp.txt" "$acl_block_file"
-    chmod 600 "$acl_block_file"
-    chown root:root "$acl_block_file"
-fi
-
-for source_file in "$acl_limited_file" "$acl_unlimited_file"; do
+for source_file in "$acl_block_file" "$acl_limited_file" "$acl_unlimited_file"; do
     if [ ! -f "$source_file" ]; then
         touch "$source_file"
         chmod 600 "$source_file"

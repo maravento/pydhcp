@@ -243,8 +243,7 @@ insert_before_closing_delimiter() {
 # above, already written by pysetup.sh. Backs up the file once, right
 # before the first actual change, as a fallback in case it needs to be undone.
 ensure_own_keys() {
-    local conf_file="$1" env_key added_count=0 bak_dir
-    local -a bak_old
+    local conf_file="$1" env_key added_count=0
     declare -A own_defaults=(
         [ACL_PATH]="/etc/acl"
         [ACL_MAC_PATH]="/etc/acl/mac"
@@ -266,18 +265,10 @@ ensure_own_keys() {
                WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS; do
         if ! grep -q "^${env_key}=" "$conf_file"; then
             if (( ! added_count )); then
-                bak_dir="$(dirname "$conf_file")/bak"
-                if mkdir -p "$bak_dir"; then
-                    cp -f "$conf_file" "$bak_dir/$(basename "$conf_file").$(date +%Y%m%d_%H%M%S)"
-                    log "INFO: backed up pydhcp.env to bak/"
-                    shopt -s nullglob
-                    bak_old=("$bak_dir"/pydhcp.env.*)
-                    shopt -u nullglob
-                    if (( ${#bak_old[@]} > 3 )); then
-                        rm -f "${bak_old[@]:0:${#bak_old[@]}-3}"
-                    fi
+                if cp -f "$conf_file" "${conf_file}.bak"; then
+                    log "INFO: backed up pydhcp.env to pydhcp.env.bak"
                 else
-                    log "ERROR: cannot create $bak_dir -- abort"
+                    log "ERROR: cannot back up pydhcp.env -- abort"
                     exit 1
                 fi
             fi
@@ -530,7 +521,7 @@ dedup_mac_vs() {
     rm -f "$tmp_file" "$dropped_count"
 }
 
-function check_duplicate() {
+check_duplicate() {
     # -- mac-*.txt vs itself: fatal, admin must fix by hand ------------------
     shopt -s nullglob
     local acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
@@ -569,7 +560,7 @@ function check_duplicate() {
 # blockdhcp pool) is defined there. A mac-*.txt IP landing inside it is
 # always a misconfiguration. Unrelated to duplicate detection -- kept as
 # its own guard, called alongside check_duplicate but never merged into it.
-function check_mac_ip_ranges() {
+check_mac_ip_ranges() {
     shopt -s nullglob
     local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
@@ -694,7 +685,7 @@ check_duplicate
 check_mac_ip_ranges
 log "INFO: verification OK, pydhcpd active and paths valid"
 
-function is_pydhcp() {
+is_pydhcp() {
     leases_file="$PYDHCPD_LEASES"
     dhcp_conf="${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
     dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX") || { log "ERROR: cannot create temp file in /etc/pydhcp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
@@ -702,7 +693,7 @@ function is_pydhcp() {
 
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
-    function read_leases() {
+    read_leases() {
         # grep returns exit 1 on no-match, which is legitimate here and must
         # not abort the script. Disable pipefail for the duration of this
         # function and restore it on return -- restore only if it was
@@ -733,6 +724,7 @@ function is_pydhcp() {
                     mac_address=$(echo "$lease_content" | grep -oE "$UH_MAC_RE" | head -1 | tr '[:upper:]' '[:lower:]')
                     ip_address=$(echo "$lease_content" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
                     host_candidate=$(echo "$lease_content" | grep -oE 'client-hostname "[^"]+"' | cut -d'"' -f2 | tr " " "_")
+                    host_candidate=$(echo "$host_candidate" | tr -cd 'A-Za-z0-9._-' | cut -c1-63)
                     client_name="${host_candidate:-no_name_$(head -c100 /dev/urandom | sha1sum | head -c10)}"
 
                     if [[ -n "$ip_address" ]] && ! [[ "$ip_address" =~ $UH_IPV4 ]]; then
@@ -794,7 +786,7 @@ function is_pydhcp() {
 
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
-    function update_dhcp_conf {
+    update_dhcp_conf() {
         echo "# pydhcpd Configuration
 authoritative;
 cleanup-interval $CLEANUP_INTERVAL;
@@ -887,7 +879,7 @@ class "blockdhcp" {
 
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
-    function clean_block_list {
+    clean_block_list() {
         local removed_count=0 file_temp line_patterns
         file_temp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
         temp_files+=("${file_temp}")
@@ -936,14 +928,14 @@ class "blockdhcp" {
 
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
-    function clean_acl {
+    clean_acl() {
         log "INFO: removing empty lines from ACL files"
         sed '/^$/d' -i "$ACL_BLOCK_FILE"
         sed '/^$/d' -i "$ACL_MAC_LIMITED"
         sed '/^$/d' -i "$ACL_MAC_UNLIMITED"
     }
 
-    function order_files_acl {
+    order_files_acl() {
         sort -V "$ACL_BLOCK_FILE" -o "$ACL_BLOCK_FILE"
         # mac-*.txt: sorted by IP (field 3). Purely cosmetic -- update_dhcp_conf()
         # and the pydhcpd.py host{} parsing are both order-independent.

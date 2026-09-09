@@ -121,7 +121,7 @@ register_cron() {
 
 deregister_cron() {
     if crontab -l 2>/dev/null | grep -qF "$installed_path"; then
-        crontab -l 2>/dev/null | grep -vF "$installed_path" | crontab -
+        crontab -l 2>/dev/null | { grep -vF "$installed_path" || true; } | crontab -
         log "INFO: cron entry removed, archives kept"
     else
         log "INFO: no cron entry to remove -- skip"

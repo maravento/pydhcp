@@ -73,7 +73,7 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in coreutils util-linux systemd grep sed mawk ncurses-bin; do
+for dep_pkg in coreutils util-linux systemd grep sed mawk ncurses-bin perl; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         echo "ERROR: missing dependency '$dep_pkg' -- abort" >&2
         exit 1
@@ -126,8 +126,8 @@ detect_local_user() {
     echo "$best_user"
 }
 
-# The Webmin module is a read-only log viewer, so a missing local user is not
-# fatal: the module stays installed and usable by the Webmin root account.
+# A missing local user is not fatal: the module stays installed and usable by
+# the Webmin root account.
 if ! local_user=$(detect_local_user); then
     local_user=""
     echo "WARNING: no local user with sudo found -- alert" >&2
@@ -560,8 +560,6 @@ INDEXCGI
 use strict;
 use warnings;
 use File::Copy;
-use File::Path qw(make_path);
-use File::Basename;
 use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 
 do '../web-lib.pl';
@@ -592,7 +590,6 @@ sub read_defaults {
 
 my $defaults = read_defaults();
 my $CONF_FILE = $defaults->{DHCPDv4_CONF} || "/etc/pydhcp/core/pydhcpd.conf";
-my $BACKUP_DIR = "/etc/pydhcp/bak/webmin";
 my $DAEMON_BIN = $defaults->{DHCPDv4_SCRIPT} || "/etc/pydhcp/core/pydhcpd.py";
 
 # Per-install CSRF secret (see index.cgi): unpredictable to a cross-site
@@ -666,19 +663,10 @@ if (($in{'action'} || '') eq 'save' && defined $in{'conf_content'}) {
                 $message = "<div style='margin:10px 0;padding:10px 14px;background:#f8d7da;color:#721c24;border-radius:4px;border:1px solid #f5c6cb;font-size:13px;'>$text{'config_error'}: refusing to write through symlink</div>\n";
             } else {
                 if (-f $CONF_FILE) {
-                    my @t = localtime();
-                    my $ts = sprintf("%04d%02d%02d_%02d%02d%02d",
-                        $t[5]+1900, $t[4]+1, $t[3], $t[2], $t[1], $t[0]);
-                    if (make_path($BACKUP_DIR) || -d $BACKUP_DIR) {
-                        my $dest = "$BACKUP_DIR/" . basename($CONF_FILE) . ".$ts";
-                        unless (-l $dest) {
-                            copy($CONF_FILE, $dest);
-                            chmod(0640, $dest);
-                        }
-                    }
-                    my @backups = sort glob("$BACKUP_DIR/*");
-                    if (@backups > 3) {
-                        unlink(@backups[0 .. (@backups - 4)]);
+                    my $dest = "$CONF_FILE.webmin.bak";
+                    unless (-l $dest) {
+                        copy($CONF_FILE, $dest);
+                        chmod(0640, $dest);
                     }
                 }
                 if (rename($tmpfile, $CONF_FILE)) {

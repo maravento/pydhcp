@@ -180,6 +180,7 @@ MSG_INFORM   = 8
 OPT_SUBNET_MASK        = 1
 OPT_ROUTERS            = 3
 OPT_DNS                = 6
+OPT_HOSTNAME           = 12
 OPT_BROADCAST          = 28
 OPT_REQUESTED_IP       = 50
 OPT_LEASE_TIME         = 51
@@ -1304,7 +1305,7 @@ def parse_packet(data):
         pkt["msg_type"] = 0
     else:
         pkt["msg_type"] = msg_type_opt[0]
-    raw_hostname = pkt["options"].get(12, b"").decode("ascii", errors="replace").strip("\x00").strip()
+    raw_hostname = pkt["options"].get(OPT_HOSTNAME, b"").decode("ascii", errors="replace").strip("\x00").strip()
     pkt["hostname"] = re.sub(r'[\x00-\x1f\x7f"\\;{}%]', '', raw_hostname).strip()
     opt_req_ip = pkt["options"].get(OPT_REQUESTED_IP, b"\x00\x00\x00\x00")
     pkt["requested_ip"] = bytes_to_ip(opt_req_ip) if len(opt_req_ip) == 4 else "0.0.0.0"

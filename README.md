@@ -26,11 +26,11 @@
 
 ---
 
-**⚠️ WARNING:** Only tested on Ubuntu 24.04 LTS. Other versions or distros not tested, use at your own risk.
+**⚠️ WARNING:** Only tested on Ubuntu 24.04 LTS. Other versions or distributions are not tested and are used at your own risk.
 
 - Python 3.8+
 - systemd
-- iproute2, gawk, passwd, util-linux, coreutils, grep, sed, iputils-ping, findutils, libc-bin
+- iproute2, gawk, passwd, util-linux, coreutils, grep, sed, iputils-ping, findutils, libc-bin, logrotate
 
 ## ISC-DHCP-SERVER VS PYDHCP
 
@@ -219,9 +219,9 @@ pydhcp/
 /etc/pydhcp/core/pydhcpd.leases                  # Active leases database
 /run/pydhcp/pydhcpd.pid                          # PID file, written by the daemon
                                                  # (systemd creates the directory)
-/etc/pydhcp/bak/pydhcp.env.<TIMESTAMP>           # pydhcp.env backup by pyleases.sh before adding keys, up to 3 kept
-/etc/bak/bkstack_<TIMESTAMP>.zip                 # Full backup written by tools/bkstack.sh
-/etc/pydhcp/bak/webmin/pydhcpd.conf.<TIMESTAMP>  # Up to 3 kept, written by the Webmin module (pywebmin.sh) on each save
+/etc/pydhcp/pydhcp.env.bak                       # pydhcp.env rollback copy by pyleases.sh before adding keys, 1 kept
+/etc/bak/pydhcp/bkstack_<TIMESTAMP>.zip          # Full project backup written by tools/bkstack.sh, up to 3 kept
+/etc/pydhcp/core/pydhcpd.conf.webmin.bak         # Rollback copy written by the Webmin module (pywebmin.sh) on each save, 1 kept
 /etc/webmin/pydhcp/.csrf_token                   # CSRF secret for the Webmin module (pywebmin.sh), mode 0600
 ```
 
@@ -283,7 +283,8 @@ sudo bash pysetup.sh --remove
 | `/etc/logrotate.d/pydhcp` | ⛔ preserved | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
 | `acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ✅ removed |
-| `bak/` (copies written by `tools/pyleases.sh` and the Webmin module) | ⛔ preserved | ⛔ preserved |
+| `pydhcp.env.bak`, `core/pydhcpd.conf.bak`, `core/pydhcpd.conf.webmin.bak` (rollback copies) | ⛔ preserved | ✅ removed |
+| `/etc/bak/` (project backups written by `tools/bkstack.sh`) | ⛔ preserved | ⛔ preserved |
 | `/etc/acl/mac/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
 
 > `/etc/acl` is never touched by `--remove`. It holds the administrator's own `mac-*.txt` lists, edited by hand, which `pydhcp` may or may not use depending on whether the optional `tools/pyleases.sh` tool is ever run — `pysetup.sh` creates the directory regardless, so uninstalling the daemon does not assume that data is safe to discard.
@@ -484,7 +485,7 @@ Los cuatro valores anteriores deben ser como mínimo `1`. Un valor menor que `1`
 | `pydhcp.env` | `root:pydhcpd` | `640` | reads | Same as above. `640` keeps it out of reach of other users |
 | `pydhcpd.leases` | `pydhcpd:pydhcpd` | `640` | replaces atomically | Daemon-owned because the daemon writes it: the atomic replace creates a new file and renames it over this one, so the result carries the writer's ownership |
 | `pydhcpd.conf.bak` | `root:root` | `640` | never touches it | Single rollback copy written by `tools/pyleases.sh` before it regenerates the config, and restored automatically if the daemon then fails to start. Created with `cp`, which preserves the source's `640` |
-| `bak/webmin/pydhcpd.conf.<TIMESTAMP>` | `root:root` | `640` | never touches it | Up to 3 kept by the Webmin module (`tools/pywebmin.sh`), one per save from the browser editor, so repeated saves do not overwrite the original. Perl's `File::Copy` does not preserve the source mode, so `config.cgi` applies `chmod 0640` explicitly — otherwise the backup would land at whatever root's umask dictates and end up more permissive than the config it copies |
+| `pydhcpd.conf.webmin.bak` | `root:root` | `640` | never touches it | Single rollback copy written by the Webmin module (`tools/pywebmin.sh`) before each save from the browser editor. Kept under its own name, not `pydhcpd.conf.bak`, so the two never overwrite each other: that one belongs to `pyleases.sh`/`uhmleases.sh` and undoes an automatic rebuild, this one undoes a manual edit. Perl's `File::Copy` does not preserve the source mode, so `config.cgi` applies `chmod 0640` explicitly — otherwise the backup would land at whatever root's umask dictates and end up more permissive than the config it copies |
 | `/var/log/pydhcp.log` | `pydhcpd:pydhcpd` | `640` | appends | Daemon-owned so it can write. `pysetup.sh` and `tools/pyleases.sh` also write to it, but they run as root |
 | `tools/` | `root:root` | `755` | never touches it | Run manually by root; not part of the daemon's runtime |
 | `pydhcpd.service` | `root:root` | `644` | — | Belongs to systemd |
@@ -572,14 +573,14 @@ sudo bash tools/pyleases.sh
       <ul>
         <li><code>--update</code> calls <code>tools/bkstack.sh</code> before overwriting anything, which writes a full backup to <code>/etc/bak/</code>. <code>pydhcpd.conf</code> is <b>never overwritten</b>. <code>pydhcp.env</code> keeps every user config value except <code>LOG_FILE</code>, which is kept in sync to the shipped path on every <code>--update</code>. Any manual edit to the code files (<code>pydhcpd.py</code>, <code>pyleases.sh</code>, <code>pywebmin.sh</code>) will be replaced.</li>
         <li>⚠️ <b>WARNING:</b> <code>pyleases.sh</code> fully rebuilds <code>/etc/pydhcp/core/pydhcpd.conf</code> on every run from its ACL files and <code>pydhcp.env</code>. Any manual edits to <code>pydhcpd.conf</code> — including custom lease times, pools, or directives — will be lost. If you manage <code>pydhcpd.conf</code> manually, do not use <code>pyleases.sh</code>.</li>
-        <li><b>Classes and pools:</b> the daemon supports several <code>pool { }</code> blocks and any number of <code>class</code>/<code>subclass</code> declarations. <code>pyleases.sh</code>, by design, only ever writes what this project documents: one pool with <code>deny members of "blockdhcp";</code>, plus the <code>fixed-address</code> reservations from the <code>mac-*.txt</code> lists. Any extra class or pool added by hand is discarded on the next run. Neither is a hard limit: <code>pyleases.sh</code> is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes <code>pydhcpd.conf</code> and emit them there — the daemon will honour whatever the file ends up containing. Keep your own copy of any such change: <code>pysetup.sh --update</code> replaces the script with the shipped version, and although it saves the previous one under <code>/etc/pydhcp/bak/&lt;TIMESTAMP&gt;/</code>, the edit has to be reapplied by hand after every update.</li>
+        <li><b>Classes and pools:</b> the daemon supports several <code>pool { }</code> blocks and any number of <code>class</code>/<code>subclass</code> declarations. <code>pyleases.sh</code>, by design, only ever writes what this project documents: one pool with <code>deny members of "blockdhcp";</code>, plus the <code>fixed-address</code> reservations from the <code>mac-*.txt</code> lists. Any extra class or pool added by hand is discarded on the next run. Neither is a hard limit: <code>pyleases.sh</code> is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes <code>pydhcpd.conf</code> and emit them there — the daemon will honour whatever the file ends up containing. Keep your own copy of any such change: <code>pysetup.sh --update</code> replaces the script with the shipped version, and although <code>tools/bkstack.sh</code> saves the previous one inside <code>/etc/bak/pydhcp/bkstack_&lt;TIMESTAMP&gt;.zip</code>, the edit has to be reapplied by hand after every update.</li>
       </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
       <ul>
         <li><code>--update</code> llama a <code>tools/bkstack.sh</code> antes de sobrescribir nada, que escribe una copia completa en <code>/etc/bak/</code>. <code>pydhcpd.conf</code> <b>nunca se sobreescribe</b>. <code>pydhcp.env</code> conserva cada valor de configuración del usuario excepto <code>LOG_FILE</code>, que se mantiene sincronizado con la ruta del paquete en cada <code>--update</code>. Cualquier edición manual a los archivos de código (<code>pydhcpd.py</code>, <code>pyleases.sh</code>, <code>pywebmin.sh</code>) será reemplazada.</li>
         <li>⚠️ <b>ADVERTENCIA:</b> <code>pyleases.sh</code> reconstruye completamente <code>/etc/pydhcp/core/pydhcpd.conf</code> en cada ejecución a partir de sus archivos ACL y <code>pydhcp.env</code>. Cualquier edición manual a <code>pydhcpd.conf</code> — incluyendo lease times, pools o directivas personalizadas — se perderá. Si gestiona <code>pydhcpd.conf</code> manualmente, no utilice <code>pyleases.sh</code>.</li>
-        <li><b>Clases y pools:</b> el demonio soporta varios bloques <code>pool { }</code> y cualquier cantidad de declaraciones <code>class</code>/<code>subclass</code>. <code>pyleases.sh</code>, por diseño, solo escribe lo que este proyecto documenta: un pool con <code>deny members of "blockdhcp";</code>, más las reservas <code>fixed-address</code> de las listas <code>mac-*.txt</code>. Cualquier clase o pool agregado a mano se descarta en la siguiente ejecución. Ninguna de las dos es una camisa de fuerza: <code>pyleases.sh</code> es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe <code>pydhcpd.conf</code> y emitirlos ahí — el demonio va a respetar lo que el archivo termine conteniendo. Guarde su propia copia de ese cambio: <code>pysetup.sh --update</code> reemplaza el script por la versión del repositorio y, aunque respalda el anterior en <code>/etc/pydhcp/bak/&lt;TIMESTAMP&gt;/</code>, la edición hay que volver a aplicarla a mano tras cada actualización.</li>
+        <li><b>Clases y pools:</b> el demonio soporta varios bloques <code>pool { }</code> y cualquier cantidad de declaraciones <code>class</code>/<code>subclass</code>. <code>pyleases.sh</code>, por diseño, solo escribe lo que este proyecto documenta: un pool con <code>deny members of "blockdhcp";</code>, más las reservas <code>fixed-address</code> de las listas <code>mac-*.txt</code>. Cualquier clase o pool agregado a mano se descarta en la siguiente ejecución. Ninguna de las dos es una camisa de fuerza: <code>pyleases.sh</code> es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe <code>pydhcpd.conf</code> y emitirlos ahí — el demonio va a respetar lo que el archivo termine conteniendo. Guarde su propia copia de ese cambio: <code>pysetup.sh --update</code> reemplaza el script por la versión del repositorio y, aunque <code>tools/bkstack.sh</code> respalda el anterior dentro de <code>/etc/bak/pydhcp/bkstack_&lt;TIMESTAMP&gt;.zip</code>, la edición hay que volver a aplicarla a mano tras cada actualización.</li>
       </ul>
     </td>
   </tr>
@@ -648,9 +649,20 @@ sudo bash tools/pyleases.sh
 | `sudo bash bkstack.sh install` | Register the `@monthly` cron entry | Registrar la entrada mensual en cron |
 | `sudo bash bkstack.sh uninstall` | Remove the cron entry, keeping the archives | Quitar la entrada de cron, conservando los comprimidos |
 
-> Backs up both projects into `/etc/bak/bkstack_<TIMESTAMP>.zip`: their install trees, the shared ACL lists, the systemd units, the `init.d` wrapper, the logrotate config and the Webmin modules. Paths that do not exist are skipped, so it works whether `uhm` is installed or only `pydhcp`. The archive lives outside `/etc/pydhcp` and `/etc/uhm`, so uninstalling either project never touches it. Restore by unzipping it over `/`.
+> Backs up both projects into `/etc/bak/pydhcp/bkstack_<TIMESTAMP>.zip`: their install trees, the shared ACL lists, the systemd units, the `init.d` wrapper, the logrotate config and the Webmin modules. Paths that do not exist are skipped, so it works whether `uhm` is installed or only `pydhcp`. The archive lives outside `/etc/pydhcp` and `/etc/uhm`, so uninstalling either project never touches it. Restore by unzipping it over `/`.
 >
-> Respalda ambos proyectos en `/etc/bak/bkstack_<TIMESTAMP>.zip`: sus árboles de instalación, las listas ACL compartidas, las unidades de systemd, el wrapper de `init.d`, la configuración de logrotate y los módulos de Webmin. Las rutas que no existan se omiten, así que funciona tanto con `uhm` instalado como solo con `pydhcp`. El comprimido vive fuera de `/etc/pydhcp` y `/etc/uhm`, así que desinstalar cualquiera de los dos no lo toca. Para restaurar, descomprímalo sobre `/`.
+> Respalda ambos proyectos en `/etc/bak/pydhcp/bkstack_<TIMESTAMP>.zip`: sus árboles de instalación, las listas ACL compartidas, las unidades de systemd, el wrapper de `init.d`, la configuración de logrotate y los módulos de Webmin. Las rutas que no existan se omiten, así que funciona tanto con `uhm` instalado como solo con `pydhcp`. El comprimido vive fuera de `/etc/pydhcp` y `/etc/uhm`, así que desinstalar cualquiera de los dos no lo toca. Para restaurar, descomprímalo sobre `/`.
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      There are two kinds of backup in this project and they follow different rules. A <b>project backup</b> is a copy of the whole install, kept for the administrator: it goes to <code>/etc/bak/pydhcp</code>, carries a timestamp and keeps up to 3 copies. Only <code>bkstack.sh</code> writes one. A <b>routine-operation backup</b> is the copy a script takes of one specific file right before modifying it, so the change can be undone: it goes next to the file it copies, as <code>&lt;file&gt;.bak</code>, and keeps a single copy overwritten on every run. What decides the kind is what is copied, not how long the copy lasts.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      En este proyecto hay dos clases de respaldo y no se rigen igual. Un <b>respaldo de proyecto</b> es la copia de la instalación entera, guardada para el administrador: va a <code>/etc/bak/pydhcp</code>, lleva marca de tiempo y conserva hasta 3 copias. Solo <code>bkstack.sh</code> escribe una. Un <b>respaldo de operación rutinaria</b> es la copia que un script toma de un archivo concreto justo antes de modificarlo, para poder deshacer el cambio: va junto al archivo que copia, como <code>&lt;archivo&gt;.bak</code>, y conserva una sola copia, sobrescrita en cada ejecución. Lo que decide la clase es qué se copia, no cuánto dura la copia.
+    </td>
+  </tr>
+</table>
 
 #### pywebmin
 
@@ -673,7 +685,7 @@ sudo bash tools/pyleases.sh
 |---------|--------------|-------------|
 | **Service control** | Start / Stop / Restart / Reload buttons for `pydhcpd`. | Botones Iniciar / Detener / Reiniciar / Recargar para `pydhcpd`. |
 | **Active leases table** | IP, MAC, hostname, expiry and binding state, read from `pydhcpd.leases`. | IP, MAC, hostname, expiración y estado, leídos de `pydhcpd.leases`. |
-| **Config editor** | Edits `pydhcpd.conf` in the browser; validated with `pydhcpd.py -t -cf` before saving, rejected on syntax error. Up to 3 backups kept under `/etc/pydhcp/bak/webmin/`. | Edita `pydhcpd.conf` en el navegador; se valida con `pydhcpd.py -t -cf` antes de guardar, se rechaza si hay error de sintaxis. Guarda hasta 3 respaldos en `/etc/pydhcp/bak/webmin/`. |
+| **Config editor** | Edits `pydhcpd.conf` in the browser; validated with `pydhcpd.py -t -cf` before saving, rejected on syntax error. Before each save it keeps a single rollback copy as `pydhcpd.conf.webmin.bak`, next to the file. | Edita `pydhcpd.conf` en el navegador; se valida con `pydhcpd.py -t -cf` antes de guardar, se rechaza si hay error de sintaxis. Antes de cada guardado conserva una única copia de rollback como `pydhcpd.conf.webmin.bak`, junto al archivo. |
 | **State badges** | Color-coded: Active (`#d4edda`/`#155724`), Inactive (`#f8d7da`/`#721c24`), Unknown (`#e2e3e5`/`#383d41`), Warning (`#fff3cd`/`#856404`). | Con color: Active (`#d4edda`/`#155724`), Inactive (`#f8d7da`/`#721c24`), Unknown (`#e2e3e5`/`#383d41`), Warning (`#fff3cd`/`#856404`). |
 
 ```bash
