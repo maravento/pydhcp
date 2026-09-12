@@ -615,9 +615,9 @@ DHCPDv4_CONF=/etc/pydhcp/core/pydhcpd.conf
 DHCPDv4_BIN=/usr/bin/python3
 DHCPDv4_SCRIPT=/etc/pydhcp/core/pydhcpd.py
 PYDHCPD_LEASES=$core_dir/pydhcpd.leases
-INTERFACESv4="$iface_selected"
-DAEMON_USER="pydhcpd"
-DAEMON_GROUP="pydhcpd"
+INTERFACESv4=$iface_selected
+DAEMON_USER=pydhcpd
+DAEMON_GROUP=pydhcpd
 # -- Network values (chosen by the administrator during install) --------------
 SERVER_IP=$server_ip_answer
 SERV_SUBNET=$local_subnet
