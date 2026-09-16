@@ -113,7 +113,7 @@ script_lock="/var/lock/$(basename "$0" .sh).lock"
 exec 200>"$script_lock"
 if ! flock -w 10 200; then
     log "INFO: another run in progress -- skip"
-    log "pyleases done at: $(date)"
+    log "pyleases done at: $(date '+%Y-%m-%d %H:%M:%S')"
     exit 0
 fi
 
@@ -283,9 +283,10 @@ ensure_own_keys "$env_file"
 # Load only known KEY=VALUE pairs from env_file instead of sourcing it,
 # so a tampered or maliciously replaced env file cannot execute code.
 load_conf() {
-    local conf_file="$1" env_line env_key env_value
-    while IFS= read -r env_line || [ -n "$env_line" ]; do
-        [[ "$env_line" =~ ^[[:space:]]*# ]] && continue
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
         [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
         env_key="${env_line%%=*}"
         env_value="${env_line#*=}"
@@ -703,7 +704,7 @@ is_pydhcp() {
         local current_lease="" lease_content=""
 
         while IFS= read -r acl_line; do
-            if echo "$acl_line" | grep -qE '^lease [0-9,.]+ {$'; then
+            if echo "$acl_line" | grep -qE '^lease [0-9.]+ \{$'; then
                 current_lease="$acl_line"
                 lease_content="$acl_line"$'\n'
                 continue
@@ -996,4 +997,4 @@ log "INFO: unlimited=$(count_active "$ACL_MAC_UNLIMITED")"
 # END
 # ------------------------------------------------------------------------------
 
-log "pyleases done at: $(date)"
+log "pyleases done at: $(date '+%Y-%m-%d %H:%M:%S')"

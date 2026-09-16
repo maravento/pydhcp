@@ -10,10 +10,10 @@
 <table>
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>pydhcp</b> is an open-source IPv4 DHCP server written in Python. Since <a href="https://github.com/isc-projects/dhcp">isc-dhcp-server</a> reached End-of-Life (EOL) in 2022, pydhcp aims to preserve many of its familiar features and configuration style for anyone looking to migrate, offering a friendly, similar-feeling alternative rather than a full replacement. It implements RFC 2131 over UDP 67/68, uses a compatible configuration syntax and lease file format under its own file paths, and runs as a native <code>systemd</code> service with an <code>init.d</code> wrapper included.
+      <b>PyDHCP</b> is an open-source IPv4 DHCP server written in Python. Since <a href="https://github.com/isc-projects/dhcp">isc-dhcp-server</a> reached End-of-Life (EOL) in 2022, pydhcp aims to preserve many of its familiar features and configuration style for anyone looking to migrate, offering a friendly, similar-feeling alternative rather than a full replacement. It implements RFC 2131 over UDP 67/68, uses a compatible configuration syntax and lease file format under its own file paths, and runs as a native <code>systemd</code> service with an <code>init.d</code> wrapper included.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>pydhcp</b> es un servidor DHCP IPv4 de código abierto escrito en Python. Dado que <a href="https://github.com/isc-projects/dhcp">isc-dhcp-server</a> alcanzó su fin de vida (EOL) en 2022, pydhcp busca conservar muchas de sus características y estilo de configuración habituales para quienes quieran migrar, ofreciendo una alternativa amigable y similar, no un reemplazo completo. Implementa RFC 2131 sobre UDP 67/68, usa sintaxis de configuración y formato de concesiones compatible bajo sus propias rutas de archivo, y corre como servicio <code>systemd</code> nativo con wrapper <code>init.d</code> incluido.
+      <b>PyDHCP</b> es un servidor DHCP IPv4 de código abierto escrito en Python. Dado que <a href="https://github.com/isc-projects/dhcp">isc-dhcp-server</a> alcanzó su fin de vida (EOL) en 2022, pydhcp busca conservar muchas de sus características y estilo de configuración habituales para quienes quieran migrar, ofreciendo una alternativa amigable y similar, no un reemplazo completo. Implementa RFC 2131 sobre UDP 67/68, usa sintaxis de configuración y formato de concesiones compatible bajo sus propias rutas de archivo, y corre como servicio <code>systemd</code> nativo con wrapper <code>init.d</code> incluido.
     </td>
   </tr>
 </table>
@@ -26,7 +26,7 @@
 
 ---
 
-**⚠️ WARNING:** Only tested on Ubuntu 24.04 LTS. Other versions or distributions are not tested and are used at your own risk.
+**⚠️ WARNING:** Tested on Ubuntu 24.04/26.04 LTS. Use on other versions or distributions is at your own risk.
 
 - Python 3.8+
 - systemd
@@ -666,7 +666,7 @@ sudo bash tools/pyleases.sh
 
 #### pywebmin
 
-[![pywebmin](https://raw.githubusercontent.com/maravento/pydhcp/master/img/pywebmin.png)](https://www.maravento.com/)
+[![pywebmin](./img/pywebmin.png)](https://www.maravento.com/)
 
 <table>
   <tr>
@@ -696,9 +696,9 @@ sudo bash tools/pywebmin.sh install
 sudo bash tools/pywebmin.sh uninstall
 ```
 
-> Access is granted to the Webmin `root` account and to the detected local sudo user. For any other Webmin user, grant it from **Webmin → Webmin Users**.
+> Requires a local user with sudo access; install aborts if none is found. Access is granted to the Webmin `root` account and to that user. For any other Webmin user, grant it from **Webmin → Webmin Users**.
 >
-> El acceso se concede a la cuenta `root` de Webmin y al usuario local con sudo detectado. Para cualquier otro usuario de Webmin, concederlo desde **Webmin → Webmin Users**.
+> Requiere un usuario local con sudo; la instalación aborta si no se encuentra ninguno. El acceso se concede a la cuenta `root` de Webmin y a ese usuario. Para cualquier otro usuario de Webmin, concederlo desde **Webmin → Webmin Users**.
 
 ### Rogue DHCP defense
 

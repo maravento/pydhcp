@@ -126,12 +126,11 @@ detect_local_user() {
     echo "$best_user"
 }
 
-# A missing local user is not fatal: the module stays installed and usable by
-# the Webmin root account.
 if ! local_user=$(detect_local_user); then
-    local_user=""
-    echo "WARNING: no local user with sudo found -- alert" >&2
+    echo "ERROR: No valid local user found. Create one with sudo access."
+    exit 1
 fi
+echo "Using local user: $local_user"
 
 # ------------------------------------------------------------------------------
 # VARIABLES
