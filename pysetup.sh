@@ -131,24 +131,6 @@ ask_interface_number() {
     done
 }
 
-ask_ip() {
-    local prompt_text="$1" default_value="$2" target_var="$3" user_answer hint_text
-    if [[ -n "$default_value" ]]; then
-        hint_text="Default: $default_value"
-    else
-        hint_text="Default: 192.168.0.10"
-    fi
-    while true; do
-        read -rp " ${prompt_text} [${hint_text}]: " user_answer
-        user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_IPV4 ]]; then
-            printf -v "$target_var" '%s' "$user_answer"
-            break
-        fi
-        warn "'$user_answer' is not a valid IP address."
-    done
-}
-
 ask_netmask() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
@@ -440,18 +422,35 @@ if [[ ${#iface_list[@]} -eq 0 ]]; then
 fi
 for iface_index in "${!iface_list[@]}"; do
     iface_state=$(ip -br link show "${iface_list[$iface_index]}" | awk '{print $2}')
-    printf " [%d] %s (%s)\n" "$((iface_index+1))" "${iface_list[$iface_index]}" "$iface_state"
+    iface_ip=$(ip -4 -br addr show "${iface_list[$iface_index]}" 2>/dev/null | awk '{print $3}')
+    printf " [%d] %s (%s, %s)\n" "$((iface_index+1))" "${iface_list[$iface_index]}" "$iface_state" "${iface_ip:-no IPv4}"
 done
 echo ""
 ask_interface_number "Select interface number" "1" iface_choice "${#iface_list[@]}"
 iface_selected="${iface_list[$((iface_choice-1))]}"
 info "Using interface: $iface_selected"
 
-# DHCP server IP
+# DHCP server IP -- derived directly from the interface already chosen
+# above (it was listed with its IP in "Available network interfaces"),
+# so there's no need to ask for it again.
 echo ""
-default_server_ip=$(ip -4 -br addr show "$iface_selected" 2>/dev/null | awk '{print $3}' | cut -d/ -f1)
-ask_ip "Enter DHCP server IP address" "$default_server_ip" server_ip_answer
-info "Server IP: $server_ip_answer"
+mapfile -t iface_ips < <(ip -4 -br addr show "$iface_selected" 2>/dev/null | awk '{print $3}' | cut -d/ -f1)
+case "${#iface_ips[@]}" in
+    0)
+        error "interface has no IPv4 address -- abort"
+        ;;
+    1)
+        server_ip_answer="${iface_ips[0]}"
+        info "Server IP: $server_ip_answer (from $iface_selected)"
+        ;;
+    *)
+        echo " Interface '$iface_selected' has multiple IPv4 addresses:"
+        select server_ip_answer in "${iface_ips[@]}"; do
+            [ -n "$server_ip_answer" ] && break
+        done
+        info "Server IP: $server_ip_answer"
+        ;;
+esac
 
 # Netmask
 echo ""
