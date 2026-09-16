@@ -108,10 +108,11 @@ color_cyan='\033[0;36m'
 color_yellow='\033[1;33m'
 color_reset='\033[0m'
 
-info() { echo -e "${color_cyan}INFO:${color_reset} $*"; log "INFO: $*"; }
+info() { printf ' \e[32m \e[0m %s\n' "$*"; log "INFO: $*"; }
 success() { echo -e "${color_green}[OK]${color_reset} $*"; log "INFO: $*"; }
-warn() { echo -e "${color_yellow}WARNING:${color_reset} $*"; log "WARNING: $*"; }
-error() { echo -e "${color_red}ERROR:${color_reset} $*" >&2; log "ERROR: $*"; exit 1; }
+warn() { printf ' \e[33m!\e[0m %s\n' "$*"; log "WARNING: $*"; }
+err()  { printf ' \e[31m \e[0m %s\n' "$*" >&2; log "ERROR: $*"; }
+abort() { err "$*"; exit 1; }
 
 # ------------------------------------------------------------------------------
 # FUNCTIONS
@@ -202,18 +203,18 @@ confirm() {
 verify_source() {
     local source_file="$1"
     local real_path
-    real_path=$(realpath "$source_file" 2>/dev/null) || error "cannot resolve source path -- abort"
-    [[ "$real_path" == "$script_dir"/* ]] || error "source file outside the repo -- abort"
-    [ -f "$real_path" ] || error "source is not a regular file -- abort"
-    [ -s "$real_path" ] || error "source file is empty -- abort"
+    real_path=$(realpath "$source_file" 2>/dev/null) || abort "cannot resolve source path -- abort"
+    [[ "$real_path" == "$script_dir"/* ]] || abort "source file outside the repo -- abort"
+    [ -f "$real_path" ] || abort "source is not a regular file -- abort"
+    [ -s "$real_path" ] || abort "source file is empty -- abort"
     local file_mode file_owner
     file_mode=$(stat -c '%a' "$real_path")
     file_owner=$(stat -c '%u' "$real_path")
     if (( (8#$file_mode & 8#002) != 0 )); then
-        { echo -e "${color_red}ERROR:${color_reset} world-writable source file (mode $file_mode)" >&2; error "$source_file -- abort"; }
+        { err "world-writable source (mode $file_mode)"; abort "$(basename "$real_path") -- abort"; }
     fi
     if [[ "$file_owner" != "0" && "$file_owner" != "${SUDO_UID:-$(id -u)}" ]]; then
-        { echo -e "${color_red}ERROR:${color_reset} source file owned by unexpected uid $file_owner" >&2; error "$source_file -- abort"; }
+        { err "unexpected owner (uid $file_owner)"; abort "$(basename "$real_path") -- abort"; }
     fi
 }
 
@@ -269,7 +270,7 @@ if [[ "${1:-}" == "--remove" ]]; then
         "$install_dir/tools/pywebmin.sh" uninstall || true
     fi
 
-    [[ "$install_dir" == "/etc/pydhcp" ]] || error "unexpected install dir: $install_dir -- abort"
+    [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -- abort"
 
     # Everything under install_dir goes, including the config and the block
     # list: uninstalling means removing the project. tools/bkstack.sh is the
@@ -284,7 +285,7 @@ if [[ "${1:-}" == "--remove" ]]; then
     systemctl daemon-reload
 
     success "pydhcpd has been removed from the system."
-    log "pysetup done at: $(date)"
+    log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
     rm -f "$pydhcp_log_file"
     exit 0
 fi
@@ -295,17 +296,17 @@ fi
 
 if [[ "${1:-}" == "--update" ]]; then
     if [ ! -d "$install_dir" ]; then
-        { echo -e "${color_red}ERROR:${color_reset} no installation found in $install_dir" >&2; error "run without --update to install first -- abort"; }
+        { err "no installation found in $install_dir"; abort "run without --update to install first -- abort"; }
     fi
     if [ ! -f "$install_dir/pydhcp.env" ]; then
-        echo -e "${color_red}ERROR:${color_reset} $install_dir/pydhcp.env not found" >&2
-        echo -e "${color_red}ERROR:${color_reset} it pre-dates config persistence" >&2
-        error "run 'pysetup.sh --remove' then reinstall -- abort"
+        err "$install_dir/pydhcp.env not found"
+        err "it pre-dates config persistence"
+        abort "run 'pysetup.sh --remove' then reinstall -- abort"
     fi
     if [ ! -d "$install_dir/tools" ]; then
-        echo -e "${color_red}ERROR:${color_reset} $install_dir/tools not found" >&2
-        echo -e "${color_red}ERROR:${color_reset} unexpected state for an existing install" >&2
-        error "run 'pysetup.sh --remove' then reinstall -- abort"
+        err "$install_dir/tools not found"
+        err "unexpected state for an existing install"
+        abort "run 'pysetup.sh --remove' then reinstall -- abort"
     fi
 
     if [ -x "$install_dir/tools/bkstack.sh" ]; then
@@ -388,7 +389,7 @@ EOF
 
     systemctl daemon-reload
     if ! systemctl start pydhcpd; then
-        { echo -e "${color_red}ERROR:${color_reset} pydhcpd failed to start after update" >&2; error "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
+        { err "pydhcpd failed to start after update"; abort "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
     fi
 
     echo ""
@@ -400,7 +401,7 @@ EOF
     warn "in pydhcp.env, not by editing pyleases.sh."
     warn "This update does not change it."
     echo ""
-    log "pysetup done at: $(date)"
+    log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
     exit 0
 fi
 
@@ -409,8 +410,8 @@ fi
 # ------------------------------------------------------------------------------
 
 if [ -f "$core_dir/pydhcpd.py" ]; then
-    echo -e "${color_red}ERROR:${color_reset} pydhcpd is already installed at $install_dir." >&2
-    error "use --update or --remove instead -- abort"
+    err "pydhcpd is already installed at $install_dir"
+    abort "use --update or --remove instead -- abort"
 fi
 
 # Detect and select network interface
@@ -418,7 +419,7 @@ echo ""
 info "Available network interfaces:"
 mapfile -t iface_list < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
 if [[ ${#iface_list[@]} -eq 0 ]]; then
-    error "no network interfaces found -- abort"
+    abort "no network interfaces found -- abort"
 fi
 for iface_index in "${!iface_list[@]}"; do
     iface_state=$(ip -br link show "${iface_list[$iface_index]}" | awk '{print $2}')
@@ -437,7 +438,7 @@ echo ""
 mapfile -t iface_ips < <(ip -4 -br addr show "$iface_selected" 2>/dev/null | awk '{print $3}' | cut -d/ -f1)
 case "${#iface_ips[@]}" in
     0)
-        error "interface has no IPv4 address -- abort"
+        abort "interface has no IPv4 address -- abort"
         ;;
     1)
         server_ip_answer="${iface_ips[0]}"
@@ -503,7 +504,7 @@ pool_start = ipaddress.IPv4Address(sys.argv[2])
 pool_end = ipaddress.IPv4Address(sys.argv[3])
 print('1' if pool_start <= server_ip <= pool_end else '0')
 " "$server_ip_answer" "${local_net_base}.${pool_start_answer}" "${local_net_base}.${pool_end_answer}" 2>/dev/null | grep -q '^1$'; then
-    { echo -e "${color_red}ERROR:${color_reset} server IP $server_ip_answer overlaps the pool range" >&2; echo -e "${color_red}ERROR:${color_reset} pool: ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}" >&2; error "choose a server IP outside the pool -- abort"; }
+    { err "server IP $server_ip_answer overlaps the pool range"; err "pool: ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"; abort "choose a server IP outside the pool -- abort"; }
 fi
 
 # DNS servers
@@ -534,7 +535,7 @@ ping_check_value="true"
 
 # Verify source files exist
 for source_file in core/pydhcpd.py core/pydhcpd.conf service/pydhcpd.service init.d/pydhcpd; do
-    [ -f "$script_dir/$source_file" ] || { echo -e "${color_red}ERROR:${color_reset} missing source file: $source_file" >&2; error "run pysetup.sh from the project directory -- abort"; }
+    [ -f "$script_dir/$source_file" ] || { err "missing source file: $source_file"; abort "run pysetup.sh from the project directory -- abort"; }
 done
 
 # Create system group and user
@@ -655,7 +656,7 @@ chown root:"$daemon_owner" "$install_dir/pydhcp.env"
 chmod 640 "$install_dir/pydhcp.env"
 
 # Apply network parameters to pydhcpd.conf
-conf_tmp=$(mktemp "$install_dir/.pydhcpd.conf.XXXXXX") || error "cannot create temp file -- abort"
+conf_tmp=$(mktemp "$install_dir/.pydhcpd.conf.XXXXXX") || abort "cannot create temp file -- abort"
 cp -f "$core_dir/pydhcpd.conf" "$conf_tmp"
 sed -i "s|^server-identifier .*|server-identifier ${server_ip_answer};|" "$conf_tmp"
 sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${local_subnet} netmask ${netmask_answer}|" "$conf_tmp"
@@ -753,7 +754,7 @@ info "Enabling and starting pydhcpd ..."
 systemctl daemon-reload
 systemctl enable --force pydhcpd
 if ! systemctl start pydhcpd; then
-    { echo -e "${color_red}ERROR:${color_reset} pydhcpd failed to start" >&2; error "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
+    { err "pydhcpd failed to start"; abort "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
 fi
 
 echo ""
@@ -770,4 +771,4 @@ info "To remove : sudo bash pysetup.sh --remove"
 # END
 # ------------------------------------------------------------------------------
 
-log "pysetup done at: $(date)"
+log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
