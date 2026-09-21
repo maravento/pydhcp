@@ -73,7 +73,7 @@ if ! flock -n 200; then
 fi
 
 # dependencies
-for dep_pkg in coreutils util-linux systemd grep sed mawk ncurses-bin perl; do
+for dep_pkg in coreutils util-linux systemd grep sed ncurses-bin perl; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         echo "ERROR: missing dependency '$dep_pkg' -- abort" >&2
         exit 1
@@ -127,7 +127,7 @@ detect_local_user() {
 }
 
 if ! local_user=$(detect_local_user); then
-    echo "ERROR: No valid local user found. Create one with sudo access."
+    echo "ERROR: no valid local user found, create one with sudo access -- abort"
     exit 1
 fi
 echo "Using local user: $local_user"
@@ -802,7 +802,7 @@ ICONEOF
 
     echo "Restarting Webmin service..."
     if ! { systemctl restart webmin.service 2>/dev/null || /etc/webmin/restart 2>/dev/null; }; then
-        echo "WARNING: Webmin restart failed -- reload it manually so the module takes effect"
+        echo "WARNING: Webmin restart failed, reload it to apply the module -- alert"
     fi
 
     echo ""
@@ -851,7 +851,7 @@ uninstall_module() {
 
     echo "Restarting Webmin service..."
     if ! { systemctl restart webmin.service 2>/dev/null || /etc/webmin/restart 2>/dev/null; }; then
-        echo "WARNING: Webmin restart failed -- reload it so the module disappears"
+        echo "WARNING: Webmin restart failed, reload it to remove the module -- alert"
     fi
 
     echo ""

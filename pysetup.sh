@@ -61,7 +61,7 @@ fi
 # Project-wide list: this installer verifies every package the deployed
 # components need at runtime, not just the ones it invokes itself -- e.g.
 # iputils-ping is used by pydhcpd.py when it cannot open a raw ICMP socket.
-for dep_pkg in python3 iproute2 mawk passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate; do
+for dep_pkg in python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
         log "ERROR: dependency $dep_pkg not installed -- abort"
         exit 1
@@ -74,12 +74,9 @@ done
 
 # validation -- one variable per thing validated; use directly with =~
 UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
-UH_PREFIX='0.0.0.0:0 128.0.0.0:1 192.0.0.0:2 224.0.0.0:3 240.0.0.0:4 248.0.0.0:5 252.0.0.0:6 254.0.0.0:7 255.0.0.0:8 255.128.0.0:9 255.192.0.0:10 255.224.0.0:11 255.240.0.0:12 255.248.0.0:13 255.252.0.0:14 255.254.0.0:15 255.255.0.0:16 255.255.128.0:17 255.255.192.0:18 255.255.224.0:19 255.255.240.0:20 255.255.248.0:21 255.255.252.0:22 255.255.254.0:23 255.255.255.0:24 255.255.255.128:25 255.255.255.192:26 255.255.255.224:27 255.255.255.240:28 255.255.255.248:29 255.255.255.252:30 255.255.255.254:31 255.255.255.255:32'
 
 install_dir="/etc/pydhcp"
 core_dir="${install_dir}/core"
@@ -102,10 +99,7 @@ acl_limited_file="${acl_mac_dir}/mac-limited.txt"
 acl_unlimited_file="${acl_mac_dir}/mac-unlimited.txt"
 acl_block_file="${acl_dhcp_dir}/blockdhcp.txt"
 
-color_red='\033[0;31m'
 color_green='\033[0;32m'
-color_cyan='\033[0;36m'
-color_yellow='\033[1;33m'
 color_reset='\033[0m'
 
 info() { printf ' \e[32m \e[0m %s\n' "$*"; log "INFO: $*"; }
@@ -230,7 +224,7 @@ if [[ "${1:-}" == "--remove" ]]; then
     warn "This removes pydhcp completely: $install_dir,"
     warn "the service, the init.d wrapper, the log and"
     warn "the Webmin module."
-    warn "Run tools/bkstack.sh first if you want a backup."
+    warn "Run tools/pybk.sh first if you want a backup."
     warn "/etc/bak is NOT touched."
     warn "Package dependencies are NOT removed."
     echo ""
@@ -260,9 +254,9 @@ if [[ "${1:-}" == "--remove" ]]; then
     rm -f /etc/logrotate.d/pydhcpd
     rm -f /var/log/pydhcpd.log
 
-    if [ -x "$install_dir/tools/bkstack.sh" ]; then
-        info "Removing bkstack.sh cron entry ..."
-        "$install_dir/tools/bkstack.sh" uninstall || true
+    if [ -x "$install_dir/tools/pybk.sh" ]; then
+        info "Removing pybk.sh cron entry ..."
+        "$install_dir/tools/pybk.sh" uninstall || true
     fi
 
     if [ -x "$install_dir/tools/pywebmin.sh" ]; then
@@ -273,7 +267,7 @@ if [[ "${1:-}" == "--remove" ]]; then
     [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -- abort"
 
     # Everything under install_dir goes, including the config and the block
-    # list: uninstalling means removing the project. tools/bkstack.sh is the
+    # list: uninstalling means removing the project. tools/pybk.sh is the
     # way to keep a copy, and it writes to /etc/bak, outside this directory.
     info "Removing $install_dir ..."
     rm -rf "$install_dir"
@@ -309,11 +303,11 @@ if [[ "${1:-}" == "--update" ]]; then
         abort "run 'pysetup.sh --remove' then reinstall -- abort"
     fi
 
-    if [ -x "$install_dir/tools/bkstack.sh" ]; then
-        info "Creating backup with bkstack.sh ..."
-        "$install_dir/tools/bkstack.sh" || warn "backup failed, continuing -- alert"
+    if [ -x "$install_dir/tools/pybk.sh" ]; then
+        info "Creating backup with pybk.sh ..."
+        "$install_dir/tools/pybk.sh" || warn "backup failed, continuing -- alert"
     else
-        warn "bkstack.sh not found, no backup -- alert"
+        warn "pybk.sh not found, no backup -- alert"
     fi
 
     info "Stopping pydhcpd service..."
@@ -345,12 +339,12 @@ if [[ "${1:-}" == "--update" ]]; then
         chmod 755 "$install_dir/tools/pyleases.sh"
     fi
 
-    if [ -f "$script_dir/tools/bkstack.sh" ]; then
-        info "Updating tools/bkstack.sh ..."
-        verify_source "$script_dir/tools/bkstack.sh"
-        cp "$script_dir/tools/bkstack.sh" "$install_dir/tools/bkstack.sh"
-        chown root:root "$install_dir/tools/bkstack.sh"
-        chmod 755 "$install_dir/tools/bkstack.sh"
+    if [ -f "$script_dir/tools/pybk.sh" ]; then
+        info "Updating tools/pybk.sh ..."
+        verify_source "$script_dir/tools/pybk.sh"
+        cp "$script_dir/tools/pybk.sh" "$install_dir/tools/pybk.sh"
+        chown root:root "$install_dir/tools/pybk.sh"
+        chmod 755 "$install_dir/tools/pybk.sh"
     fi
 
     if [ -f "$script_dir/tools/pywebmin.sh" ]; then
@@ -423,7 +417,7 @@ if [[ ${#iface_list[@]} -eq 0 ]]; then
 fi
 for iface_index in "${!iface_list[@]}"; do
     iface_state=$(ip -br link show "${iface_list[$iface_index]}" | awk '{print $2}')
-    iface_ip=$(ip -4 -br addr show "${iface_list[$iface_index]}" 2>/dev/null | awk '{print $3}')
+    iface_ip=$(ip -4 -o addr show dev "${iface_list[$iface_index]}" 2>/dev/null | awk '{print $4}' | paste -sd' ')
     printf " [%d] %s (%s, %s)\n" "$((iface_index+1))" "${iface_list[$iface_index]}" "$iface_state" "${iface_ip:-no IPv4}"
 done
 echo ""
@@ -435,7 +429,7 @@ info "Using interface: $iface_selected"
 # above (it was listed with its IP in "Available network interfaces"),
 # so there's no need to ask for it again.
 echo ""
-mapfile -t iface_ips < <(ip -4 -br addr show "$iface_selected" 2>/dev/null | awk '{print $3}' | cut -d/ -f1)
+mapfile -t iface_ips < <(ip -4 -o addr show dev "$iface_selected" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
 case "${#iface_ips[@]}" in
     0)
         abort "interface has no IPv4 address -- abort"
@@ -695,7 +689,7 @@ mkdir -p "$install_dir/tools"
 chown root:root "$install_dir/tools"
 chmod 755 "$install_dir/tools"
 
-for tool_script in pyleases.sh pywebmin.sh bkstack.sh; do
+for tool_script in pyleases.sh pywebmin.sh pybk.sh; do
     if [ -f "$script_dir/tools/$tool_script" ]; then
         info "Deploying tools/$tool_script ..."
         verify_source "$script_dir/tools/$tool_script"
@@ -705,9 +699,9 @@ for tool_script in pyleases.sh pywebmin.sh bkstack.sh; do
     fi
 done
 
-if [ -x "$install_dir/tools/bkstack.sh" ]; then
-    info "Registering bkstack.sh monthly cron entry ..."
-    "$install_dir/tools/bkstack.sh" install || warn "cron entry not registered -- alert"
+if [ -x "$install_dir/tools/pybk.sh" ]; then
+    info "Registering pybk.sh monthly cron entry ..."
+    "$install_dir/tools/pybk.sh" install || warn "cron entry not registered -- alert"
 fi
 
 # Deploy systemd service

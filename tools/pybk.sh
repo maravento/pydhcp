@@ -3,40 +3,26 @@
 #
 ################################################################################
 #
-# bkstack - configuration backup for pydhcp and uhm
+# pybk - configuration backup for pydhcp
 #
 # DESCRIPTION:
-# Creates one compressed archive with everything both projects own: their
-# install trees, the ACL lists they share, their systemd units, the init.d
-# wrapper, the logrotate config and the Webmin modules. Paths that do not
-# exist are skipped with a notice, so the same script works whether uhm is
-# installed or only pydhcp is.
-#
-# This is the single backup mechanism for both projects: pysetup.sh,
-# uhmsetup.sh and the Webmin modules call it instead of copying files on
-# their own, so there is one archive format and one place to look.
+# Creates one compressed archive containing the project installation and
+# relevant system configuration. Paths that do not exist are skipped with
+# a notice.
 #
 # Run it by hand before applying changes, or let the monthly cron entry
-# do it. Restore by unzipping the archive over / -- the archive stores
-# absolute paths.
+# do it. Restore by unzipping the archive over /.
 #
 # USAGE:
-# sudo bash bkstack.sh            Create a backup now
-# sudo bash bkstack.sh install    Register the @monthly cron entry
-# sudo bash bkstack.sh uninstall  Remove the cron entry (keeps archives)
+# sudo bash pybk.sh            Create a backup now
+# sudo bash pybk.sh install    Register the @monthly cron entry
+# sudo bash pybk.sh uninstall  Remove the cron entry (keeps archives)
 #
 # OUTPUT:
-# /etc/bak/pydhcp/bkstack_<YYYYMMDD_HHMM>.zip
+# /etc/bak/pydhcp/pybk_<YYYYMMDD_HHMM>.zip
 #
-# Kept outside /etc/pydhcp and /etc/uhm on purpose: an uninstall of either
-# project never touches it.
-#
-# EXIT CODES:
-# 0 - Archive created
-# 1 - Not root, already running, missing dependency, nothing to back up,
-#     or the archive could not be written
-#
-# LOG: /var/log/pydhcp.log (shared with the rest of the project)
+# LOG: 
+# /var/log/pydhcp.log
 #
 ################################################################################
 
@@ -83,7 +69,7 @@ done
 # ------------------------------------------------------------------------------
 
 backup_dir="/etc/bak/pydhcp"
-backup_zip="${backup_dir}/bkstack_$(date +%Y%m%d_%H%M).zip"
+backup_zip="${backup_dir}/pybk_$(date +%Y%m%d_%H%M).zip"
 installed_path="/etc/pydhcp/tools/$(basename "$0")"
 
 # ------------------------------------------------------------------------------
@@ -92,10 +78,27 @@ installed_path="/etc/pydhcp/tools/$(basename "$0")"
 
 # Monthly is the floor, not a recommendation: it exists so an untouched
 # system still has a recent copy. Run it by hand before any change.
+# CRON_D
+# Add or replace one line in the project's single cron.d file
+cron_d_set() {
+    local match="$1" line="$2"
+    local cron_file="/etc/cron.d/pydhcp"
+    local cron_tmp
+
+    cron_tmp=$(mktemp)
+    [ -f "$cron_file" ] && { grep -vF "$match" "$cron_file" > "$cron_tmp" || true; }
+    [ -n "$line" ] && printf '%s\n' "$line" >> "$cron_tmp"
+    if [ -s "$cron_tmp" ]; then
+        install -m 644 -o root -g root "$cron_tmp" "$cron_file"
+    else
+        rm -f "$cron_file"
+    fi
+    rm -f "$cron_tmp"
+}
+
 register_cron() {
-    # Deploy self first, like uhmwatch.sh: the cron entry must point at a
-    # path that exists, whether this ran from the repo or from its final
-    # location.
+    # Deploy self first: the cron entry must point at a path that exists,
+    # whether this ran from the repo or from its final location.
     local script_path
     script_path="$(readlink -f "$0")"
     if [ "$script_path" != "$installed_path" ]; then
@@ -107,25 +110,20 @@ register_cron() {
         log "INFO: deployed to $installed_path"
     fi
 
-    local cron_entry="@monthly $installed_path"
-    local current_crontab
-    current_crontab=$(crontab -l 2>/dev/null || true)
-    if echo "$current_crontab" | grep -vE '^\s*#' | grep -qF "$installed_path"; then
-        log "INFO: cron entry already present -- skip"
-    else
-        { printf '%s\n%s\n' "$current_crontab" "$cron_entry"; } | crontab -
-        log "INFO: cron entry registered, runs @monthly"
-        log "INFO: $installed_path"
-    fi
+    cron_d_set "$installed_path" "@monthly root $installed_path"
+    log "INFO: cron entry registered, runs @monthly"
+    log "INFO: $installed_path"
+
+    # legacy entry in root's crontab, from versions before /etc/cron.d
+    crontab -l 2>/dev/null | { grep -vF "$installed_path" || true; } | crontab - 2>/dev/null || true
 }
 
 deregister_cron() {
-    if crontab -l 2>/dev/null | grep -qF "$installed_path"; then
-        crontab -l 2>/dev/null | { grep -vF "$installed_path" || true; } | crontab -
-        log "INFO: cron entry removed, archives kept"
-    else
-        log "INFO: no cron entry to remove -- skip"
-    fi
+    cron_d_set "$installed_path" ""
+    log "INFO: cron entry removed, archives kept"
+
+    # legacy entry in root's crontab, from versions before /etc/cron.d
+    crontab -l 2>/dev/null | { grep -vF "$installed_path" || true; } | crontab - 2>/dev/null || true
 }
 
 case "${1:-}" in
@@ -140,14 +138,14 @@ case "${1:-}" in
     "")
         ;;
     *)
-        log "ERROR: unknown action '$1' -- abort"
         log "ERROR: use no argument, 'install' or 'uninstall'"
+        log "ERROR: unknown action '$1' -- abort"
         exit 1
         ;;
 esac
 
 # Start
-log "bkstack start..."
+log "pybk start..."
 
 # ------------------------------------------------------------------------------
 # BACKUP
@@ -158,22 +156,17 @@ if ! mkdir -p "$backup_dir"; then
     exit 1
 fi
 
-# Everything the two projects own. Anything installed outside their own
-# trees is listed explicitly, so a restore brings back a working system.
+# Project files and relevant system configuration are listed explicitly
+# so the project state can be restored.
 backup_list=()
 for backup_item in \
-    /etc/uhm \
     /etc/pydhcp \
-    /etc/acl \
-    /etc/systemd/system/uhmd.service \
-    /etc/systemd/system/uhmalert.service \
+    /etc/acl/mac \
     /etc/systemd/system/pydhcpd.service \
     /etc/init.d/pydhcpd \
-    /etc/logrotate.d/uhm \
     /etc/logrotate.d/pydhcp \
-    /etc/webmin/uhm \
+    /etc/cron.d/pydhcp \
     /etc/webmin/pydhcp \
-    /usr/share/webmin/uhm \
     /usr/share/webmin/pydhcp
 do
     if [ -e "$backup_item" ]; then
@@ -194,7 +187,7 @@ if zip -r -q "$backup_zip" "${backup_list[@]}"; then
     log "INFO: backup written to $backup_zip"
 
     # keep only the last 3
-    old_backups=("$backup_dir"/bkstack_*.zip)
+    old_backups=("$backup_dir"/pybk_*.zip)
     if (( ${#old_backups[@]} > 3 )); then
         printf '%s\n' "${old_backups[@]}" | sort | head -n -3 | xargs -r rm -f
     fi
@@ -210,4 +203,4 @@ fi
 # END
 # ------------------------------------------------------------------------------
 
-log "bkstack done at: $(date '+%Y-%m-%d %H:%M:%S')"
+log "pybk done at: $(date '+%Y-%m-%d %H:%M:%S')"

@@ -109,8 +109,16 @@ if not _TEST_MODE:
         _log_handlers.insert(0, logging.FileHandler(LOG_FILE))
     except OSError as e:
         sys.stderr.write(
-            f"WARNING: cannot open {LOG_FILE} for writing ({e}); "
-            "logging to stdout only\n")
+            f"WARNING: cannot open {LOG_FILE} for writing ({e}), "
+            "stdout only -- alert\n")
+        _uhm_log = "/var/log/uhm.log"
+        if os.path.exists(_uhm_log):
+            try:
+                with open(_uhm_log, "a") as _f:
+                    _f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} "
+                             f"WARNING: pydhcpd cannot open {LOG_FILE} -- alert\n")
+            except OSError:
+                pass
 
 logging.basicConfig(
     level=logging.INFO,
@@ -306,7 +314,6 @@ class DHCPConfig:
 
         self.pool_range_start = ""
         self.pool_range_end   = ""
-        self.deny_blockdhcp   = False
         self.pool_min_lease   = 60
         self.pool_def_lease   = 60
         self.pool_max_lease   = 60
@@ -665,7 +672,6 @@ class DHCPConfig:
 
         if self.pools:
             first = self.pools[0]
-            self.deny_blockdhcp = "blockdhcp" in first["deny"]
             if first["ranges"]:
                 self.pool_range_start, self.pool_range_end = first["ranges"][0]
             self.pool_min_lease = first["min"]
@@ -1348,7 +1354,10 @@ def build_packet(msg_type, xid, mac_str, offered_ip, server_ip, config, lease_ti
 
     add_opt(OPT_MSG_TYPE,  bytes([msg_type]))
     add_opt(OPT_SERVER_ID, ip_to_bytes(server_ip))
-    add_opt(OPT_LEASE_TIME, struct.pack("!I", lease_time))
+    # lease_time is None for an ACK replying to an INFORM: RFC 2131 forbids
+    # a lease time there, since INFORM never allocates a lease.
+    if lease_time is not None:
+        add_opt(OPT_LEASE_TIME, struct.pack("!I", lease_time))
     add_opt(OPT_SUBNET_MASK, ip_to_bytes(config.netmask))
 
     if config.routers:
@@ -1706,64 +1715,16 @@ class DHCPServer:
         use_broadcast = self._should_broadcast(pkt)
 
         with self._config_lock:
-            config_netmask = self.config.netmask
-            config_routers = self.config.routers
-            config_broadcast = self.config.broadcast
-            config_dns_servers = self.config.dns_servers
-            config_wpad_url = self.config.wpad_url
+            config_snapshot = self.config
 
-        if not config_netmask:
-            log.warning("netmask not configured -- alert")
-            return
-
-        mac_bytes = mac_str_to_bytes(mac)
-        if mac_bytes is None:
-            log.info("Invalid MAC %.17s -- skip", mac)
-            return
-
-        pkt_buf = bytearray(236)
-        pkt_buf[0]  = 2
-        pkt_buf[1]  = 1
-        pkt_buf[2]  = 6
-        pkt_buf[3]  = 0
-        pkt_buf[4:8] = pkt["xid"]
-        pkt_buf[10:12] = struct.pack("!H", 0x8000 if use_broadcast else 0)
-        pkt_buf[16:20] = ip_to_bytes("0.0.0.0")
-        pkt_buf[20:24] = ip_to_bytes(self.server_ip)
-        pkt_buf[24:28] = ip_to_bytes(pkt.get("giaddr", "0.0.0.0"))
-        pkt_buf[28:34] = mac_bytes
-
-        options = bytearray()
-        options += DHCP_MAGIC
-
-        def add_opt(code, value):
-            nonlocal options
-            if len(value) > 255:  # DHCP option format, see FIXED VALUES header
-                log.info("Option %d too long (%d B) -- skip", code, len(value))
-                return
-            options += bytes([code, len(value)]) + value
-
-        add_opt(OPT_MSG_TYPE, bytes([MSG_ACK]))
-        add_opt(OPT_SERVER_ID, ip_to_bytes(self.server_ip))
-        add_opt(OPT_SUBNET_MASK, ip_to_bytes(config_netmask))
-
-        if config_routers:
-            add_opt(OPT_ROUTERS, ip_to_bytes(config_routers))
-
-        if config_broadcast:
-            add_opt(OPT_BROADCAST, ip_to_bytes(config_broadcast))
-
-        if config_dns_servers:
-            dns_bytes = b"".join(ip_to_bytes(d) for d in config_dns_servers)
-            add_opt(OPT_DNS, dns_bytes)
-
-        if config_wpad_url:
-            add_opt(OPT_WPAD, config_wpad_url.encode())
-
-        options += bytes([OPT_END])
-
-        reply = _pad_to_min_bootp(bytes(pkt_buf) + bytes(options))
-        self._send(reply, giaddr=pkt.get("giaddr", "0.0.0.0"), ciaddr=pkt.get("ciaddr", "0.0.0.0"))
+        # lease_time=None: RFC 2131 forbids a lease time in an ACK replying
+        # to an INFORM, since INFORM never allocates a lease. build_packet
+        # itself checks netmask/MAC validity and logs+returns b"" on failure.
+        reply = build_packet(MSG_ACK, pkt["xid"], mac, "0.0.0.0",
+                             self.server_ip, config_snapshot, None,
+                             broadcast=use_broadcast, giaddr=pkt.get("giaddr", "0.0.0.0"))
+        if reply:
+            self._send(reply, giaddr=pkt.get("giaddr", "0.0.0.0"), ciaddr=pkt.get("ciaddr", "0.0.0.0"))
 
     def _handle_discover(self, pkt, mac, hostname, log_hostname):
         log.info("DISCOVER from %.17s (%.15s)", mac, log_hostname)
