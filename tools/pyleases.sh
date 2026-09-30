@@ -55,11 +55,9 @@
 # 3. Create wpad.pac file in Apache document root
 # 4. Set WPAD_ENABLED=true in pydhcp.env
 #
-# NOTE on logging:
-# - Writes to /var/log/pydhcp.log, a fixed path shared with the rest of the
-# project. It is owned by pydhcpd:pydhcpd 640 so the
-# daemon, which runs as the pydhcpd account and not as root, can write
-# to it; this script runs as root.
+# LOG: /var/log/pydhcp.log (pydhcpd:pydhcpd, 640), shared with the project
+#      Owned by that account so the daemon, which does not run as root,
+#      can write to it; this script runs as root
 #
 ################################################################################
 
@@ -95,7 +93,7 @@ case "$log_stat" in
     *)
         if chown pydhcpd:pydhcpd "$log_file" 2>/dev/null &&
            chmod 640 "$log_file" 2>/dev/null; then
-            log "WARNING: pydhcp.log perms fixed -- alert"
+            log "INFO: pydhcp.log perms fixed -- fixed"
         else
             log "WARNING: cannot fix pydhcp.log perms -- alert"
         fi
@@ -183,7 +181,7 @@ env_group=$(stat -c '%G' "$env_file" 2>/dev/null)
 env_perms=$(stat -c '%a' "$env_file" 2>/dev/null)
 if [[ "$env_owner" != "root" ]] || [[ "$env_group" != "pydhcpd" ]] || [[ "$env_perms" != "640" ]]; then
     if chown root:pydhcpd "$env_file" 2>/dev/null && chmod 640 "$env_file" 2>/dev/null; then
-        log "WARNING: pydhcp.env perms fixed -- alert"
+        log "INFO: pydhcp.env perms fixed -- fixed"
     else
         log "ERROR: cannot fix pydhcp.env perms -- abort"
         exit 1
@@ -441,7 +439,7 @@ ensure_acl_lists() {
         file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
         if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
             if chown root:root "$check_file" 2>/dev/null && chmod 600 "$check_file" 2>/dev/null; then
-                log "WARNING: $(basename "$check_file") perms fixed -- alert"
+                log "INFO: $(basename "$check_file") perms fixed -- fixed"
             else
                 log "ERROR: cannot fix $(basename "$check_file") perms -- abort"
                 exit 1

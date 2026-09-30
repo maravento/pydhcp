@@ -773,7 +773,7 @@ R0lGODlhMAAwAPAAAAAAAAAAACH5BAEAAAAALAAAAAAwADAAAAKrhI+py+0Po5wqJEszCpyf7mkUiAGk
 ICONEOF
     then
         rm -f "$module_dir/images/icon.gif"
-        echo "INFO: could not write module icon -- degraded" >&2
+        echo "INFO: could not write module icon" >&2
     fi
 
     chown -R root:root "$module_dir" "$module_conf_dir"

@@ -7,7 +7,7 @@
 # Deploys all files to their correct system paths
 # or removes them cleanly from the system.
 #
-# Usage:
+# USAGE:
 # sudo bash pysetup.sh            Install
 # sudo bash pysetup.sh --update   Update code only. Preserves user config
 #                                 and backs up replaced files. Aborts if
@@ -16,9 +16,9 @@
 # sudo bash pysetup.sh --remove   Uninstall
 #
 # LOG: pysetup.log, in the same directory this script is run from. Kept
-# separate from /var/log/pydhcp.log (the daemon's operational log) so
-# install, update and remove runs never mix with daily operation.
-# Rewritten on each run.
+#      separate from /var/log/pydhcp.log (the daemon's operational log) so
+#      install, update and remove runs never mix with daily operation.
+#      Rewritten on each run.
 #
 ################################################################################
 
@@ -122,7 +122,7 @@ ask_interface_number() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        warn "Invalid selection, try again"
+        info "Invalid selection, try again -- retry"
     done
 }
 
@@ -135,7 +135,7 @@ ask_netmask() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        warn "'$user_answer' is not a valid netmask."
+        info "'$user_answer' is not a valid netmask -- retry"
     done
 }
 
@@ -147,13 +147,13 @@ ask_octet() {
         user_answer="${user_answer:-$default_value}"
         if [[ "$user_answer" =~ $UH_OCT ]] && (( user_answer >= 1 && user_answer <= 254 )); then
             if [[ -n "$ref_start" ]] && (( user_answer <= ref_start )); then
-                warn "Pool end must be greater than pool start (${ref_start})"
+                info "Pool end must be greater than pool start (${ref_start}) -- retry"
                 continue
             fi
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        warn "Invalid value, enter a number between 1 and 254"
+        info "Invalid value, enter a number between 1 and 254 -- retry"
     done
 }
 
@@ -166,7 +166,7 @@ ask_dns() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        warn "Invalid DNS format, try again"
+        info "Invalid DNS format, try again -- retry"
     done
 }
 
@@ -179,7 +179,7 @@ ask_number() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        warn "Invalid value, enter a positive integer"
+        info "Invalid value, enter a positive integer -- retry"
     done
 }
 
@@ -212,6 +212,43 @@ verify_source() {
     fi
 }
 
+# conflicting packages
+check_conflicts() {
+    local role="$1"; shift
+    local found=()
+    for dep_pkg in "$@"; do
+        if dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null | grep -q "ok installed"; then
+            found+=("$dep_pkg")
+        fi
+    done
+    if [ "${#found[@]}" -gt 0 ]; then
+        for dep_pkg in "${found[@]}"; do
+            err "conflicting $role package: $dep_pkg"
+        done
+        abort "remove them with apt purge -- abort"
+    fi
+}
+
+# overlapping packages
+warn_overlap() {
+    local feature="$1"; shift
+    local dep_pkg
+    for dep_pkg in "$@"; do
+        if dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null | grep -q "ok installed"; then
+            warn "$dep_pkg installed, keep its $feature disabled -- alert"
+        fi
+    done
+}
+
+# port in use
+check_port() {
+    local proto="$1" port="$2" role="$3"
+    if [ -n "$(ss -lnH "-${proto,,}" "sport = :$port" 2>/dev/null)" ]; then
+        err "${proto^^} port $port in use by another $role"
+        abort "stop that service before installing -- abort"
+    fi
+}
+
 # Start
 log "pysetup start..."
 
@@ -221,12 +258,12 @@ log "pysetup start..."
 
 if [[ "${1:-}" == "--remove" ]]; then
     echo ""
-    warn "This removes pydhcp completely: $install_dir,"
-    warn "the service, the init.d wrapper, the log and"
-    warn "the Webmin module."
-    warn "Run tools/pybk.sh first if you want a backup."
-    warn "/etc/bak is NOT touched."
-    warn "Package dependencies are NOT removed."
+    info "This removes pydhcp completely: $install_dir,"
+    info "the service, the init.d wrapper, the log and"
+    info "the Webmin module."
+    info "Run tools/pybk.sh first if you want a backup."
+    info "/etc/bak is NOT touched."
+    info "Package dependencies are NOT removed."
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" \
         || { info "Aborted by user."; exit 0; }
@@ -273,7 +310,7 @@ if [[ "${1:-}" == "--remove" ]]; then
     rm -rf "$install_dir"
 
     info "Removing system user and group $daemon_owner ..."
-    userdel "$daemon_owner" 2>/dev/null || warn "User $daemon_owner not found or already removed"
+    userdel "$daemon_owner" 2>/dev/null || info "User $daemon_owner not found or already removed -- skip"
     groupdel "$daemon_owner" 2>/dev/null || true
 
     systemctl daemon-reload
@@ -293,13 +330,11 @@ if [[ "${1:-}" == "--update" ]]; then
         { err "no installation found in $install_dir"; abort "run without --update to install first -- abort"; }
     fi
     if [ ! -f "$install_dir/pydhcp.env" ]; then
-        err "$install_dir/pydhcp.env not found"
-        err "it pre-dates config persistence"
+        err "$install_dir/pydhcp.env not found (pre-dates config persistence)"
         abort "run 'pysetup.sh --remove' then reinstall -- abort"
     fi
     if [ ! -d "$install_dir/tools" ]; then
-        err "$install_dir/tools not found"
-        err "unexpected state for an existing install"
+        err "$install_dir/tools not found (unexpected state)"
         abort "run 'pysetup.sh --remove' then reinstall -- abort"
     fi
 
@@ -391,9 +426,9 @@ EOF
     info "$core_dir/pydhcpd.conf unchanged"
     info "$install_dir/pydhcp.env unchanged"
     info "$core_dir/pydhcpd.leases unchanged"
-    warn "WPAD/option 252 is set by WPAD_ENABLED,"
-    warn "in pydhcp.env, not by editing pyleases.sh."
-    warn "This update does not change it."
+    info "WPAD/option 252 is set by WPAD_ENABLED,"
+    info "in pydhcp.env, not by editing pyleases.sh."
+    info "This update does not change it."
     echo ""
     log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
     exit 0
@@ -407,6 +442,10 @@ if [ -f "$core_dir/pydhcpd.py" ]; then
     err "pydhcpd is already installed at $install_dir"
     abort "use --update or --remove instead -- abort"
 fi
+
+check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
+check_port udp 67 "DHCP server"
+warn_overlap "dhcp" dnsmasq
 
 # Detect and select network interface
 echo ""
@@ -482,7 +521,7 @@ sys.exit(0 if pool_start in local_network and pool_end in local_network else 1)
 " "$local_subnet" "$netmask_answer" "$local_net_base" "$pool_start_answer" "$pool_end_answer"; then
         break
     fi
-    { warn "pool ${local_net_base}.${pool_start_answer}-${pool_end_answer} is outside the subnet"; warn "subnet is ${local_subnet}/${netmask_answer}, try again"; }
+    { info "pool ${local_net_base}.${pool_start_answer}-${pool_end_answer} is outside the subnet"; info "subnet is ${local_subnet}/${netmask_answer}, try again -- retry"; }
 done
 info "Pool range: ${local_net_base}.${pool_start_answer} -> ${local_net_base}.${pool_end_answer}"
 
@@ -498,7 +537,7 @@ pool_start = ipaddress.IPv4Address(sys.argv[2])
 pool_end = ipaddress.IPv4Address(sys.argv[3])
 print('1' if pool_start <= server_ip <= pool_end else '0')
 " "$server_ip_answer" "${local_net_base}.${pool_start_answer}" "${local_net_base}.${pool_end_answer}" 2>/dev/null | grep -q '^1$'; then
-    { err "server IP $server_ip_answer overlaps the pool range"; err "pool: ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"; abort "choose a server IP outside the pool -- abort"; }
+    { err "server IP $server_ip_answer overlaps pool ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"; abort "choose a server IP outside the pool -- abort"; }
 fi
 
 # DNS servers
@@ -537,14 +576,14 @@ if ! getent group "$daemon_owner" &>/dev/null; then
     info "Creating system group: $daemon_owner"
     groupadd --system "$daemon_owner"
 else
-    warn "Group $daemon_owner already exists, skipping"
+    info "Group $daemon_owner already exists -- skip"
 fi
 
 if ! id "$daemon_owner" &>/dev/null; then
     info "Creating system user: $daemon_owner"
     useradd --system --no-create-home --shell /bin/false --gid "$daemon_owner" --comment "Python DHCP Daemon" "$daemon_owner"
 else
-    warn "User $daemon_owner already exists, skipping"
+    info "User $daemon_owner already exists -- skip"
 fi
 
 # Create install directory
@@ -565,7 +604,7 @@ chmod 755 "$core_dir/pydhcpd.py"
 
 # Deploy pydhcpd.conf (preserved on update -- never overwritten)
 if [ -f "$core_dir/pydhcpd.conf" ]; then
-    { warn "pydhcpd.conf already exists in $install_dir"; warn "static hosts and blocked MACs kept"; warn "network parameters updated with your answers"; }
+    { info "pydhcpd.conf already exists in $install_dir"; info "static hosts and blocked MACs kept"; info "network parameters updated with your answers"; }
 else
     info "Deploying pydhcpd.conf ..."
     verify_source "$script_dir/core/pydhcpd.conf"
@@ -595,7 +634,7 @@ info "ACL directories/files present in $acl_base_dir"
 # any other future script read these from here instead of asking again,
 # adding only their own keys if missing.
 if [ -f "$install_dir/pydhcp.env" ]; then
-    warn "pydhcp.env already exists, not overwritten -- skip"
+    info "pydhcp.env already exists, not overwritten -- skip"
     info "interface not changed, keeping the value in pydhcp.env"
 else
     info "Creating pydhcp.env ..."

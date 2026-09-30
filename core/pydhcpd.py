@@ -174,7 +174,7 @@ def _attach_dhcp_bpf(sock):
         sock.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, fprog)
         log.info("Attached BPF filter to raw socket (dst port 67)")
     except OSError:
-        log.info("BPF attach failed -- degraded")
+        log.info("BPF attach failed")
 
 MSG_DISCOVER = 1
 MSG_OFFER    = 2
@@ -1455,7 +1455,7 @@ def ping_check(ip, timeout=1):
     try:
         alive = _icmp_ping(ip, timeout)
     except PermissionError:
-        log.info("ICMP raw socket denied, using ping -- degraded")
+        log.info("ICMP raw socket denied, using ping")
         try:
             result = subprocess.run(
                 ["ping", "-c", "1", "-W", str(timeout), "-q", ip],
@@ -1547,7 +1547,7 @@ class DHCPServer:
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
                                  self.interface.encode() + b"\0")
         except (OSError, AttributeError):
-            log.info("UDP bind to %.15s failed -- degraded", self.interface)
+            log.info("UDP bind to %.15s failed", self.interface)
         self.sock.bind(("", DHCP_SERVER_PORT))
 
         self.running = True
@@ -2037,9 +2037,10 @@ def main():
     try:
         config.load(defaults["conf"])
     except ConfigError as e:
-        log.error("Configuration error -- abort")
+        log.error("Configuration error")
         for _line in str(e).splitlines():
             log.error("%.46s", _line)
+        log.error("cannot start with an invalid configuration -- abort")
         sys.exit(1)
 
     if not config.server_id:
