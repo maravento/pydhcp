@@ -645,15 +645,14 @@ if (($in{'action'} || '') eq 'save' && defined $in{'conf_content'}) {
             close($fh);
 
             # List-form system avoids any shell interpretation of the path.
-            my $devnull;
-            open($devnull, '>', '/dev/null');
             my $rc;
-            {
-                local *STDOUT = $devnull if $devnull;
-                local *STDERR = $devnull if $devnull;
-                $rc = system($DAEMON_BIN, "-t", "-cf", $tmpfile);
-            }
-            close($devnull) if $devnull;
+            open(my $saved_out, '>&', \*STDOUT);
+            open(my $saved_err, '>&', \*STDERR);
+            open(STDOUT, '>', '/dev/null');
+            open(STDERR, '>', '/dev/null');
+            $rc = system($DAEMON_BIN, "-t", "-cf", $tmpfile);
+            open(STDOUT, '>&', $saved_out);
+            open(STDERR, '>&', $saved_err);
             if ($rc != 0) {
                 unlink($tmpfile);
                 $message = "<div style='margin:10px 0;padding:10px 14px;background:#f8d7da;color:#721c24;border-radius:4px;border:1px solid #f5c6cb;font-size:13px;'>$text{'config_syntax_error'}</div>\n";

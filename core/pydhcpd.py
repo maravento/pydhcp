@@ -123,6 +123,7 @@ if not _TEST_MODE:
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
     handlers=_log_handlers,
 )
 log = logging.getLogger("pydhcpd")

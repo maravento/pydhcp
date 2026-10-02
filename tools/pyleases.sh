@@ -45,8 +45,8 @@
 # NOTES:
 # - Designed for environments enforcing DHCP-based access control
 # - Incorrect ACL data may disrupt IP assignments
-# - pydhcp.env must already exist -- pyleases.sh only adds its own keys
-#   (ACL paths, timers, etc.) if missing, never the network ones
+# - pydhcp.env must already exist -- pyleases.sh only reads its keys and
+#   aborts if one is missing or malformed, it never writes to the file
 #
 # WPAD/PAC OPTION (option 252)
 # If you need WPAD/PAC for proxy auto-configuration:
@@ -122,7 +122,6 @@ for dep_pkg in python3 coreutils util-linux curl grep sed systemd; do
         exit 1
     fi
 done
-
 # ------------------------------------------------------------------------------
 # VARIABLES
 # ------------------------------------------------------------------------------
@@ -134,9 +133,6 @@ UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|
 UH_UINT='^(0|[1-9][0-9]*)$'
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
-
-# start
-log "pyleases start..."
 
 # ------------------------------------------------------------------------------
 # FUNCTIONS
@@ -165,230 +161,6 @@ cleanup_temp() {
     fi
 }
 trap cleanup_temp EXIT
-
-# ------------------------------------------------------------------------------
-# ENV
-# ------------------------------------------------------------------------------
-
-env_file="/etc/pydhcp/pydhcp.env"
-if [ ! -f "$env_file" ]; then
-    log "ERROR: pydhcp.env not found, run pysetup.sh -- abort"
-    exit 1
-fi
-
-env_owner=$(stat -c '%U' "$env_file" 2>/dev/null)
-env_group=$(stat -c '%G' "$env_file" 2>/dev/null)
-env_perms=$(stat -c '%a' "$env_file" 2>/dev/null)
-if [[ "$env_owner" != "root" ]] || [[ "$env_group" != "pydhcpd" ]] || [[ "$env_perms" != "640" ]]; then
-    if chown root:pydhcpd "$env_file" 2>/dev/null && chmod 640 "$env_file" 2>/dev/null; then
-        log "INFO: pydhcp.env perms fixed -- fixed"
-    else
-        log "ERROR: cannot fix pydhcp.env perms -- abort"
-        exit 1
-    fi
-fi
-unset env_owner env_group env_perms
-
-# Safety check before trusting this file enough to inject the pyleases.sh
-# keys into it: verify the pysetup.sh keys are actually present.
-missing_pysetup_keys=()
-for required_key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS; do
-    grep -q "^${required_key}=" "$env_file" || missing_pysetup_keys+=("$required_key")
-done
-if (( ${#missing_pysetup_keys[@]} > 0 )); then
-    for required_key in "${missing_pysetup_keys[@]}"; do
-        log "ERROR: missing key $required_key"
-    done
-    log "ERROR: pydhcp.env missing ${#missing_pysetup_keys[@]} key(s) -- abort"
-    exit 1
-fi
-unset missing_pysetup_keys required_key
-
-# Inserts $2 (one or more lines) right before the last closing
-# "# ====...====" delimiter, instead of a plain >> append -- keeps the block
-# inside the PYDHCP frame instead of scattering variables past it. Falls
-# back to a plain append if no delimiter line is found (older file).
-insert_before_closing_delimiter() {
-    local conf_file="$1" file_content="$2" last_line tmp_file range_boundary
-    # the pydhcp section never has a blank line in its body -- the first
-    # blank line in the file (if any) marks the boundary before anything
-    # appended after it (e.g. another script custom-values block).
-    # Anchor on the last "# ====" line before that boundary, not the last
-    # one in the whole file, so appended blocks are never disturbed.
-    range_boundary=$(grep -n '^$' "$conf_file" | head -1 | cut -d: -f1 || true)
-    if [[ -n "$range_boundary" ]]; then
-        last_line=$(head -n "$((range_boundary - 1))" "$conf_file" | grep -n '^# =\{5,\}$' | tail -1 | cut -d: -f1 || true)
-    else
-        last_line=$(grep -n '^# =\{5,\}$' "$conf_file" | tail -1 | cut -d: -f1 || true)
-    fi
-    if [[ -z "$last_line" ]]; then
-        printf '%s\n' "$file_content" >> "$conf_file"
-        return
-    fi
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
-    head -n "$((last_line - 1))" "$conf_file" > "$tmp_file"
-    printf '%s\n' "$file_content" >> "$tmp_file"
-    tail -n "+${last_line}" "$conf_file" >> "$tmp_file"
-    cat "$tmp_file" > "$conf_file"
-    rm -f "$tmp_file"
-}
-
-# Injects the pyleases.sh keys if missing. Never touches the network keys
-# above, already written by pysetup.sh. Backs up the file once, right
-# before the first actual change, as a fallback in case it needs to be undone.
-ensure_own_keys() {
-    local conf_file="$1" env_key added_count=0
-    declare -A own_defaults=(
-        [ACL_PATH]="/etc/acl"
-        [ACL_MAC_PATH]="/etc/acl/mac"
-        [ACL_DHCP_PATH]="/etc/pydhcp/acl"
-        [ACL_MAC_LIMITED]="/etc/acl/mac/mac-limited.txt"
-        [ACL_MAC_UNLIMITED]="/etc/acl/mac/mac-unlimited.txt"
-        [ACL_BLOCK_FILE]="/etc/pydhcp/acl/blockdhcp.txt"
-        [PYDHCPD_LEASES]="/etc/pydhcp/core/pydhcpd.leases"
-        [CLEANUP_INTERVAL]="60"
-        [AUTHORIZED_LEASE_TIME]="2592000"
-        [QUARANTINE_DURATION]="60"
-        [WPAD_ENABLED]="false"
-        [WPAD_PORT]="18100"
-        [PING_CHECK_ENABLED]="true"
-        [PING_TIMEOUT_SECONDS]="1"
-    )
-    for env_key in ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED \
-               ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION \
-               WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS; do
-        if ! grep -q "^${env_key}=" "$conf_file"; then
-            if (( ! added_count )); then
-                if cp -f "$conf_file" "${conf_file}.bak"; then
-                    log "INFO: backed up pydhcp.env to pydhcp.env.bak"
-                else
-                    log "ERROR: cannot back up pydhcp.env -- abort"
-                    exit 1
-                fi
-            fi
-            insert_before_closing_delimiter "$conf_file" "${env_key}=${own_defaults[$env_key]}"
-            added_count=1
-        fi
-    done
-    (( added_count )) && log "INFO: added missing defaults to $conf_file"
-}
-ensure_own_keys "$env_file"
-
-# Load only known KEY=VALUE pairs from env_file instead of sourcing it,
-# so a tampered or maliciously replaced env file cannot execute code.
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $conf_file: '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
-            ACL_MAC_PATH|ACL_DHCP_PATH|ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|ACL_BLOCK_FILE|PYDHCPD_LEASES|\
-            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|WPAD_PORT|PING_CHECK_ENABLED|\
-            PING_TIMEOUT_SECONDS|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-            *)
-                ;;
-        esac
-    done < "$conf_file"
-}
-load_conf "$env_file"
-
-for ip_var_name in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK; do
-    if ! [[ "${!ip_var_name}" =~ $UH_IPV4 ]]; then
-        log "ERROR: $ip_var_name invalid IPv4 -- abort"
-        exit 1
-    fi
-done
-unset ip_var_name
-if ! [[ "$SERV_MASK" =~ $UH_NETMASK ]]; then
-    log "ERROR: SERV_MASK is not a valid netmask -- abort"
-    exit 1
-fi
-if ! [[ "$SERV_DNS" =~ $UH_DNS ]]; then
-    log "ERROR: SERV_DNS invalid IPv4 list -- abort"
-    exit 1
-fi
-
-CLEANUP_INTERVAL="${CLEANUP_INTERVAL:-60}"
-if ! [[ "$CLEANUP_INTERVAL" =~ $UH_UINT ]] || (( CLEANUP_INTERVAL == 0 )); then
-    log "WARNING: CLEANUP_INTERVAL invalid -- fallback"
-    CLEANUP_INTERVAL=60
-fi
-AUTHORIZED_LEASE_TIME="${AUTHORIZED_LEASE_TIME:-2592000}"
-if ! [[ "$AUTHORIZED_LEASE_TIME" =~ $UH_UINT ]] || (( AUTHORIZED_LEASE_TIME == 0 )); then
-    log "WARNING: AUTHORIZED_LEASE_TIME invalid -- fallback"
-    AUTHORIZED_LEASE_TIME=2592000
-fi
-QUARANTINE_DURATION="${QUARANTINE_DURATION:-60}"
-if ! [[ "$QUARANTINE_DURATION" =~ $UH_UINT ]] || (( QUARANTINE_DURATION == 0 )); then
-    log "WARNING: QUARANTINE_DURATION invalid -- fallback"
-    QUARANTINE_DURATION=60
-fi
-PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
-if ! [[ "$PING_TIMEOUT_SECONDS" =~ $UH_UINT ]] || (( PING_TIMEOUT_SECONDS == 0 )); then
-    log "WARNING: PING_TIMEOUT_SECONDS invalid -- fallback"
-    PING_TIMEOUT_SECONDS=1
-fi
-
-# Guard: SERVER_IP must never fall inside its own block-pool range -- pydhcpd.py
-# rejects this at config load, but that only surfaces after this script has
-# already stopped the daemon and rewritten pydhcpd.conf. Catching it here,
-# before any destructive action, avoids leaving the daemon down over a config
-# mistake that could have been caught up front.
-if python3 -c "
-import ipaddress, sys
-server_ip = ipaddress.IPv4Address(sys.argv[1])
-pool_start = ipaddress.IPv4Address(sys.argv[2])
-pool_end = ipaddress.IPv4Address(sys.argv[3])
-print('1' if pool_start <= server_ip <= pool_end else '0')
-" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" 2>/dev/null | grep -q '^1$'; then
-    log "ERROR: SERVER_IP overlaps block-pool range -- abort"
-    exit 1
-fi
-
-wpad_port="${WPAD_PORT:-18100}"
-if ! [[ "$wpad_port" =~ $UH_UINT ]] ||
-   (( wpad_port < 1 || wpad_port > 65535 )); then
-    log "WARNING: WPAD_PORT invalid -- fallback"
-    wpad_port=18100
-fi
-wpad_url="http://$SERVER_IP:$wpad_port/wpad.pac"
-
-wpad_ready=0
-if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
-    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
-        wpad_ready=1
-    else
-        log "WARNING: WPAD_ENABLED=true but not served -- alert"
-    fi
-fi
-
-if (( wpad_ready )); then
-    wpad_header="option wpad code 252 = text;"
-    wpad_subnet="option wpad \"$wpad_url\";"
-else
-    wpad_header="#option wpad code 252 = text;"
-    wpad_subnet="#option wpad \"$wpad_url\";"
-fi
-
-if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
-    ping_check_line="ping-check true;"
-    ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS:-1};"
-else
-    ping_check_line="ping-check false;"
-    ping_timeout_line=""
-fi
 
 verify_dhcp_service() {
     if ! systemctl is-active --quiet pydhcpd; then
@@ -664,6 +436,209 @@ normalize_acl_lists() {
     normalize_acl_file "$ACL_BLOCK_FILE" "$strict_no_epoch_pattern" 1 drop
 }
 
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
+
+# PERMS
+# Owner and mode of every .env this script reads
+pydhcp_env="/etc/pydhcp/pydhcp.env"
+env_specs=("$pydhcp_env root:pydhcpd 640")
+for env_spec in "${env_specs[@]}"; do
+    read -r env_path env_owner_want env_perms_want <<< "$env_spec"
+    if [ ! -f "$env_path" ]; then
+        log "ERROR: $(basename "$env_path") not found -- abort"
+        exit 1
+    fi
+    env_owner=$(stat -c '%U:%G' "$env_path" 2>/dev/null)
+    env_perms=$(stat -c '%a' "$env_path" 2>/dev/null)
+    if [[ "$env_owner" != "$env_owner_want" ]] \
+       || [[ "$env_perms" != "$env_perms_want" ]]; then
+        if chown "$env_owner_want" "$env_path" 2>/dev/null \
+           && chmod "$env_perms_want" "$env_path" 2>/dev/null; then
+            log "INFO: $(basename "$env_path") perms fixed -- fixed"
+        else
+            log "ERROR: cannot fix $(basename "$env_path") perms -- abort"
+            exit 1
+        fi
+    fi
+done
+unset env_specs env_spec env_path env_owner_want env_perms_want
+unset env_owner env_perms
+
+# LOAD_CONF
+# so a tampered or maliciously replaced env file cannot execute code.
+load_conf() {
+    local conf_file="$1" env_key env_value env_line
+    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
+    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
+        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
+        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
+        env_key="${env_line%%=*}"
+        env_value="${env_line#*=}"
+        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
+           || [[ "$env_value" == [[:space:]\"\']* ]] \
+           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
+            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
+            exit 1
+        fi
+        case "$env_key" in
+            SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
+            ACL_MAC_PATH|ACL_DHCP_PATH|ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|ACL_BLOCK_FILE|PYDHCPD_LEASES|\
+            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|WPAD_PORT|PING_CHECK_ENABLED|\
+            PING_TIMEOUT_SECONDS|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
+                printf -v "$env_key" '%s' "$env_value"
+                ;;
+            *)
+                ;;
+        esac
+    done < "$conf_file"
+}
+
+# LOAD
+load_conf "$pydhcp_env" || true
+
+# KEY CHECK
+# Collect every failure first, then decide -- a single abort reports them all
+key_errors=()
+for env_key in ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED \
+               ACL_BLOCK_FILE PYDHCPD_LEASES DHCPDv4_CONF DAEMON_USER \
+               DAEMON_GROUP WPAD_ENABLED PING_CHECK_ENABLED; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+for env_key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK \
+               SERV_END_RANGE_BLOCK; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_IPV4 ]]; then
+        key_errors+=("$env_key invalid IPv4")
+    fi
+done
+if ! grep -q "^SERV_MASK=" "$pydhcp_env"; then
+    key_errors+=("SERV_MASK missing line")
+elif [[ -z "${SERV_MASK:-}" ]]; then
+    key_errors+=("SERV_MASK not set")
+elif ! [[ "$SERV_MASK" =~ $UH_NETMASK ]]; then
+    key_errors+=("SERV_MASK invalid netmask")
+fi
+if ! grep -q "^SERV_DNS=" "$pydhcp_env"; then
+    key_errors+=("SERV_DNS missing line")
+elif [[ -z "${SERV_DNS:-}" ]]; then
+    key_errors+=("SERV_DNS not set")
+elif ! [[ "$SERV_DNS" =~ $UH_DNS ]]; then
+    key_errors+=("SERV_DNS invalid IPv4 list")
+fi
+for env_key in CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION \
+               PING_TIMEOUT_SECONDS; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+        key_errors+=("$env_key invalid seconds")
+    fi
+done
+if ! grep -q "^WPAD_PORT=" "$pydhcp_env"; then
+    key_errors+=("WPAD_PORT missing line")
+elif [[ -z "${WPAD_PORT:-}" ]]; then
+    key_errors+=("WPAD_PORT not set")
+elif ! [[ "$WPAD_PORT" =~ $UH_UINT ]] \
+     || (( WPAD_PORT < 1 || WPAD_PORT > 65535 )); then
+    key_errors+=("WPAD_PORT invalid port")
+fi
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "ERROR: $key_error"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -- abort"
+    exit 1
+fi
+unset key_errors key_error env_key
+
+# FALLBACK
+# Second layer of protection, behind KEY CHECK -- by design never reached
+if [ -z "${CLEANUP_INTERVAL:-}" ]; then
+    log "WARNING: no CLEANUP_INTERVAL in pydhcp.env -- fallback"
+fi
+CLEANUP_INTERVAL="${CLEANUP_INTERVAL:-60}"
+if [ -z "${AUTHORIZED_LEASE_TIME:-}" ]; then
+    log "WARNING: no AUTHORIZED_LEASE_TIME in pydhcp.env -- fallback"
+fi
+AUTHORIZED_LEASE_TIME="${AUTHORIZED_LEASE_TIME:-2592000}"
+if [ -z "${QUARANTINE_DURATION:-}" ]; then
+    log "WARNING: no QUARANTINE_DURATION in pydhcp.env -- fallback"
+fi
+QUARANTINE_DURATION="${QUARANTINE_DURATION:-60}"
+if [ -z "${PING_TIMEOUT_SECONDS:-}" ]; then
+    log "WARNING: no PING_TIMEOUT_SECONDS in pydhcp.env -- fallback"
+fi
+PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
+if [ -z "${WPAD_PORT:-}" ]; then
+    log "WARNING: no WPAD_PORT in pydhcp.env -- fallback"
+fi
+wpad_port="${WPAD_PORT:-18100}"
+
+# KEY GUARD
+# Guard: SERVER_IP must never fall inside its own block-pool range -- pydhcpd.py
+# rejects this at config load, but that only surfaces after this script has
+# already stopped the daemon and rewritten pydhcpd.conf. Catching it here,
+# before any destructive action, avoids leaving the daemon down over a config
+# mistake that could have been caught up front.
+if python3 -c "
+import ipaddress, sys
+server_ip = ipaddress.IPv4Address(sys.argv[1])
+pool_start = ipaddress.IPv4Address(sys.argv[2])
+pool_end = ipaddress.IPv4Address(sys.argv[3])
+print('1' if pool_start <= server_ip <= pool_end else '0')
+" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" 2>/dev/null | grep -q '^1$'; then
+    log "ERROR: SERVER_IP=$SERVER_IP in block-pool range"
+    log "ERROR: blk=$SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK -- abort"
+    exit 1
+fi
+
+# ------------------------------------------------------------------------------
+# DHCPD CONFIG
+# ------------------------------------------------------------------------------
+
+wpad_url="http://$SERVER_IP:$wpad_port/wpad.pac"
+
+wpad_ready=0
+if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
+    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
+        wpad_ready=1
+    else
+        log "WARNING: WPAD_ENABLED=true but not served -- alert"
+    fi
+fi
+
+if (( wpad_ready )); then
+    wpad_header="option wpad code 252 = text;"
+    wpad_subnet="option wpad \"$wpad_url\";"
+else
+    wpad_header="#option wpad code 252 = text;"
+    wpad_subnet="#option wpad \"$wpad_url\";"
+fi
+
+if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
+    ping_check_line="ping-check true;"
+    ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS:-1};"
+else
+    ping_check_line="ping-check false;"
+    ping_timeout_line=""
+fi
+
+# ------------------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------------------
+
+log "pyleases start..."
+
 verify_dhcp_service
 verify_dhcp_files
 verify_dhcp_config
@@ -736,7 +711,7 @@ is_pydhcp() {
                         elif grep -qi "^a;${mac_address};" "$ACL_BLOCK_FILE" 2>/dev/null; then
                             log "INFO: $mac_address blocked (lease discarded)"
                         else
-                            log "INFO: $mac_address blocked, hostname=${client_name:0:20}"
+                            log "INFO: $mac_address blocked, host=${client_name:0:20}"
                             echo "$line_lease" >> "$ACL_BLOCK_FILE"
                         fi
                     fi
