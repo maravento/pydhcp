@@ -126,6 +126,15 @@ ask_interface_number() {
     done
 }
 
+list_interfaces() {
+    local iface_index iface_state iface_ip
+    for iface_index in "${!iface_list[@]}"; do
+        iface_state=$(ip -br link show "${iface_list[$iface_index]}" | awk '{print $2}')
+        iface_ip=$(ip -4 -o addr show dev "${iface_list[$iface_index]}" 2>/dev/null | awk '{print $4}' | paste -sd' ')
+        printf " [%d] %s (%s, %s)\n" "$((iface_index+1))" "${iface_list[$iface_index]}" "$iface_state" "${iface_ip:-no IPv4}"
+    done
+}
+
 ask_netmask() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
@@ -330,7 +339,7 @@ if [[ "${1:-}" == "--update" ]]; then
         { err "no installation found in $install_dir"; abort "run without --update to install first -- abort"; }
     fi
     if [ ! -f "$install_dir/pydhcp.env" ]; then
-        err "$install_dir/pydhcp.env not found (pre-dates config persistence)"
+        err "pydhcp.env not found, pre-dates config persistence"
         abort "run 'pysetup.sh --remove' then reinstall -- abort"
     fi
     if [ ! -d "$install_dir/tools" ]; then
@@ -454,11 +463,7 @@ mapfile -t iface_list < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1)
 if [[ ${#iface_list[@]} -eq 0 ]]; then
     abort "no network interfaces found -- abort"
 fi
-for iface_index in "${!iface_list[@]}"; do
-    iface_state=$(ip -br link show "${iface_list[$iface_index]}" | awk '{print $2}')
-    iface_ip=$(ip -4 -o addr show dev "${iface_list[$iface_index]}" 2>/dev/null | awk '{print $4}' | paste -sd' ')
-    printf " [%d] %s (%s, %s)\n" "$((iface_index+1))" "${iface_list[$iface_index]}" "$iface_state" "${iface_ip:-no IPv4}"
-done
+list_interfaces
 echo ""
 ask_interface_number "Select interface number" "1" iface_choice "${#iface_list[@]}"
 iface_selected="${iface_list[$((iface_choice-1))]}"
@@ -565,6 +570,33 @@ fi
 # disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
 # pydhcp.env afterward if your environment has strict ICMP firewall rules.
 ping_check_value="true"
+
+# WAN interface -- asked last and in its own block, so a wrapper installer can
+# supply it without shifting the questions above. pydhcp does not use this
+# value: it is recorded in pydhcp.env for the projects that do.
+echo ""
+if [ -n "${PYDHCP_WAN_IFACE:-}" ]; then
+    ip link show "$PYDHCP_WAN_IFACE" &>/dev/null \
+        || abort "PYDHCP_WAN_IFACE='$PYDHCP_WAN_IFACE' not found -- abort"
+    wan_iface_answer="$PYDHCP_WAN_IFACE"
+    info "WAN interface: $wan_iface_answer (from the caller)"
+else
+    info "WAN interface (the one facing the internet):"
+    list_interfaces
+    echo ""
+    wan_default=1
+    wan_detected=$(ip route show default 2>/dev/null | awk '{print $5}' | head -1)
+    for iface_index in "${!iface_list[@]}"; do
+        if [[ "${iface_list[$iface_index]}" == "$wan_detected" ]]; then
+            wan_default=$((iface_index+1))
+            break
+        fi
+    done
+    unset iface_index
+    ask_interface_number "Select WAN interface number" "$wan_default" wan_choice "${#iface_list[@]}"
+    wan_iface_answer="${iface_list[$((wan_choice-1))]}"
+    info "WAN interface: $wan_iface_answer"
+fi
 
 # Verify source files exist
 for source_file in core/pydhcpd.py core/pydhcpd.conf service/pydhcpd.service init.d/pydhcpd; do
@@ -681,6 +713,12 @@ PING_CACHE_TTL_SECONDS=120
 RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX=5
 RESERVATION_TTL_SECONDS=30
+# =============================================================================
+
+# =============================================================================
+# WAN
+# =============================================================================
+WAN_IFACE=$wan_iface_answer
 # =============================================================================
 ENVEOF
     info "Network, ACL and daemon defaults set in pydhcp.env"
