@@ -7,9 +7,8 @@
 # Default-Stop:      0 1 6
 # Short-Description: Python DHCP Daemon
 # Description:       Starts, stops, restarts and reports status of pydhcpd
+# Author:            maravento.com
 ### END INIT INFO
-
-# Author: maravento.com
 
 set -e
 

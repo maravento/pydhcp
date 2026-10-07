@@ -3,22 +3,18 @@
 #
 ################################################################################
 #
-# Installer / Uninstaller for pydhcpd
-# Deploys all files to their correct system paths
-# or removes them cleanly from the system.
+# pysetup -- pydhcp installer / updater
+#
+# DESCRIPTION:
+# Installs, updates or removes pydhcp. Run from inside the cloned repo.
+# Requires root.
 #
 # USAGE:
 # sudo bash pysetup.sh            Install
-# sudo bash pysetup.sh --update   Update code only. Preserves user config
-#                                 and backs up replaced files. Aborts if
-#                                 pydhcp.env is missing -- run without
-#                                 flags first.
+# sudo bash pysetup.sh --update   Update code only (preserves user config)
 # sudo bash pysetup.sh --remove   Uninstall
 #
-# LOG: pysetup.log, in the same directory this script is run from. Kept
-#      separate from /var/log/pydhcp.log (the daemon's operational log) so
-#      install, update and remove runs never mix with daily operation.
-#      Rewritten on each run.
+# LOG: pysetup.log, in the directory this script is run from
 #
 ################################################################################
 
@@ -463,11 +459,21 @@ mapfile -t iface_list < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1)
 if [[ ${#iface_list[@]} -eq 0 ]]; then
     abort "no network interfaces found -- abort"
 fi
-list_interfaces
-echo ""
-ask_interface_number "Select interface number" "1" iface_choice "${#iface_list[@]}"
-iface_selected="${iface_list[$((iface_choice-1))]}"
-info "Using interface: $iface_selected"
+
+# LAN interface -- a wrapper installer that already resolved it (e.g. uhm)
+# can supply it directly, so pydhcp does not ask again for the same value.
+if [ -n "${PYDHCP_LAN_IFACE:-}" ]; then
+    ip link show "$PYDHCP_LAN_IFACE" &>/dev/null \
+        || abort "PYDHCP_LAN_IFACE='$PYDHCP_LAN_IFACE' not found -- abort"
+    iface_selected="$PYDHCP_LAN_IFACE"
+    info "Using interface: $iface_selected (from the caller)"
+else
+    list_interfaces
+    echo ""
+    ask_interface_number "Select LAN interface number" "1" iface_choice "${#iface_list[@]}"
+    iface_selected="${iface_list[$((iface_choice-1))]}"
+    info "Using interface: $iface_selected"
+fi
 
 # DHCP server IP -- derived directly from the interface already chosen
 # above (it was listed with its IP in "Available network interfaces"),

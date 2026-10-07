@@ -3,61 +3,17 @@
 #
 ################################################################################
 #
-# DHCP Leases & ACL Manager (pydhcpd)
+# pyleases -- DHCP Leases & ACL Manager for pydhcpd
 #
 # DESCRIPTION:
-# DHCP lease management script for pydhcpd that:
-# - Parses and cleans pydhcpd.leases
-# - Detects unauthorized clients and adds them to the block list
-# - Dynamically rebuilds pydhcpd.conf based on ACL sources
-# - Applies static MAC->IP mappings from ACL files
-# - Detects duplicate entries across ACL sources: silently repairs
-#   blockdhcp.txt, aborts only when mac-*.txt conflicts with itself
-# - Safely restarts the pydhcpd service
+# Rebuilds pydhcpd.conf from the ACL lists, cleans pydhcpd.leases and
+# restarts pydhcpd. Requires root and a running pydhcpd.
 #
-# FEATURES:
-# - Locking mechanism to prevent concurrent executions (flock)
-# - Removes from pydhcpd.leases every client it blocks, so the IP it was
-#   using is free at that same instant
-# - normalize_acl_lists(): enforces the line format of every ACL file
-#   before anything parses them. A malformed line in mac-*.txt aborts the
-#   run, naming the file and the line number; in blockdhcp.txt it is
-#   dropped from the file and the run continues
-# - check_duplicate(): the single guard against duplicate ACL entries
-#   (priority mac-*.txt > blockdhcp.txt), called at the start and end of
-#   the run. mac-*.txt vs itself is fatal (fail-safe abort, naming the
-#   field/value/files, never resolved automatically); blockdhcp.txt is
-#   silently repaired
-# - check_mac_ip_ranges(): separate guard, mac-*.txt IPs landing inside
-#   the blockdhcp pool range, called alongside check_duplicate()
-# - Network configuration read from pydhcp.env; aborts if pydhcp.env or its
-#   network keys are missing
-# - All paths, ACL files and network settings read from pydhcp.env
+# USAGE:
+# sudo bash pyleases.sh    (no arguments)
 #
-# REQUIREMENTS:
-# - pydhcpd installed and running
-# - ACL directories and files as defined in pydhcp.env
-# - Root privileges
-#
-# ACL FORMAT:
-# a;MAC;IP;HOSTNAME;
-#
-# NOTES:
-# - Designed for environments enforcing DHCP-based access control
-# - Incorrect ACL data may disrupt IP assignments
-# - pydhcp.env must already exist -- pyleases.sh only reads its keys and
-#   aborts if one is missing or malformed, it never writes to the file
-#
-# WPAD/PAC OPTION (option 252)
-# If you need WPAD/PAC for proxy auto-configuration:
-# 1. Install and configure Apache2
-# 2. Create virtual host on port 18100
-# 3. Create wpad.pac file in Apache document root
-# 4. Set WPAD_ENABLED=true in pydhcp.env
-#
-# LOG: /var/log/pydhcp.log (pydhcpd:pydhcpd, 640), shared with the project
-#      Owned by that account so the daemon, which does not run as root,
-#      can write to it; this script runs as root
+# ENV: /etc/pydhcp/pydhcp.env
+# LOG: /var/log/pydhcp.log
 #
 ################################################################################
 

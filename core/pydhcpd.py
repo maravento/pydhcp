@@ -1,67 +1,22 @@
 #!/usr/bin/env python3
-# pydhcpd.py — Python DHCP Daemon
 # maravento.com
 #
-# DHCP daemon for those migrating from isc-dhcp-server (EOL 2022), using
-# compatible configuration syntax and lease file format. Not a full
-# replacement — see README Scope section for what is and isn't implemented.
-# Reads pydhcpd.conf and pydhcp.env. pydhcp.env holds two distinct groups:
-# (1) daemon bootstrap -- the equivalent of the old isc-dhcp-server default
-# file (config and leases paths, interface, user/group); (2) pydhcp's own
-# extra features with no isc-dhcp-server/dhcpd.conf equivalent (ping cache
-# TTL, allocation rate-limit, DISCOVER reservation TTL -- see
-# parse_defaults()). Every directive below that DOES have a dhcpd.conf
-# equivalent lives in pydhcpd.conf instead, same as isc-dhcp-server -- never
-# in pydhcp.env. Writes the leases file at the path those resolve to; the
-# PID path is fixed, see FIXED VALUES below.
+################################################################################
 #
-# Supported dhcpd.conf directives:
-#   authoritative, not authoritative, server-identifier, deny duplicates,
-#   deny declines,
-#   ping-check, ping-timeout, cleanup-interval, abandon-lease-time,
-#   host { hardware ethernet; fixed-address; }
-#   class "NAME" { match pick-first-value ... }
-#   subclass "NAME" 1:<mac>;
-#   subnet { option routers, broadcast-address,
-#             domain-name-servers, wpad;
-#             min/default/max-lease-time;
-#             pool { allow|deny members of "NAME";
-#                    allow|deny unknown-clients; allow|deny known-clients;
-#                    min/default/max-lease-time; range; } }
-#   Several pool blocks per subnet are accepted, each with its own ranges,
-#   rules and lease times; a client is served by the first pool that admits
-#   it, in the order they are written.
+# pydhcpd -- Python DHCP Daemon
 #
-# FIXED VALUES -- not configurable anywhere (not pydhcp.env, not
-# pydhcpd.conf), on purpose: each is a protocol/math invariant or an internal
-# implementation detail with no admin-meaningful range of alternatives, not
-# an operational choice. See individual comments at each site for the
-# specific reasoning:
-#   - Max pool/subnet size (65536 addresses) -- fixed by IPv4 arithmetic,
-#     not a policy.
-#   - Max DHCP option length (255 bytes, WPAD URL / other options) -- fixed
-#     by the 1-byte length field in the DHCP option format (RFC 2132).
-#   - Allocation round-robin counter wraparound (2**16) -- internal iteration
-#     state, no observable effect on behavior.
-#   - Main-loop shutdown poll timeout (5s socket timeout) -- controls how
-#     fast a stop request is noticed, not DHCP behavior.
-#   - Log file path (/var/log/pydhcp.log) -- pyleases.sh and the Webmin
-#     module already carry it hardcoded, so a configurable value could only
-#     ever diverge from them, never redirect the whole project.
-#   - PID file path (/run/pydhcp/pydhcpd.pid) -- systemd creates and owns
-#     that directory via RuntimeDirectory=pydhcp, and the init.d wrapper
-#     creates it before dropping privileges. A configurable path would let
-#     the PID land somewhere neither of them prepares, so there is exactly
-#     one location.
-# Anything else in pydhcp.env is a real, admin-adjustable value; this list
-# exists so a missing knob here isn't mistaken for an oversight.
+# DESCRIPTION:
+# DHCP daemon for those migrating from isc-dhcp-server (EOL 2022), with
+# compatible configuration syntax and lease file format.
 #
-# LEASE FILE:
-# Corrupt entries are removed from the leases file at startup.
+# USAGE:
+# systemctl {start|stop|restart|status} pydhcpd
+# pydhcpd.py -t, --test    Parse the configuration and exit
 #
-# Requirements: Python 3.8+, no external dependencies.
-# Runs as a systemd service under the pydhcpd user (AmbientCapabilities
-# CAP_NET_RAW, CAP_NET_BIND_SERVICE). User/group pydhcpd must exist.
+# ENV: /etc/pydhcp/pydhcp.env
+# LOG: /var/log/pydhcp.log
+#
+################################################################################
 
 import os
 import sys
@@ -92,9 +47,9 @@ BASE_DIR        = "/etc/pydhcp"
 PYDHCP_ENV      = os.path.join(BASE_DIR, "pydhcp.env")
 CONF_FILE       = os.path.join(BASE_DIR, "core", "pydhcpd.conf")
 LEASES_FILE     = os.path.join(BASE_DIR, "core", "pydhcpd.leases")
-# Fixed, not configurable -- see FIXED VALUES above.
+# Fixed, not configurable -- see README, Fixed values.
 PID_FILE        = "/run/pydhcp/pydhcpd.pid"
-# Fixed, not configurable -- see FIXED VALUES above.
+# Fixed, not configurable -- see README, Fixed values.
 LOG_FILE        = "/var/log/pydhcp.log"
 
 # =============================================================================
@@ -433,7 +388,7 @@ class DHCPConfig:
                         pass
 
                 pool_size = int(e) - int(s) + 1
-                if pool_size > 65536:  # fixed by IPv4 arithmetic, see FIXED VALUES header
+                if pool_size > 65536:  # PyDHCP cap, see README, Fixed values
                     raise ConfigError(
                         f"Pool range too large, max is 65536\n"
                         f"({s} - {e} covers {pool_size})")
@@ -450,7 +405,7 @@ class DHCPConfig:
                     f"and {mac}")
             seen_ips[ip] = mac
 
-        if self.wpad_url and len(self.wpad_url.encode()) > 255:  # DHCP option format, see FIXED VALUES header
+        if self.wpad_url and len(self.wpad_url.encode()) > 255:  # DHCP option format, see README, Fixed values
             raise ConfigError(
                 f"wpad URL too long for DHCP option 252\n"
                 f"({len(self.wpad_url.encode())} bytes, max is 255)")
@@ -779,14 +734,18 @@ class LeaseManager:
             for ip in stale:
                 log.info("Removing lease %.15s (outside pool)", ip)
                 del self.leases[ip]
-            snapshot = dict(self.leases) if (stale or self._dropped_on_load) else None
+            snapshot = dict(self.leases) if (stale or self._dropped_on_load
+                                             or self._expired_on_load) else None
         if self._dropped_on_load:
             log.info("Removed %d unreadable lease(s)", self._dropped_on_load)
+        if self._expired_on_load:
+            log.info("Removed %d expired lease(s)", self._expired_on_load)
         if snapshot is not None:
             self._save_snapshot(snapshot)
 
     def _load(self):
         self._dropped_on_load = 0
+        self._expired_on_load = 0
         if not os.path.isfile(self.path):
             return
         with open(self.path) as f:
@@ -847,6 +806,8 @@ class LeaseManager:
             lease = Lease(ip, mac, hostname, start, end, binding)
             if not lease.is_expired():
                 self.leases[ip] = lease
+            else:
+                self._expired_on_load += 1
 
         log.info("Leases loaded: %d entries", len(self.leases))
 
@@ -1128,7 +1089,7 @@ class LeaseManager:
             return None
         sorted_free = sorted(free, key=self._ip_key)
         idx = self._alloc_counter % len(sorted_free)
-        self._alloc_counter = (self._alloc_counter + 1) % (2**16)  # internal state, see FIXED VALUES header
+        self._alloc_counter = (self._alloc_counter + 1) % (2**16)  # internal state, see README, Fixed values
         return sorted_free[idx]
 
     def _create_lease_locked(self, ip, mac, hostname, duration):
@@ -1348,7 +1309,7 @@ def build_packet(msg_type, xid, mac_str, offered_ip, server_ip, config, lease_ti
 
     def add_opt(code, value):
         nonlocal options
-        if len(value) > 255:  # DHCP option format, see FIXED VALUES header
+        if len(value) > 255:  # DHCP option format, see README, Fixed values
             log.info("Option %d too long (%d B) -- skip", code, len(value))
             return
         options += bytes([code, len(value)]) + value
@@ -1536,7 +1497,7 @@ class DHCPServer:
                                           socket.htons(ETH_P_IP))
             self.raw_sock.bind((self.interface, 0))
             _attach_dhcp_bpf(self.raw_sock)
-            self.raw_sock.settimeout(5.0)  # shutdown poll only, see FIXED VALUES header
+            self.raw_sock.settimeout(5.0)  # shutdown poll only, see README, Fixed values
         except OSError:
             log.error("Raw socket failed on %.15s -- abort", self.interface)
             sys.exit(1)

@@ -3,25 +3,16 @@
 #
 ################################################################################
 #
-# pywebmin - module installation/uninstallation script for Webmin
+# pywebmin -- PyDHCP module installer for Webmin
 #
 # DESCRIPTION:
-# Installs or uninstalls the PyDHCP module for Webmin. Provides a web
-# interface to manage the pydhcpd daemon: service control, active leases
-# table, and configuration editor.
+# Installs or uninstalls the optional PyDHCP module for Webmin.
+# Requires root, Webmin and pydhcpd already installed.
 #
 # USAGE:
-# sudo ./pywebmin.sh [OPTIONS]
-#
-# OPTIONS:
-# install      Install the module
-# uninstall    Uninstall the module
-# -h, --help   Show help message
-#
-# EXIT CODES:
-# 0 - Normal exit, or module installed/uninstalled successfully
-# 1 - Not root, already running, missing dependency, Webmin not
-#     installed, pydhcpd not installed, or invalid option
+# sudo ./pywebmin.sh install      Install the module
+# sudo ./pywebmin.sh uninstall    Uninstall the module
+# ./pywebmin.sh -h, --help        Show this help
 #
 ################################################################################
 
