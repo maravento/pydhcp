@@ -872,7 +872,7 @@ class "blockdhcp" {
     clean_block_list
 
     log "INFO: stopping pydhcpd"
-    systemctl stop pydhcpd
+    systemctl stop pydhcpd || true
     if systemctl is-active --quiet pydhcpd; then
         log "ERROR: pydhcpd still active, stop failed -- abort"
         exit 1
@@ -886,13 +886,13 @@ class "blockdhcp" {
     log "INFO: rebuilding pydhcpd.conf"
     update_dhcp_conf
     log "INFO: starting pydhcpd"
-    systemctl start pydhcpd
+    systemctl start pydhcpd || true
     if ! systemctl is-active --quiet pydhcpd; then
         log "WARNING: pydhcpd failed to start after rebuild -- fallback"
         if [ -f "${dhcp_conf}.bak" ]; then
             cp -f "${dhcp_conf}.bak" "$dhcp_conf"
             log "INFO: restored backup config, retrying start"
-            systemctl start pydhcpd
+            systemctl start pydhcpd || true
             if ! systemctl is-active --quiet pydhcpd; then
                 log "ERROR: pydhcpd failed to start with backup config -- abort"
                 exit 1

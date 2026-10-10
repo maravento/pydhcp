@@ -21,6 +21,7 @@
 import os
 import sys
 import socket
+import errno
 import struct
 import ctypes
 import time
@@ -533,10 +534,13 @@ class DHCPConfig:
         m = re.search(r'\bsubnet\s+([\d.]+)\s+netmask\s+([\d.]+)\s*\{', raw)
         if m:
             subnet_body = self._balanced_braces(raw, m.end())
-            if subnet_body is not None:
-                self.subnet  = m.group(1)
-                self.netmask = m.group(2)
-                self._parse_subnet(subnet_body)
+            if subnet_body is None:
+                raise ConfigError(
+                    f"Unclosed subnet block\n"
+                    f"(subnet {m.group(1)} netmask {m.group(2)})")
+            self.subnet  = m.group(1)
+            self.netmask = m.group(2)
+            self._parse_subnet(subnet_body)
 
     def _parse_subnet(self, body):
         m = re.search(r'option\s+routers\s+([^;]+);', body)
@@ -1493,6 +1497,23 @@ class DHCPServer:
             sys.exit(1)
 
         try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            self.sock.bind(("", DHCP_SERVER_PORT))
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE:
+                log.error("UDP port %d occupied -- abort", DHCP_SERVER_PORT)
+            else:
+                log.error("Cannot bind UDP port %d -- abort", DHCP_SERVER_PORT)
+            sys.exit(1)
+
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
+                                 self.interface.encode() + b"\0")
+        except (OSError, AttributeError):
+            log.info("UDP bind to %.15s failed", self.interface)
+
+        try:
             self.raw_sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW,
                                           socket.htons(ETH_P_IP))
             self.raw_sock.bind((self.interface, 0))
@@ -1501,16 +1522,6 @@ class DHCPServer:
         except OSError:
             log.error("Raw socket failed on %.15s -- abort", self.interface)
             sys.exit(1)
-
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        try:
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
-                                 self.interface.encode() + b"\0")
-        except (OSError, AttributeError):
-            log.info("UDP bind to %.15s failed", self.interface)
-        self.sock.bind(("", DHCP_SERVER_PORT))
 
         self.running = True
         log.info("Listening on %.10s (DHCP port %d)",
