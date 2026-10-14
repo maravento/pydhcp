@@ -10,9 +10,12 @@
 # Requires root.
 #
 # USAGE:
-# sudo bash pysetup.sh            Install
-# sudo bash pysetup.sh --update   Update code only (preserves user config)
-# sudo bash pysetup.sh --remove   Uninstall
+# sudo bash pysetup.sh --install      Install
+# sudo bash pysetup.sh --update       Update code only (preserves user config)
+# sudo bash pysetup.sh --uninstall    Uninstall
+# sudo bash pysetup.sh --status       Report service, port, config and log
+# sudo bash pysetup.sh                Interactive menu
+# sudo bash pysetup.sh -h             Show usage
 #
 # LOG: pysetup.log, in the directory this script is run from
 #
@@ -254,21 +257,18 @@ check_port() {
     fi
 }
 
-# Start
-log "pysetup start..."
 
 # ------------------------------------------------------------------------------
 # REMOVE
 # ------------------------------------------------------------------------------
 
-if [[ "${1:-}" == "--remove" ]]; then
+do_uninstall() {
     echo ""
-    info "This removes pydhcp completely: $install_dir,"
-    info "the service, the init.d wrapper, the log and"
-    info "the Webmin module."
-    info "Run tools/pybk.sh first if you want a backup."
-    info "/etc/bak is NOT touched."
-    info "Package dependencies are NOT removed."
+    echo "This removes pydhcp completely from $install_dir."
+    echo "The service, init.d wrapper, log and Webmin module are also removed."
+    echo "Run tools/pybk.sh first if you want a backup."
+    echo "/etc/bak is NOT touched."
+    echo "Package dependencies are NOT removed."
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" \
         || { info "Aborted by user."; exit 0; }
@@ -321,81 +321,85 @@ if [[ "${1:-}" == "--remove" ]]; then
     systemctl daemon-reload
 
     success "pydhcpd has been removed from the system."
-    log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
     rm -f "$pydhcp_log_file"
-    exit 0
-fi
+}
 
 # ------------------------------------------------------------------------------
 # UPDATE
 # ------------------------------------------------------------------------------
 
-if [[ "${1:-}" == "--update" ]]; then
+do_update() {
     if [ ! -d "$install_dir" ]; then
-        { err "no installation found in $install_dir"; abort "run without --update to install first -- abort"; }
+        { err "no installation found in $install_dir"; abort "use --install to install first -- abort"; }
     fi
     if [ ! -f "$install_dir/pydhcp.env" ]; then
         err "pydhcp.env not found, pre-dates config persistence"
-        abort "run 'pysetup.sh --remove' then reinstall -- abort"
+        abort "run 'pysetup.sh --uninstall' then reinstall -- abort"
     fi
     if [ ! -d "$install_dir/tools" ]; then
         err "$install_dir/tools not found (unexpected state)"
-        abort "run 'pysetup.sh --remove' then reinstall -- abort"
+        abort "run 'pysetup.sh --uninstall' then reinstall -- abort"
     fi
 
     if [ -x "$install_dir/tools/pybk.sh" ]; then
-        info "Creating backup with pybk.sh ..."
-        "$install_dir/tools/pybk.sh" || warn "backup failed, continuing -- alert"
+        if "$install_dir/tools/pybk.sh"; then
+            info "backup taken with pybk.sh"
+        else
+            warn "backup failed, continuing -- alert"
+        fi
     else
         warn "pybk.sh not found, no backup -- alert"
     fi
 
-    info "Stopping pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
+    info "pydhcpd stopped for update"
 
-    info "Updating pydhcpd.py ..."
     verify_source "$script_dir/core/pydhcpd.py"
     cp "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py"
     chown root:root "$core_dir/pydhcpd.py"
     chmod 755 "$core_dir/pydhcpd.py"
+    info "updated core/pydhcpd.py"
 
-    info "Updating systemd unit ..."
     verify_source "$script_dir/service/pydhcpd.service"
     cp "$script_dir/service/pydhcpd.service" "$service_file"
     chown root:root "$service_file"
     chmod 644 "$service_file"
+    info "updated $service_file"
 
-    info "Updating init.d wrapper ..."
     verify_source "$script_dir/init.d/pydhcpd"
     cp "$script_dir/init.d/pydhcpd" "$init_file"
     chown root:root "$init_file"
     chmod 755 "$init_file"
+    info "updated $init_file"
+
+    verify_source "$script_dir/tools/pydhcpenv.sh"
+    install -m 644 -o root -g root "$script_dir/tools/pydhcpenv.sh" "$install_dir/tools/pydhcpenv.sh"
+    info "updated tools/pydhcpenv.sh"
 
     if [ -f "$script_dir/tools/pyleases.sh" ]; then
-        info "Updating tools/pyleases.sh ..."
         verify_source "$script_dir/tools/pyleases.sh"
         cp "$script_dir/tools/pyleases.sh" "$install_dir/tools/pyleases.sh"
         chown root:root "$install_dir/tools/pyleases.sh"
         chmod 755 "$install_dir/tools/pyleases.sh"
+        info "updated tools/pyleases.sh"
     fi
 
     if [ -f "$script_dir/tools/pybk.sh" ]; then
-        info "Updating tools/pybk.sh ..."
         verify_source "$script_dir/tools/pybk.sh"
         cp "$script_dir/tools/pybk.sh" "$install_dir/tools/pybk.sh"
         chown root:root "$install_dir/tools/pybk.sh"
         chmod 755 "$install_dir/tools/pybk.sh"
+        info "updated tools/pybk.sh"
     fi
 
     if [ -f "$script_dir/tools/pywebmin.sh" ]; then
-        info "Updating tools/pywebmin.sh ..."
         verify_source "$script_dir/tools/pywebmin.sh"
         cp "$script_dir/tools/pywebmin.sh" "$install_dir/tools/pywebmin.sh"
         chown root:root "$install_dir/tools/pywebmin.sh"
         chmod 755 "$install_dir/tools/pywebmin.sh"
+        info "updated tools/pywebmin.sh"
     fi
 
-    info "Consolidating logs into $pydhcp_log_file ..."
     if [ -f /var/log/pydhcpd.log ]; then
         cat /var/log/pydhcpd.log >> "$pydhcp_log_file"
         rm -f /var/log/pydhcpd.log
@@ -420,6 +424,8 @@ if [[ "${1:-}" == "--update" ]]; then
 EOF
     chmod 644 /etc/logrotate.d/pydhcp
     chown root:root /etc/logrotate.d/pydhcp
+    info "updated /etc/logrotate.d/pydhcp"
+    info "logs consolidated into $pydhcp_log_file"
 
     systemctl daemon-reload
     if ! systemctl start pydhcpd; then
@@ -431,252 +437,248 @@ EOF
     info "$core_dir/pydhcpd.conf unchanged"
     info "$install_dir/pydhcp.env unchanged"
     info "$core_dir/pydhcpd.leases unchanged"
-    info "WPAD/option 252 is set by WPAD_ENABLED,"
-    info "in pydhcp.env, not by editing pyleases.sh."
-    info "This update does not change it."
     echo ""
-    log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
-    exit 0
-fi
+}
 
 # ------------------------------------------------------------------------------
 # INSTALL
 # ------------------------------------------------------------------------------
 
-if [ -f "$core_dir/pydhcpd.py" ]; then
-    err "pydhcpd is already installed at $install_dir"
-    abort "use --update or --remove instead -- abort"
-fi
-
-check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
-check_port udp 67 "DHCP server"
-warn_overlap "dhcp" dnsmasq
-
-# Detect and select network interface
-echo ""
-info "Available network interfaces:"
-mapfile -t iface_list < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
-if [[ ${#iface_list[@]} -eq 0 ]]; then
-    abort "no network interfaces found -- abort"
-fi
-
-# LAN interface -- a wrapper installer that already resolved it (e.g. uhm)
-# can supply it directly, so pydhcp does not ask again for the same value.
-if [ -n "${PYDHCP_LAN_IFACE:-}" ]; then
-    ip link show "$PYDHCP_LAN_IFACE" &>/dev/null \
-        || abort "PYDHCP_LAN_IFACE='$PYDHCP_LAN_IFACE' not found -- abort"
-    iface_selected="$PYDHCP_LAN_IFACE"
-    info "Using interface: $iface_selected (from the caller)"
-else
-    list_interfaces
-    echo ""
-    ask_interface_number "Select LAN interface number" "1" iface_choice "${#iface_list[@]}"
-    iface_selected="${iface_list[$((iface_choice-1))]}"
-    info "Using interface: $iface_selected"
-fi
-
-# DHCP server IP -- derived directly from the interface already chosen
-# above (it was listed with its IP in "Available network interfaces"),
-# so there's no need to ask for it again.
-echo ""
-mapfile -t iface_ips < <(ip -4 -o addr show dev "$iface_selected" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
-case "${#iface_ips[@]}" in
-    0)
-        abort "interface has no IPv4 address -- abort"
-        ;;
-    1)
-        server_ip_answer="${iface_ips[0]}"
-        info "Server IP: $server_ip_answer (from $iface_selected)"
-        ;;
-    *)
-        echo " Interface '$iface_selected' has multiple IPv4 addresses:"
-        select server_ip_answer in "${iface_ips[@]}"; do
-            [ -n "$server_ip_answer" ] && break
-        done
-        info "Server IP: $server_ip_answer"
-        ;;
-esac
-
-# Netmask
-echo ""
-ask_netmask "Enter netmask" "255.255.255.0" netmask_answer
-info "Netmask: $netmask_answer"
-
-# Calculate network values from server_ip_answer and netmask_answer using python3
-local_subnet=$(python3 -c "
-import ipaddress, sys
-local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
-print(local_network.network_address)
-" "$server_ip_answer" "$netmask_answer")
-local_broadcast=$(python3 -c "
-import ipaddress, sys
-local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
-print(local_network.broadcast_address)
-" "$server_ip_answer" "$netmask_answer")
-local_net_base=$(echo "$local_subnet" | cut -d. -f1-3)
-info "Subnet: $local_subnet"
-info "Network base: $local_net_base"
-info "Broadcast: $local_broadcast"
-
-# Pool range
-echo ""
-while true; do
-    ask_octet "Enter pool start (last octet)" "220" pool_start_answer
-    ask_octet "Enter pool end (last octet)" "235" pool_end_answer "$pool_start_answer"
-    if python3 -c "
-import ipaddress, sys
-local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
-pool_start = ipaddress.IPv4Address(f'{sys.argv[3]}.{sys.argv[4]}')
-pool_end = ipaddress.IPv4Address(f'{sys.argv[3]}.{sys.argv[5]}')
-sys.exit(0 if pool_start in local_network and pool_end in local_network else 1)
-" "$local_subnet" "$netmask_answer" "$local_net_base" "$pool_start_answer" "$pool_end_answer"; then
-        break
+do_install() {
+    if [ -f "$core_dir/pydhcpd.py" ]; then
+        err "pydhcpd is already installed at $install_dir"
+        abort "use --update or --uninstall instead -- abort"
     fi
-    { info "pool ${local_net_base}.${pool_start_answer}-${pool_end_answer} is outside the subnet"; info "subnet is ${local_subnet}/${netmask_answer}, try again -- retry"; }
-done
-info "Pool range: ${local_net_base}.${pool_start_answer} -> ${local_net_base}.${pool_end_answer}"
 
-# Guard: server_ip_answer must never fall inside its own pool range -- pydhcpd.py
-# rejects this at config load, but that only surfaces after this script has
-# already created the user, directories, and systemd unit. Catching it here,
-# before any of that, avoids leaving the system half-configured over a
-# config mistake that could have been caught up front.
-if python3 -c "
-import ipaddress, sys
-server_ip = ipaddress.IPv4Address(sys.argv[1])
-pool_start = ipaddress.IPv4Address(sys.argv[2])
-pool_end = ipaddress.IPv4Address(sys.argv[3])
-print('1' if pool_start <= server_ip <= pool_end else '0')
-" "$server_ip_answer" "${local_net_base}.${pool_start_answer}" "${local_net_base}.${pool_end_answer}" 2>/dev/null | grep -q '^1$'; then
-    { err "server IP $server_ip_answer overlaps pool ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"; abort "choose a server IP outside the pool -- abort"; }
-fi
+    check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
+    check_port udp 67 "DHCP server"
+    warn_overlap "dhcp" dnsmasq
 
-# DNS servers
-echo ""
-ask_dns "Enter DNS server(s), comma-separated" "8.8.8.8,1.1.1.1" dns_answer
-info "DNS servers: $dns_answer"
-
-# Pool lease cleanup interval
-ask_number "DHCP pool lease cleanup interval in seconds" "60" cleanup_answer
-
-# Optional features
-wpad_port_value="18100"
-# Same check pyleases.sh repeats on every reload -- but this is the only time
-# it ever runs for an admin who manages pydhcpd.conf by hand and never
-# invokes pyleases.sh afterward. No need to ask: if something is already
-# serving wpad.pac on the default port, WPAD is enabled; otherwise it isn't.
-if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://${server_ip_answer}:${wpad_port_value}/wpad.pac"; then
-    wpad_detected="true"
-    info "wpad.pac detected on port $wpad_port_value -- WPAD enabled"
-else
-    wpad_detected="false"
-    info "wpad.pac not detected on port $wpad_port_value -- WPAD not enabled"
-fi
-# ping-check matches isc-dhcp-server's own default (on unless explicitly
-# disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
-# pydhcp.env afterward if your environment has strict ICMP firewall rules.
-ping_check_value="true"
-
-# WAN interface -- asked last and in its own block, so a wrapper installer can
-# supply it without shifting the questions above. pydhcp does not use this
-# value: it is recorded in pydhcp.env for the projects that do.
-echo ""
-if [ -n "${PYDHCP_WAN_IFACE:-}" ]; then
-    ip link show "$PYDHCP_WAN_IFACE" &>/dev/null \
-        || abort "PYDHCP_WAN_IFACE='$PYDHCP_WAN_IFACE' not found -- abort"
-    wan_iface_answer="$PYDHCP_WAN_IFACE"
-    info "WAN interface: $wan_iface_answer (from the caller)"
-else
-    info "WAN interface (the one facing the internet):"
-    list_interfaces
+    # Detect and select network interface
     echo ""
-    wan_default=1
-    wan_detected=$(ip route show default 2>/dev/null | awk '{print $5}' | head -1)
-    for iface_index in "${!iface_list[@]}"; do
-        if [[ "${iface_list[$iface_index]}" == "$wan_detected" ]]; then
-            wan_default=$((iface_index+1))
+    info "Available network interfaces:"
+    mapfile -t iface_list < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
+    if [[ ${#iface_list[@]} -eq 0 ]]; then
+        abort "no network interfaces found -- abort"
+    fi
+
+    # LAN interface -- a wrapper installer that already resolved it (e.g. uhm)
+    # can supply it directly, so pydhcp does not ask again for the same value.
+    if [ -n "${PYDHCP_LAN_IFACE:-}" ]; then
+        ip link show "$PYDHCP_LAN_IFACE" &>/dev/null \
+            || abort "PYDHCP_LAN_IFACE='$PYDHCP_LAN_IFACE' not found -- abort"
+        iface_selected="$PYDHCP_LAN_IFACE"
+        info "Using interface: $iface_selected (from the caller)"
+    else
+        list_interfaces
+        echo ""
+        ask_interface_number "Select LAN interface number" "1" iface_choice "${#iface_list[@]}"
+        iface_selected="${iface_list[$((iface_choice-1))]}"
+        info "Using interface: $iface_selected"
+    fi
+
+    # DHCP server IP -- derived directly from the interface already chosen
+    # above (it was listed with its IP in "Available network interfaces"),
+    # so there's no need to ask for it again.
+    echo ""
+    mapfile -t iface_ips < <(ip -4 -o addr show dev "$iface_selected" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+    case "${#iface_ips[@]}" in
+        0)
+            abort "interface has no IPv4 address -- abort"
+            ;;
+        1)
+            server_ip_answer="${iface_ips[0]}"
+            info "Server IP: $server_ip_answer (from $iface_selected)"
+            ;;
+        *)
+            echo " Interface '$iface_selected' has multiple IPv4 addresses:"
+            select server_ip_answer in "${iface_ips[@]}"; do
+                [ -n "$server_ip_answer" ] && break
+            done
+            info "Server IP: $server_ip_answer"
+            ;;
+    esac
+
+    # Netmask
+    echo ""
+    ask_netmask "Enter netmask" "255.255.255.0" netmask_answer
+    info "Netmask: $netmask_answer"
+
+    # Calculate network values from server_ip_answer and netmask_answer using python3
+    local_subnet=$(python3 -c "
+    import ipaddress, sys
+    local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
+    print(local_network.network_address)
+    " "$server_ip_answer" "$netmask_answer")
+    local_broadcast=$(python3 -c "
+    import ipaddress, sys
+    local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
+    print(local_network.broadcast_address)
+    " "$server_ip_answer" "$netmask_answer")
+    local_net_base=$(echo "$local_subnet" | cut -d. -f1-3)
+    info "Subnet: $local_subnet"
+    info "Network base: $local_net_base"
+    info "Broadcast: $local_broadcast"
+
+    # Pool range
+    echo ""
+    while true; do
+        ask_octet "Enter pool start (last octet)" "220" pool_start_answer
+        ask_octet "Enter pool end (last octet)" "235" pool_end_answer "$pool_start_answer"
+        if python3 -c "
+    import ipaddress, sys
+    local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
+    pool_start = ipaddress.IPv4Address(f'{sys.argv[3]}.{sys.argv[4]}')
+    pool_end = ipaddress.IPv4Address(f'{sys.argv[3]}.{sys.argv[5]}')
+    sys.exit(0 if pool_start in local_network and pool_end in local_network else 1)
+    " "$local_subnet" "$netmask_answer" "$local_net_base" "$pool_start_answer" "$pool_end_answer"; then
             break
         fi
+        { info "pool ${local_net_base}.${pool_start_answer}-${pool_end_answer} is outside the subnet"; info "subnet is ${local_subnet}/${netmask_answer}, try again -- retry"; }
     done
-    unset iface_index
-    ask_interface_number "Select WAN interface number" "$wan_default" wan_choice "${#iface_list[@]}"
-    wan_iface_answer="${iface_list[$((wan_choice-1))]}"
-    info "WAN interface: $wan_iface_answer"
-fi
+    info "Pool range: ${local_net_base}.${pool_start_answer} -> ${local_net_base}.${pool_end_answer}"
 
-# Verify source files exist
-for source_file in core/pydhcpd.py core/pydhcpd.conf service/pydhcpd.service init.d/pydhcpd; do
-    [ -f "$script_dir/$source_file" ] || { err "missing source file: $source_file"; abort "run pysetup.sh from the project directory -- abort"; }
-done
-
-# Create system group and user
-if ! getent group "$daemon_owner" &>/dev/null; then
-    info "Creating system group: $daemon_owner"
-    groupadd --system "$daemon_owner"
-else
-    info "Group $daemon_owner already exists -- skip"
-fi
-
-if ! id "$daemon_owner" &>/dev/null; then
-    info "Creating system user: $daemon_owner"
-    useradd --system --no-create-home --shell /bin/false --gid "$daemon_owner" --comment "Python DHCP Daemon" "$daemon_owner"
-else
-    info "User $daemon_owner already exists -- skip"
-fi
-
-# Create install directory
-info "Creating $install_dir ..."
-mkdir -p "$install_dir"
-chown root:"$daemon_owner" "$install_dir"
-chmod 770 "$install_dir"
-mkdir -p "$core_dir"
-chown root:"$daemon_owner" "$core_dir"
-chmod 770 "$core_dir"
-
-# Deploy daemon and config files
-info "Deploying pydhcpd.py ..."
-verify_source "$script_dir/core/pydhcpd.py"
-cp "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py"
-chown root:root "$core_dir/pydhcpd.py"
-chmod 755 "$core_dir/pydhcpd.py"
-
-# Deploy pydhcpd.conf (preserved on update -- never overwritten)
-if [ -f "$core_dir/pydhcpd.conf" ]; then
-    { info "pydhcpd.conf already exists in $install_dir"; info "static hosts and blocked MACs kept"; info "network parameters updated with your answers"; }
-else
-    info "Deploying pydhcpd.conf ..."
-    verify_source "$script_dir/core/pydhcpd.conf"
-    cp "$script_dir/core/pydhcpd.conf" "$core_dir/pydhcpd.conf"
-fi
-chown root:"$daemon_owner" "$core_dir/pydhcpd.conf"
-chmod 640 "$core_dir/pydhcpd.conf"
-
-# Create pydhcp's own ACL directories/files (preserved on update -- never
-# overwritten). These lists are only consumed by the optional pyleases.sh
-# tool, but are created here unconditionally so their paths can be recorded
-# in pydhcp.env from the start -- not deferred until pyleases.sh first runs.
-mkdir -p "$acl_mac_dir" "$acl_dhcp_dir"
-chmod 700 "$acl_mac_dir" "$acl_dhcp_dir"
-
-for source_file in "$acl_block_file" "$acl_limited_file" "$acl_unlimited_file"; do
-    if [ ! -f "$source_file" ]; then
-        touch "$source_file"
-        chmod 600 "$source_file"
-        chown root:root "$source_file"
+    # Guard: server_ip_answer must never fall inside its own pool range -- pydhcpd.py
+    # rejects this at config load, but that only surfaces after this script has
+    # already created the user, directories, and systemd unit. Catching it here,
+    # before any of that, avoids leaving the system half-configured over a
+    # config mistake that could have been caught up front.
+    if python3 -c "
+    import ipaddress, sys
+    server_ip = ipaddress.IPv4Address(sys.argv[1])
+    pool_start = ipaddress.IPv4Address(sys.argv[2])
+    pool_end = ipaddress.IPv4Address(sys.argv[3])
+    print('1' if pool_start <= server_ip <= pool_end else '0')
+    " "$server_ip_answer" "${local_net_base}.${pool_start_answer}" "${local_net_base}.${pool_end_answer}" 2>/dev/null | grep -q '^1$'; then
+        { err "server IP $server_ip_answer overlaps pool ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"; abort "choose a server IP outside the pool -- abort"; }
     fi
-done
-info "ACL directories/files present in $acl_base_dir"
 
-# Create pydhcp.env (preserved on update -- never overwritten). Single source
-# of truth for network, ACL-path and daemon-defaults values: pyleases.sh and
-# any other future script read these from here instead of asking again,
-# adding only their own keys if missing.
-if [ -f "$install_dir/pydhcp.env" ]; then
-    info "pydhcp.env already exists, not overwritten -- skip"
-    info "interface not changed, keeping the value in pydhcp.env"
-else
-    info "Creating pydhcp.env ..."
-    cat > "$install_dir/pydhcp.env" <<ENVEOF
+    # DNS servers
+    echo ""
+    ask_dns "Enter DNS server(s), comma-separated" "8.8.8.8,1.1.1.1" dns_answer
+    info "DNS servers: $dns_answer"
+
+    # Pool lease cleanup interval
+    ask_number "DHCP pool lease cleanup interval in seconds" "60" cleanup_answer
+
+    # Optional features
+    wpad_port_value="18100"
+    # Same check pyleases.sh repeats on every reload -- but this is the only time
+    # it ever runs for an admin who manages pydhcpd.conf by hand and never
+    # invokes pyleases.sh afterward. No need to ask: if something is already
+    # serving wpad.pac on the default port, WPAD is enabled; otherwise it isn't.
+    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://${server_ip_answer}:${wpad_port_value}/wpad.pac"; then
+        wpad_detected="true"
+        info "wpad.pac detected on port $wpad_port_value -- WPAD enabled"
+    else
+        wpad_detected="false"
+        info "wpad.pac not detected on port $wpad_port_value -- WPAD not enabled"
+    fi
+    # ping-check matches isc-dhcp-server's own default (on unless explicitly
+    # disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
+    # pydhcp.env afterward if your environment has strict ICMP firewall rules.
+    ping_check_value="true"
+
+    # WAN interface -- asked last and in its own block, so a wrapper installer can
+    # supply it without shifting the questions above. pydhcp does not use this
+    # value: it is recorded in pydhcp.env for the projects that do.
+    echo ""
+    if [ -n "${PYDHCP_WAN_IFACE:-}" ]; then
+        ip link show "$PYDHCP_WAN_IFACE" &>/dev/null \
+            || abort "PYDHCP_WAN_IFACE='$PYDHCP_WAN_IFACE' not found -- abort"
+        wan_iface_answer="$PYDHCP_WAN_IFACE"
+        info "WAN interface: $wan_iface_answer (from the caller)"
+    else
+        info "WAN interface (the one facing the internet):"
+        list_interfaces
+        echo ""
+        wan_default=1
+        wan_detected=$(ip route show default 2>/dev/null | awk '{print $5}' | head -1)
+        for iface_index in "${!iface_list[@]}"; do
+            if [[ "${iface_list[$iface_index]}" == "$wan_detected" ]]; then
+                wan_default=$((iface_index+1))
+                break
+            fi
+        done
+        unset iface_index
+        ask_interface_number "Select WAN interface number" "$wan_default" wan_choice "${#iface_list[@]}"
+        wan_iface_answer="${iface_list[$((wan_choice-1))]}"
+        info "WAN interface: $wan_iface_answer"
+    fi
+
+    # Verify source files exist
+    for source_file in core/pydhcpd.py core/pydhcpd.conf service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh; do
+        [ -f "$script_dir/$source_file" ] || { err "missing source file: $source_file"; abort "run pysetup.sh from the project directory -- abort"; }
+    done
+
+    # Create system group and user
+    if ! getent group "$daemon_owner" &>/dev/null; then
+        info "Creating system group: $daemon_owner"
+        groupadd --system "$daemon_owner"
+    else
+        info "Group $daemon_owner already exists -- skip"
+    fi
+
+    if ! id "$daemon_owner" &>/dev/null; then
+        info "Creating system user: $daemon_owner"
+        useradd --system --no-create-home --shell /bin/false --gid "$daemon_owner" --comment "Python DHCP Daemon" "$daemon_owner"
+    else
+        info "User $daemon_owner already exists -- skip"
+    fi
+
+    # Create install directory
+    info "Creating $install_dir ..."
+    mkdir -p "$install_dir"
+    chown root:"$daemon_owner" "$install_dir"
+    chmod 770 "$install_dir"
+    mkdir -p "$core_dir"
+    chown root:"$daemon_owner" "$core_dir"
+    chmod 770 "$core_dir"
+
+    # Deploy daemon and config files
+    info "Deploying pydhcpd.py ..."
+    verify_source "$script_dir/core/pydhcpd.py"
+    cp "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py"
+    chown root:root "$core_dir/pydhcpd.py"
+    chmod 755 "$core_dir/pydhcpd.py"
+
+    # Deploy pydhcpd.conf (preserved on update -- never overwritten)
+    if [ -f "$core_dir/pydhcpd.conf" ]; then
+        { info "pydhcpd.conf already exists in $install_dir"; info "static hosts and blocked MACs kept"; info "network parameters updated with your answers"; }
+    else
+        info "Deploying pydhcpd.conf ..."
+        verify_source "$script_dir/core/pydhcpd.conf"
+        cp "$script_dir/core/pydhcpd.conf" "$core_dir/pydhcpd.conf"
+    fi
+    chown root:"$daemon_owner" "$core_dir/pydhcpd.conf"
+    chmod 640 "$core_dir/pydhcpd.conf"
+
+    # Create pydhcp's own ACL directories/files (preserved on update -- never
+    # overwritten). These lists are only consumed by the optional pyleases.sh
+    # tool, but are created here unconditionally so their paths can be recorded
+    # in pydhcp.env from the start -- not deferred until pyleases.sh first runs.
+    mkdir -p "$acl_mac_dir" "$acl_dhcp_dir"
+    chmod 700 "$acl_mac_dir" "$acl_dhcp_dir"
+
+    for source_file in "$acl_block_file" "$acl_limited_file" "$acl_unlimited_file"; do
+        if [ ! -f "$source_file" ]; then
+            touch "$source_file"
+            chmod 600 "$source_file"
+            chown root:root "$source_file"
+        fi
+    done
+    info "ACL directories/files present in $acl_base_dir"
+
+    # Create pydhcp.env (preserved on update -- never overwritten). Single source
+    # of truth for network, ACL-path and daemon-defaults values: pyleases.sh and
+    # any other future script read these from here instead of asking again,
+    # adding only their own keys if missing.
+    if [ -f "$install_dir/pydhcp.env" ]; then
+        info "pydhcp.env already exists, not overwritten -- skip"
+        info "interface not changed, keeping the value in pydhcp.env"
+    else
+        info "Creating pydhcp.env ..."
+        cat > "$install_dir/pydhcp.env" <<ENVEOF
 # =============================================================================
 # PYDHCP
 # /etc/pydhcp/pydhcp.env
@@ -727,89 +729,92 @@ RESERVATION_TTL_SECONDS=30
 WAN_IFACE=$wan_iface_answer
 # =============================================================================
 ENVEOF
-    info "Network, ACL and daemon defaults set in pydhcp.env"
-fi
-chown root:"$daemon_owner" "$install_dir/pydhcp.env"
-chmod 640 "$install_dir/pydhcp.env"
-
-# Apply network parameters to pydhcpd.conf
-conf_tmp=$(mktemp "$install_dir/.pydhcpd.conf.XXXXXX") || abort "cannot create temp file -- abort"
-cp -f "$core_dir/pydhcpd.conf" "$conf_tmp"
-sed -i "s|^server-identifier .*|server-identifier ${server_ip_answer};|" "$conf_tmp"
-sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${local_subnet} netmask ${netmask_answer}|" "$conf_tmp"
-sed -i "s|option routers .*;|option routers ${server_ip_answer};|" "$conf_tmp"
-sed -i "s|option broadcast-address .*;|option broadcast-address ${local_broadcast};|" "$conf_tmp"
-sed -i "s|range [0-9.]* [0-9.]*;|range ${local_net_base}.${pool_start_answer} ${local_net_base}.${pool_end_answer};|" "$conf_tmp"
-sed -i "s|option domain-name-servers .*;|option domain-name-servers ${dns_answer};|" "$conf_tmp"
-sed -i "s|^cleanup-interval .*|cleanup-interval ${cleanup_answer};|" "$conf_tmp"
-sed -i "/pool {/,/}/ s|min-lease-time .*;|min-lease-time ${cleanup_answer};|" "$conf_tmp"
-sed -i "/pool {/,/}/ s|default-lease-time .*;|default-lease-time ${cleanup_answer};|" "$conf_tmp"
-sed -i "/pool {/,/}/ s|max-lease-time .*;|max-lease-time ${cleanup_answer};|" "$conf_tmp"
-if [[ "$wpad_detected" == "true" ]]; then
-    sed -i "s|# option wpad code 252 = text;|option wpad code 252 = text;|" "$conf_tmp"
-    sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
-else
-    sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
-fi
-mv -f "$conf_tmp" "$core_dir/pydhcpd.conf"
-info "Network parameters set in pydhcpd.conf"
-
-# Re-apply permissions after sed edits
-chown root:"$daemon_owner" "$core_dir/pydhcpd.conf"
-chmod 640 "$core_dir/pydhcpd.conf"
-
-# Initialize empty leases file if not present
-if [ ! -f "$core_dir/pydhcpd.leases" ]; then
-    info "Creating empty pydhcpd.leases ..."
-    touch "$core_dir/pydhcpd.leases"
-    chown "$daemon_owner":"$daemon_owner" "$core_dir/pydhcpd.leases"
-    chmod 640 "$core_dir/pydhcpd.leases"
-fi
-
-# Deploy tools
-info "Creating $install_dir/tools ..."
-mkdir -p "$install_dir/tools"
-chown root:root "$install_dir/tools"
-chmod 755 "$install_dir/tools"
-
-for tool_script in pyleases.sh pywebmin.sh pybk.sh; do
-    if [ -f "$script_dir/tools/$tool_script" ]; then
-        info "Deploying tools/$tool_script ..."
-        verify_source "$script_dir/tools/$tool_script"
-        cp "$script_dir/tools/$tool_script" "$install_dir/tools/$tool_script"
-        chown root:root "$install_dir/tools/$tool_script"
-        chmod 755 "$install_dir/tools/$tool_script"
+        info "Network, ACL and daemon defaults set in pydhcp.env"
     fi
-done
+    chown root:"$daemon_owner" "$install_dir/pydhcp.env"
+    chmod 640 "$install_dir/pydhcp.env"
 
-if [ -x "$install_dir/tools/pybk.sh" ]; then
-    info "Registering pybk.sh monthly cron entry ..."
-    "$install_dir/tools/pybk.sh" install || warn "cron entry not registered -- alert"
-fi
+    # Apply network parameters to pydhcpd.conf
+    conf_tmp=$(mktemp "$install_dir/.pydhcpd.conf.XXXXXX") || abort "cannot create temp file -- abort"
+    cp -f "$core_dir/pydhcpd.conf" "$conf_tmp"
+    sed -i "s|^server-identifier .*|server-identifier ${server_ip_answer};|" "$conf_tmp"
+    sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${local_subnet} netmask ${netmask_answer}|" "$conf_tmp"
+    sed -i "s|option routers .*;|option routers ${server_ip_answer};|" "$conf_tmp"
+    sed -i "s|option broadcast-address .*;|option broadcast-address ${local_broadcast};|" "$conf_tmp"
+    sed -i "s|range [0-9.]* [0-9.]*;|range ${local_net_base}.${pool_start_answer} ${local_net_base}.${pool_end_answer};|" "$conf_tmp"
+    sed -i "s|option domain-name-servers .*;|option domain-name-servers ${dns_answer};|" "$conf_tmp"
+    sed -i "s|^cleanup-interval .*|cleanup-interval ${cleanup_answer};|" "$conf_tmp"
+    sed -i "/pool {/,/}/ s|min-lease-time .*;|min-lease-time ${cleanup_answer};|" "$conf_tmp"
+    sed -i "/pool {/,/}/ s|default-lease-time .*;|default-lease-time ${cleanup_answer};|" "$conf_tmp"
+    sed -i "/pool {/,/}/ s|max-lease-time .*;|max-lease-time ${cleanup_answer};|" "$conf_tmp"
+    if [[ "$wpad_detected" == "true" ]]; then
+        sed -i "s|# option wpad code 252 = text;|option wpad code 252 = text;|" "$conf_tmp"
+        sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
+    else
+        sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
+    fi
+    mv -f "$conf_tmp" "$core_dir/pydhcpd.conf"
+    info "Network parameters set in pydhcpd.conf"
 
-# Deploy systemd service
-info "Deploying systemd unit ..."
-verify_source "$script_dir/service/pydhcpd.service"
-cp "$script_dir/service/pydhcpd.service" "$service_file"
-chown root:root "$service_file"
-chmod 644 "$service_file"
+    # Re-apply permissions after sed edits
+    chown root:"$daemon_owner" "$core_dir/pydhcpd.conf"
+    chmod 640 "$core_dir/pydhcpd.conf"
 
-# Deploy init.d wrapper
-info "Deploying init.d wrapper ..."
-verify_source "$script_dir/init.d/pydhcpd"
-cp "$script_dir/init.d/pydhcpd" "$init_file"
-chown root:root "$init_file"
-chmod 755 "$init_file"
+    # Initialize empty leases file if not present
+    if [ ! -f "$core_dir/pydhcpd.leases" ]; then
+        info "Creating empty pydhcpd.leases ..."
+        touch "$core_dir/pydhcpd.leases"
+        chown "$daemon_owner":"$daemon_owner" "$core_dir/pydhcpd.leases"
+        chmod 640 "$core_dir/pydhcpd.leases"
+    fi
 
-# Create log file if it does not exist, ensure correct ownership/permissions
-[ -f "$pydhcp_log_file" ] || touch "$pydhcp_log_file"
-chown "$daemon_owner":"$daemon_owner" "$pydhcp_log_file"
-chmod 640 "$pydhcp_log_file"
+    # Deploy tools
+    info "Creating $install_dir/tools ..."
+    mkdir -p "$install_dir/tools"
+    chown root:root "$install_dir/tools"
+    chmod 755 "$install_dir/tools"
 
-# Deploy logrotate config
-info "Deploying logrotate config ..."
-rm -f /etc/logrotate.d/pydhcpd
-cat > /etc/logrotate.d/pydhcp << 'EOF'
+    verify_source "$script_dir/tools/pydhcpenv.sh"
+    install -m 644 -o root -g root "$script_dir/tools/pydhcpenv.sh" "$install_dir/tools/pydhcpenv.sh"
+
+    for tool_script in pyleases.sh pywebmin.sh pybk.sh; do
+        if [ -f "$script_dir/tools/$tool_script" ]; then
+            info "Deploying tools/$tool_script ..."
+            verify_source "$script_dir/tools/$tool_script"
+            cp "$script_dir/tools/$tool_script" "$install_dir/tools/$tool_script"
+            chown root:root "$install_dir/tools/$tool_script"
+            chmod 755 "$install_dir/tools/$tool_script"
+        fi
+    done
+
+    if [ -x "$install_dir/tools/pybk.sh" ]; then
+        info "Registering pybk.sh monthly cron entry ..."
+        "$install_dir/tools/pybk.sh" install || warn "cron entry not registered -- alert"
+    fi
+
+    # Deploy systemd service
+    info "Deploying systemd unit ..."
+    verify_source "$script_dir/service/pydhcpd.service"
+    cp "$script_dir/service/pydhcpd.service" "$service_file"
+    chown root:root "$service_file"
+    chmod 644 "$service_file"
+
+    # Deploy init.d wrapper
+    info "Deploying init.d wrapper ..."
+    verify_source "$script_dir/init.d/pydhcpd"
+    cp "$script_dir/init.d/pydhcpd" "$init_file"
+    chown root:root "$init_file"
+    chmod 755 "$init_file"
+
+    # Create log file if it does not exist, ensure correct ownership/permissions
+    [ -f "$pydhcp_log_file" ] || touch "$pydhcp_log_file"
+    chown "$daemon_owner":"$daemon_owner" "$pydhcp_log_file"
+    chmod 640 "$pydhcp_log_file"
+
+    # Deploy logrotate config
+    info "Deploying logrotate config ..."
+    rm -f /etc/logrotate.d/pydhcpd
+    cat > /etc/logrotate.d/pydhcp << 'EOF'
 /var/log/pydhcp.log {
     daily
     rotate 4
@@ -823,29 +828,134 @@ cat > /etc/logrotate.d/pydhcp << 'EOF'
     endscript
 }
 EOF
-chmod 644 /etc/logrotate.d/pydhcp
-chown root:root /etc/logrotate.d/pydhcp
+    chmod 644 /etc/logrotate.d/pydhcp
+    chown root:root /etc/logrotate.d/pydhcp
 
-# Enable and start service
-info "Enabling and starting pydhcpd ..."
-systemctl daemon-reload
-systemctl enable --force pydhcpd
-if ! systemctl start pydhcpd; then
-    { err "pydhcpd failed to start"; abort "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
-fi
+    # Enable and start service
+    info "Enabling and starting pydhcpd ..."
+    systemctl daemon-reload
+    systemctl enable --force pydhcpd
+    if ! systemctl start pydhcpd; then
+        { err "pydhcpd failed to start"; abort "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
+    fi
 
-echo ""
-success "pydhcpd installed and running."
-echo ""
-info "Configuration : $core_dir/pydhcpd.conf"
-info "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"
-info "Leases : $core_dir/pydhcpd.leases"
-info "Logs : journalctl -u pydhcpd -f"
-echo ""
-info "To remove : sudo bash pysetup.sh --remove"
+    echo ""
+    success "pydhcpd installed and running."
+    echo ""
+    info "Configuration : $core_dir/pydhcpd.conf"
+    info "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"
+    info "Leases : $core_dir/pydhcpd.leases"
+    info "Logs : journalctl -u pydhcpd -f"
+    echo ""
+    info "To remove : sudo bash pysetup.sh --uninstall"
+}
 
 # ------------------------------------------------------------------------------
-# END
+# STATUS
 # ------------------------------------------------------------------------------
+
+do_status() {
+    echo ""
+    echo "=== pydhcpd Service ==="
+    if [[ ! -f "$service_file" ]]; then
+        echo "pydhcpd: NOT INSTALLED"
+    elif systemctl is-active --quiet pydhcpd; then
+        echo "pydhcpd: RUNNING"
+    else
+        echo "pydhcpd: STOPPED"
+    fi
+
+    echo ""
+    echo "=== DHCP Port ==="
+    if ss -uln 2>/dev/null | grep -qE ":67[[:space:]]"; then
+        echo ":67/udp OPEN"
+    else
+        echo ":67/udp CLOSED"
+    fi
+
+    echo ""
+    echo "=== Config ==="
+    if [[ -f "$install_dir/pydhcp.env" ]]; then
+        echo "Interface : $(grep '^INTERFACESv4=' "$install_dir/pydhcp.env" | cut -d= -f2-)"
+        echo "WAN iface : $(grep '^WAN_IFACE=' "$install_dir/pydhcp.env" | cut -d= -f2-)"
+    else
+        echo "$install_dir/pydhcp.env not found"
+    fi
+
+    echo ""
+    echo "=== Log ==="
+    if [[ -f "$pydhcp_log_file" ]]; then
+        echo "$pydhcp_log_file (last 10):"
+        tail -10 "$pydhcp_log_file" | sed 's/^/ /'
+    else
+        echo "$pydhcp_log_file not found"
+    fi
+    echo ""
+}
+
+# ------------------------------------------------------------------------------
+# MENU
+# ------------------------------------------------------------------------------
+
+# Interactive menu shown when the script runs without arguments
+show_menu() {
+    local menu_option
+    while true; do
+        echo ""
+        echo "pydhcp installer"
+        echo "----------------"
+        echo "1) Install"
+        echo "2) Update"
+        echo "3) Uninstall"
+        echo "4) Status"
+        echo "5) Exit"
+        echo ""
+        read -p "Select option [5]: " menu_option
+        menu_option="${menu_option:-5}"
+        case "$menu_option" in
+            1) do_install; break ;;
+            2) do_update; break ;;
+            3) do_uninstall; break ;;
+            4) do_status; break ;;
+            5) exit 0 ;;
+            *) info "invalid option -- retry" ;;
+        esac
+    done
+}
+
+usage() {
+    cat <<USAGE_END
+Usage: sudo bash $(basename "$0") [OPTION]
+
+  --install      Install pydhcp. Aborts if already installed
+  --update       Update code only, preserving the user configuration
+  --uninstall    Remove pydhcp, with two confirmations up front
+  --status       Report the service, the port, the configuration and the log
+  -h, --help     Show this message
+
+Without arguments it opens the interactive menu.
+USAGE_END
+}
+
+# ------------------------------------------------------------------------------
+# ACTIONS
+# ------------------------------------------------------------------------------
+
+# Run the action given on the command line, or fall back to the menu
+log "pysetup start..."
+
+case "${1:-}" in
+    --install) do_install ;;
+    --update) do_update ;;
+    --uninstall) do_uninstall ;;
+    --status) do_status ;;
+    "") show_menu ;;
+    -h|--help) usage ;;
+    *)
+        err "unknown option $1 -- abort"
+        usage
+        exit 1
+        ;;
+esac
 
 log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"

@@ -5,8 +5,6 @@
 [![Stargazers](https://img.shields.io/github/stars/maravento/pydhcp?label=Stargazers)](https://github.com/maravento/pydhcp/stargazers)
 [![Twitter Follow](https://img.shields.io/twitter/follow/maraventostudio.svg)](https://twitter.com/maraventostudio)
 
-<!-- markdownlint-disable MD033 -->
-
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
@@ -25,6 +23,8 @@
     </td>
   </tr>
 </table>
+
+<!-- markdownlint-disable MD033 -->
 
 ## REQUIREMENTS
 
@@ -47,7 +47,79 @@
 - systemd
 - iproute2, passwd, util-linux, coreutils, grep, sed, iputils-ping, findutils, libc-bin, logrotate
 
+## REPOSITORY STRUCTURE
+
+---
+
+```
+pydhcp/
+├── acl/
+│   └── blockdhcp.txt       # MAC addresses blocked from getting a DHCP lease
+│
+├── core/
+│   ├── pydhcpd.py          # DHCP daemon: handles DISCOVER/OFFER/REQUEST/ACK
+│   └── pydhcpd.conf        # Daemon config: hosts, pools, lease timers
+│
+├── init.d/
+│   └── pydhcpd             # init.d-style start/stop/status wrapper around the systemd service
+│
+├── service/
+│   └── pydhcpd.service     # systemd unit that runs the daemon
+│
+├── tools/
+│   ├── pydhcpenv.sh        # Shared Bash configuration reader (sourced, not executed)
+│   ├── pybk.sh             # Backup pydhcp configuration and data (see Tools section)
+│   ├── pyleases.sh         # Rebuilds pydhcpd.conf from ACL files and manages leases (see Tools section)
+│   └── pywebmin.sh         # Installs the Webmin module for managing pydhcpd from the browser (see Tools section)
+│
+└── pysetup.sh          # Installs, updates or removes pydhcp
+```
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      Files generated at runtime (not included in the repository):
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Archivos generados en runtime (no incluidos en el repositorio):
+    </td>
+  </tr>
+</table>
+
+```
+/etc/pydhcp/core/pydhcpd.leases                  # Active leases database
+/run/pydhcp/pydhcpd.pid                          # PID file, written by the daemon
+                                                 # (systemd creates the directory)
+/etc/bak/pydhcp/pybk_<TIMESTAMP>.zip             # Full project backup written by tools/pybk.sh, up to 3 kept
+/etc/pydhcp/core/pydhcpd.conf.webmin.bak         # Rollback copy written by the Webmin module (pywebmin.sh) on each save, 1 kept
+/etc/webmin/pydhcp/.csrf_token                   # CSRF secret for the Webmin module (pywebmin.sh), mode 0600
+```
+
 ## HOW TO USE
+
+---
+
+### Actions
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <code>pysetup.sh</code> takes one action per run. Without arguments it opens the interactive menu, with the same four actions and an exit option.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <code>pysetup.sh</code> ejecuta una acción por vez. Sin argumentos abre el menú interactivo, con las mismas cuatro acciones y una opción de salida.
+    </td>
+  </tr>
+</table>
+
+| Action | Description | Descripción |
+|---|---|---|
+| `sudo bash pysetup.sh` | Opens the interactive menu | Abre el menú interactivo |
+| `sudo bash pysetup.sh --install` | Installs pydhcp. Aborts if already installed | Instala pydhcp. Aborta si ya está instalado |
+| `sudo bash pysetup.sh --update` | Updates the code and preserves the user configuration | Actualiza el código y conserva la configuración del usuario |
+| `sudo bash pysetup.sh --uninstall` | Removes pydhcp, with two confirmations up front | Elimina pydhcp, con dos confirmaciones al inicio |
+| `sudo bash pysetup.sh --status` | Reports the service, the DHCP port, the configuration and the last log lines. Modifies nothing | Informa el servicio, el puerto DHCP, la configuración y las últimas líneas del log. No modifica nada |
+| `sudo bash pysetup.sh -h` | Shows the usage | Muestra el uso |
 
 ---
 
@@ -67,7 +139,7 @@
 ```bash
 git clone --depth=1 https://github.com/maravento/pydhcp.git
 cd pydhcp
-sudo bash pysetup.sh
+sudo bash pysetup.sh --install
 ```
 
 ### Update & Remove
@@ -87,16 +159,17 @@ sudo bash pysetup.sh
 cd pydhcp
 sudo bash pysetup.sh --update
 # or
-sudo bash pysetup.sh --remove
+sudo bash pysetup.sh --uninstall
 ```
 
-| File | `--update` | `--remove` |
+| File | `--update` | `--uninstall` |
 |------|-----------|------------|
 | `pydhcpd.py` | ✅ overwritten | ✅ removed |
 | `pydhcpd.service` | ✅ overwritten | ✅ removed |
 | `init.d/pydhcpd` | ✅ overwritten | ✅ removed |
 | `tools/pybk.sh` | ✅ overwritten | ✅ removed (its cron entry is deregistered first) |
 | `tools/pyleases.sh` | ✅ overwritten | ✅ removed |
+| `tools/pydhcpenv.sh` | ✅ overwritten | ✅ removed |
 | `tools/pywebmin.sh` | ✅ overwritten | ✅ removed (also uninstalls the Webmin module, if installed) |
 | `pydhcpd.conf` | ⛔ preserved | ✅ removed |
 | `pydhcpd.leases` | ⛔ preserved | ✅ removed |
@@ -109,13 +182,13 @@ sudo bash pysetup.sh --remove
 | `/etc/bak/` (project backups written by `tools/pybk.sh`) | ⛔ preserved | ⛔ preserved |
 | `/etc/acl/mac/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
 
-> `/etc/acl` is never touched by `--remove`. It holds the administrator's own `mac-*.txt` lists, edited by hand, which `pydhcp` may or may not use depending on whether the optional `tools/pyleases.sh` tool is ever run — `pysetup.sh` creates the directory regardless, so uninstalling the daemon does not assume that data is safe to discard.
+> `/etc/acl` is never touched by `--uninstall`. It holds the administrator's own `mac-*.txt` lists, edited by hand, which `pydhcp` may or may not use depending on whether the optional `tools/pyleases.sh` tool is ever run — `pysetup.sh` creates the directory regardless, so uninstalling the daemon does not assume that data is safe to discard.
 >
-> `/etc/acl` permanece intacto al ejecutar `--remove`. Allí se guardan las listas `mac-*.txt` del administrador. `pydhcp` solo las utiliza si se ejecuta la herramienta opcional `tools/pyleases.sh`. Como `pysetup.sh` crea ese directorio, la desinstalación no elimina esos datos.
+> `/etc/acl` permanece intacto al ejecutar `--uninstall`. Allí se guardan las listas `mac-*.txt` del administrador. `pydhcp` solo las utiliza si se ejecuta la herramienta opcional `tools/pyleases.sh`. Como `pysetup.sh` crea ese directorio, la desinstalación no elimina esos datos.
 
-> `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is therefore stored under `/etc/pydhcp/acl/`, like `uhm`'s own lists under `/etc/uhm/acl/`. The `--remove` option deletes it along with the rest of `/etc/pydhcp`; to keep a copy, run `tools/pybk.sh` first.
+> `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is therefore stored under `/etc/pydhcp/acl/`, like `uhm`'s own lists under `/etc/uhm/acl/`. The `--uninstall` option deletes it along with the rest of `/etc/pydhcp`; to keep a copy, run `tools/pybk.sh` first.
 >
-> `blockdhcp.txt` es un caso distinto: es la lista propia de `pydhcp`, escrita solo por `pyleases.sh` y no se edita manualmente. Por eso se guarda en `/etc/pydhcp/acl/`, igual que las listas propias de `uhm` se guardan en `/etc/uhm/acl/`. La opción `--remove` la elimina junto con el resto de `/etc/pydhcp`; para conservar una copia, se ejecuta antes `tools/pybk.sh`.
+> `blockdhcp.txt` es un caso distinto: es la lista propia de `pydhcp`, escrita solo por `pyleases.sh` y no se edita manualmente. Por eso se guarda en `/etc/pydhcp/acl/`, igual que las listas propias de `uhm` se guardan en `/etc/uhm/acl/`. La opción `--uninstall` la elimina junto con el resto de `/etc/pydhcp`; para conservar una copia, se ejecuta antes `tools/pybk.sh`.
 
 ### Daily operation
 
@@ -420,6 +493,19 @@ sudo ls -l /etc/pydhcp/ /var/log/pydhcp.log
 ### Tools
 
 ---
+
+#### pydhcpenv.sh
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> loads it with <code>source</code> and declares its allowed keys. It parses <code>pydhcp.env</code> without executing it; file permissions and key validation remain in <code>pyleases.sh</code>. The installer deploys the reader before <code>pyleases.sh</code> during installation and update. Do not run it separately or schedule it in cron.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> lo carga mediante <code>source</code> y declara sus claves permitidas. Interpreta <code>pydhcp.env</code> sin ejecutarlo; los permisos y la validación de claves permanecen en <code>pyleases.sh</code>. El instalador despliega el lector antes de <code>pyleases.sh</code> durante la instalación y la actualización. No se ejecuta por separado ni se programa en cron.
+    </td>
+  </tr>
+</table>
 
 #### pyleases
 
@@ -758,53 +844,6 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
   </tr>
 </table>
 
-## REPOSITORY STRUCTURE
-
----
-
-```
-pydhcp/
-├── acl/
-│   └── blockdhcp.txt       # MAC addresses blocked from getting a DHCP lease
-│
-├── core/
-│   ├── pydhcpd.py          # DHCP daemon: handles DISCOVER/OFFER/REQUEST/ACK
-│   └── pydhcpd.conf        # Daemon config: hosts, pools, lease timers
-│
-├── init.d/
-│   └── pydhcpd             # init.d-style start/stop/status wrapper around the systemd service
-│
-├── service/
-│   └── pydhcpd.service     # systemd unit that runs the daemon
-│
-├── tools/
-│   ├── pybk.sh             # Backup pydhcp configuration and data (see Tools section)
-│   ├── pyleases.sh         # Rebuilds pydhcpd.conf from ACL files and manages leases (see Tools section)
-│   └── pywebmin.sh         # Installs the Webmin module for managing pydhcpd from the browser (see Tools section)
-│
-└── pysetup.sh          # Installs, updates or removes pydhcp
-```
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      Files generated at runtime (not included in the repository):
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      Archivos generados en runtime (no incluidos en el repositorio):
-    </td>
-  </tr>
-</table>
-
-```
-/etc/pydhcp/core/pydhcpd.leases                  # Active leases database
-/run/pydhcp/pydhcpd.pid                          # PID file, written by the daemon
-                                                 # (systemd creates the directory)
-/etc/bak/pydhcp/pybk_<TIMESTAMP>.zip             # Full project backup written by tools/pybk.sh, up to 3 kept
-/etc/pydhcp/core/pydhcpd.conf.webmin.bak         # Rollback copy written by the Webmin module (pywebmin.sh) on each save, 1 kept
-/etc/webmin/pydhcp/.csrf_token                   # CSRF secret for the Webmin module (pywebmin.sh), mode 0600
-```
-
 ## ISC-DHCP-SERVER VS PYDHCP
 
 ---
@@ -1012,6 +1051,7 @@ pydhcp/
       <ul>
         <li>May include third-party components.</li>
         <li>Does not accept Pull Requests. Changes must be proposed via Issues.</li>
+        <li>This project does not support backward compatibility. New versions may require configuration changes or reinstallation.</li>
       </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
@@ -1019,6 +1059,7 @@ pydhcp/
       <ul>
         <li>Puede incluir componentes de terceros.</li>
         <li>No acepta Pull Requests. Los cambios deben proponerse mediante Issues.</li>
+        <li>Este proyecto no soporta retrocompatibilidad. Las nuevas versiones pueden requerir cambios de configuración o una reinstalación.</li>
       </ul>
     </td>
   </tr>

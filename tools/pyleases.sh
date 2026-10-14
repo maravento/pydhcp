@@ -424,35 +424,11 @@ unset env_owner env_perms
 
 # LOAD_CONF
 # so a tampered or maliciously replaced env file cannot execute code.
-load_conf() {
-    local conf_file="$1" env_key env_value env_line
-    [[ ! -f "$conf_file" ]] && { log "WARNING: $conf_file not found -- fallback"; return 1; }
-    while IFS= read -r env_line || [[ -n "$env_line" ]]; do
-        [[ "$env_line" =~ ^[[:space:]]*[#] ]] && continue
-        [[ "$env_line" =~ ^[[:space:]]*$ ]] && continue
-        env_key="${env_line%%=*}"
-        env_value="${env_line#*=}"
-        if [[ ! "$env_line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] \
-           || [[ "$env_value" == [[:space:]\"\']* ]] \
-           || [[ "$env_value" == *[[:space:]\"\'] ]]; then
-            log "ERROR: malformed line in $(basename "$conf_file"): '$env_line' -- abort"
-            exit 1
-        fi
-        case "$env_key" in
-            SERVER_IP|SERV_SUBNET|SERV_BROADCAST|SERV_MASK|SERV_INI_RANGE_BLOCK|SERV_END_RANGE_BLOCK|SERV_DNS|\
-            ACL_MAC_PATH|ACL_DHCP_PATH|ACL_MAC_LIMITED|ACL_MAC_UNLIMITED|ACL_BLOCK_FILE|PYDHCPD_LEASES|\
-            CLEANUP_INTERVAL|AUTHORIZED_LEASE_TIME|QUARANTINE_DURATION|WPAD_ENABLED|WPAD_PORT|PING_CHECK_ENABLED|\
-            PING_TIMEOUT_SECONDS|DHCPDv4_CONF|DAEMON_USER|DAEMON_GROUP)
-                printf -v "$env_key" '%s' "$env_value"
-                ;;
-            *)
-                ;;
-        esac
-    done < "$conf_file"
-}
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh"
+env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 
 # LOAD
-load_conf "$pydhcp_env" || true
+load_pydhcp_env "$pydhcp_env" "$env_keys" || true
 
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
