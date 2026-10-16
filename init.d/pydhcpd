@@ -50,14 +50,17 @@ have_systemd() {
 
 # Confirm a PID belongs to this daemon before signalling it. Guards against
 # killing an unrelated process that recycled a PID left in a stale PID file.
+# Identity is the exclusive lock the daemon holds on its PID file for its
+# whole life. The descriptor names the file, and its fdinfo names the PID
+# that took the lock on it.
 pid_is_pydhcpd() {
     _pid="$1"
     [ -n "$_pid" ] || return 1
-    [ -r "/proc/$_pid/cmdline" ] || return 1
-    # cmdline is NUL-separated; translate to spaces and split into argv tokens.
-    _cmdline=$(tr '\0' ' ' < "/proc/$_pid/cmdline" 2>/dev/null)
-    for _arg in $_cmdline; do
-        [ "$_arg" = "$DAEMON_ARGS" ] && return 0
+    [ -d "/proc/$_pid/fd" ] || return 1
+    for _fd in /proc/"$_pid"/fd/*; do
+        [ "$(readlink -f "$_fd" 2>/dev/null)" = "$PID_FILE" ] || continue
+        _info="/proc/$_pid/fdinfo/$(basename "$_fd")"
+        grep -q "^lock:.*FLOCK[[:space:]].*WRITE $_pid " "$_info" 2>/dev/null && return 0
     done
     return 1
 }
@@ -111,10 +114,12 @@ case "${1:-}" in
             echo "$NAME is already running (pid $pid)"
             exit 0
         fi
-        [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
+        # The PID file is kept, never removed: the lock that proves identity
+        # lives on its inode, so every instance must lock the same file.
         start_daemon
         for _ in $(seq 1 40); do
-            [ -f "$PID_FILE" ] && break
+            pid=$(read_pid)
+            pid_is_pydhcpd "$pid" && break
             sleep 0.25
         done
         pid=$(read_pid)
@@ -146,9 +151,8 @@ case "${1:-}" in
                 sleep 1
             fi
             # Both kills swallow their exit status, so the only reliable
-            # check is whether the process is still there. Leaving the PID
-            # file in place on failure keeps status honest and stops a
-            # second daemon from being started over the first.
+            # check is whether the process is still there. A PID file whose
+            # lock is gone already reads as stopped, so it is kept.
             if pid_is_pydhcpd "$pid"; then
                 echo "ERROR: could not stop $NAME (pid $pid) -- abort" >&2
                 exit 1
@@ -157,7 +161,6 @@ case "${1:-}" in
         else
             echo "$NAME was not running (stale or foreign PID file)"
         fi
-        [ -f "$PID_FILE" ] && rm -f "$PID_FILE"
         ;;
     restart)
         if have_systemd; then

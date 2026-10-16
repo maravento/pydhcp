@@ -26,21 +26,28 @@ set -euo pipefail
 # path for cron
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    exit 1
+fi
+
 # logging
 log_file="/var/log/pydhcp.log"
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
+    local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$log_msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then
+        echo "$log_msg" >&2
+    else
+        echo "$log_msg"
+    fi
 }
 
 # Delimits where a new run starts in the log -- useful with heavy activity
 # (dozens of MACs coming and going per run).
-echo "--------------------------------------------------------------------------------" | tee -a "$log_file" 2>/dev/null || true
-
-# root check
-if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root -- abort"
-    exit 1
-fi
+echo "$(date '+%Y-%m-%d %H:%M:%S') ----------------------------------------" |
+    tee -a "$log_file" 2>/dev/null || true
 
 # log file perms (as installed by pysetup.sh)
 log_stat=$(stat -c '%U %G %a' "$log_file" 2>/dev/null || true)
@@ -205,9 +212,9 @@ dedup_mac_vs() {
         other_macs=$( { grep -hE '^#?a;' "$@" 2>/dev/null || true; } | awk -F';' '{print tolower($2)}' | sort -u )
     fi
     local tmp_file dropped_count mac_addr
-    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
     temp_files+=("${tmp_file}")
-    dropped_count=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    dropped_count=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
     temp_files+=("${dropped_count}")
     awk -F';' -v others="$other_macs" -v outfile="$tmp_file" -v dropfile="$dropped_count" '
         BEGIN {
@@ -331,7 +338,7 @@ normalize_acl_file() {
     sed -i '/^$/d' "$acl_file"
 
     if [[ -n "$line_pattern" ]]; then
-        tmp_file=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+        tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
         temp_files+=("$tmp_file")
         while IFS= read -r acl_line || [ -n "$acl_line" ]; do
             line_number=$((line_number + 1))
@@ -481,7 +488,8 @@ if ! grep -q "^WPAD_PORT=" "$pydhcp_env"; then
 elif [[ -z "${WPAD_PORT:-}" ]]; then
     key_errors+=("WPAD_PORT not set")
 elif ! [[ "$WPAD_PORT" =~ $UH_UINT ]] \
-     || (( WPAD_PORT < 1 || WPAD_PORT > 65535 )); then
+     || [ "${#WPAD_PORT}" -gt 5 ] \
+     || [ "$WPAD_PORT" -lt 1 ] || [ "$WPAD_PORT" -gt 65535 ]; then
     key_errors+=("WPAD_PORT invalid port")
 fi
 if (( ${#key_errors[@]} > 0 )); then
@@ -529,8 +537,7 @@ pool_start = ipaddress.IPv4Address(sys.argv[2])
 pool_end = ipaddress.IPv4Address(sys.argv[3])
 print('1' if pool_start <= server_ip <= pool_end else '0')
 " "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" 2>/dev/null | grep -q '^1$'; then
-    log "ERROR: SERVER_IP=$SERVER_IP in block-pool range"
-    log "ERROR: blk=$SERV_INI_RANGE_BLOCK-$SERV_END_RANGE_BLOCK -- abort"
+    log "ERROR: SERVER_IP overlaps DHCP block range -- abort"
     exit 1
 fi
 
@@ -584,7 +591,7 @@ log "INFO: verification OK, pydhcpd active and paths valid"
 is_pydhcp() {
     leases_file="$PYDHCPD_LEASES"
     dhcp_conf="${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
-    dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX") || { log "ERROR: cannot create temp file in /etc/pydhcp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+    dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX") || { log "ERROR: cannot create config temp; check /etc/pydhcp -- abort"; exit 1; }
     temp_files+=("$dhcp_conf_temp")
 
     # Log lines below do not carry the function name -- they use short,
@@ -600,7 +607,7 @@ is_pydhcp() {
         set +o pipefail
 
         local temp_leases parsed_line=0
-        temp_leases=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+        temp_leases=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
         temp_files+=("$temp_leases")
         local current_lease="" lease_content=""
 
@@ -777,9 +784,9 @@ class "blockdhcp" {
     # generic phrasing instead.
     clean_block_list() {
         local removed_count=0 file_temp line_patterns
-        file_temp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+        file_temp=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
         temp_files+=("${file_temp}")
-        line_patterns=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+        line_patterns=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
         temp_files+=("${line_patterns}")
         shopt -s nullglob
         acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
@@ -805,7 +812,7 @@ class "blockdhcp" {
 
         if (( removed_count > 0 )); then
             local grep_rc=0 block_tmp
-            block_tmp=$(mktemp) || { log "ERROR: cannot create temp file in /tmp"; log "ERROR: check free space, read-only mount, immutable -- abort"; exit 1; }
+        block_tmp=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -- abort"; exit 1; }
             temp_files+=("${block_tmp}")
             grep -viFf "$line_patterns" "$ACL_BLOCK_FILE" > "$block_tmp" || grep_rc=$?
             if (( grep_rc > 1 )); then

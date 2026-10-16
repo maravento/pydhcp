@@ -30,20 +30,9 @@ set -euo pipefail
 # Source directory (where this script lives) -- needed by the logging block
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# logging
-# The installer keeps its own log, separate from /var/log/pydhcp.log (the
-# daemon's operational log) so install, update and remove runs never mix
-# with daily operation. Rewritten on each run.
-log_file="${script_dir}/pysetup.log"
-{ > "$log_file"; } 2>/dev/null || true
-pydhcp_log_file="/var/log/pydhcp.log"
-log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$log_file" 2>/dev/null || true
-}
-
 # root check
 if [ "$(id -u)" != "0" ]; then
-    log "ERROR: This script must be run as root -- abort"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
     exit 1
 fi
 
@@ -52,9 +41,22 @@ script_lock="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$script_lock")
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    log "ERROR: script $(basename "$0") is already running -- abort"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -- abort" >&2
     exit 1
 fi
+
+# logging
+# The installer keeps its own log, separate from /var/log/pydhcp.log (the
+# daemon's operational log) so install, update and remove runs never mix
+# with daily operation. Rewritten on each run.
+log_file="${script_dir}/pysetup.log"
+{ > "$log_file"; } 2>/dev/null || true
+pydhcp_log_file="/var/log/pydhcp.log"
+log() {
+    local msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then echo "$msg" >&2; else echo "$msg"; fi
+}
 
 # dependencies
 # Project-wide list: this installer verifies every package the deployed
@@ -98,13 +100,9 @@ acl_limited_file="${acl_mac_dir}/mac-limited.txt"
 acl_unlimited_file="${acl_mac_dir}/mac-unlimited.txt"
 acl_block_file="${acl_dhcp_dir}/blockdhcp.txt"
 
-color_green='\033[0;32m'
-color_reset='\033[0m'
-
-info() { printf ' \e[32m \e[0m %s\n' "$*"; log "INFO: $*"; }
-success() { echo -e "${color_green}[OK]${color_reset} $*"; log "INFO: $*"; }
-warn() { printf ' \e[33m!\e[0m %s\n' "$*"; log "WARNING: $*"; }
-err()  { printf ' \e[31m \e[0m %s\n' "$*" >&2; log "ERROR: $*"; }
+info() { log "INFO: $*"; }
+warn() { log "WARNING: $*"; }
+err()  { log "ERROR: $*"; }
 abort() { err "$*"; exit 1; }
 
 # ------------------------------------------------------------------------------
@@ -117,7 +115,9 @@ ask_interface_number() {
     while true; do
         read -rp " ${prompt_text} [1-${max_value}] [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_UINT ]] && (( user_answer >= 1 && user_answer <= max_value )); then
+        if [[ "$user_answer" =~ $UH_UINT ]] \
+           && [ "${#user_answer}" -le "${#max_value}" ] \
+           && [ "$user_answer" -ge 1 ] && [ "$user_answer" -le "$max_value" ]; then
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
@@ -257,7 +257,6 @@ check_port() {
     fi
 }
 
-
 # ------------------------------------------------------------------------------
 # REMOVE
 # ------------------------------------------------------------------------------
@@ -271,15 +270,20 @@ do_uninstall() {
     echo "Package dependencies are NOT removed."
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" \
-        || { info "Aborted by user."; exit 0; }
+        || {
+            info "Aborted by user."
+            log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
+            exit 0
+        }
 
     echo ""
     echo "Final confirmation required."
-    echo "Type the word YES (uppercase) to remove pydhcp:"
+    echo "Type word YES (uppercase) to remove pydhcp:"
     echo ""
     read -rp " > " confirm_answer
     if [[ "$confirm_answer" != "YES" ]]; then
         info "Aborted by user."
+        log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
     fi
     echo ""
@@ -320,7 +324,7 @@ do_uninstall() {
 
     systemctl daemon-reload
 
-    success "pydhcpd has been removed from the system."
+    info "pydhcpd has been removed from system."
     rm -f "$pydhcp_log_file"
 }
 
@@ -433,7 +437,7 @@ EOF
     fi
 
     echo ""
-    success "pydhcpd updated. Backups in /etc/bak"
+    info "pydhcpd updated. Backups in /etc/bak"
     info "$core_dir/pydhcpd.conf unchanged"
     info "$install_dir/pydhcp.env unchanged"
     info "$core_dir/pydhcpd.leases unchanged"
@@ -468,7 +472,7 @@ do_install() {
         ip link show "$PYDHCP_LAN_IFACE" &>/dev/null \
             || abort "PYDHCP_LAN_IFACE='$PYDHCP_LAN_IFACE' not found -- abort"
         iface_selected="$PYDHCP_LAN_IFACE"
-        info "Using interface: $iface_selected (from the caller)"
+        info "Using interface: $iface_selected (from caller)"
     else
         list_interfaces
         echo ""
@@ -587,9 +591,9 @@ do_install() {
         ip link show "$PYDHCP_WAN_IFACE" &>/dev/null \
             || abort "PYDHCP_WAN_IFACE='$PYDHCP_WAN_IFACE' not found -- abort"
         wan_iface_answer="$PYDHCP_WAN_IFACE"
-        info "WAN interface: $wan_iface_answer (from the caller)"
+        info "WAN interface: $wan_iface_answer (from caller)"
     else
-        info "WAN interface (the one facing the internet):"
+        info "WAN interface (one facing internet):"
         list_interfaces
         echo ""
         wan_default=1
@@ -675,7 +679,7 @@ do_install() {
     # adding only their own keys if missing.
     if [ -f "$install_dir/pydhcp.env" ]; then
         info "pydhcp.env already exists, not overwritten -- skip"
-        info "interface not changed, keeping the value in pydhcp.env"
+        info "interface not changed, keeping value in pydhcp.env"
     else
         info "Creating pydhcp.env ..."
         cat > "$install_dir/pydhcp.env" <<ENVEOF
@@ -840,7 +844,7 @@ EOF
     fi
 
     echo ""
-    success "pydhcpd installed and running."
+    info "pydhcpd installed and running."
     echo ""
     info "Configuration : $core_dir/pydhcpd.conf"
     info "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"

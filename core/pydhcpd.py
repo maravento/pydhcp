@@ -20,6 +20,7 @@
 
 import os
 import sys
+import fcntl
 import socket
 import errno
 import struct
@@ -303,6 +304,16 @@ class DHCPConfig:
                  len(self.static_hosts), len(self.blocked_macs))
 
     def _validate(self):
+        if not self.subnet or not self.netmask:
+            raise ConfigError("subnet and netmask not configured")
+        try:
+            network = ipaddress.IPv4Network(
+                f"{self.subnet}/{self.netmask}", strict=False)
+            if str(network.netmask) != self.netmask:
+                raise ValueError("expected a contiguous netmask")
+        except ValueError as err:
+            raise ConfigError(f"Invalid subnet or netmask: {err}") from err
+
         for label, value in (
                 ("server-identifier", self.server_id),
                 ("subnet netmask", self.netmask),
@@ -1592,8 +1603,8 @@ class DHCPServer:
             self._cleanup_thread.join(timeout=5)
         # Wait for in-flight worker tasks to finish before closing the
         # sockets they may still be using to send responses and persist
-        # leases. This guarantees main()'s remove_pid() only runs once no
-        # worker can still be writing to the leases file.
+        # leases. This guarantees no worker can still be writing to the
+        # leases file once this returns.
         self._thread_pool.shutdown(wait=True)
         if hasattr(self, 'raw_sock') and self.raw_sock:
             self.raw_sock.close()
@@ -1607,7 +1618,10 @@ class DHCPServer:
                 interval = self.config.cleanup_interval
             if self._shutdown.wait(interval):
                 return
-            self.leases.cleanup_expired()
+            try:
+                self.leases.cleanup_expired()
+            except OSError:
+                log.warning("Cannot save the lease cleanup -- alert")
 
     def _handle(self, data, src_mac, src_ip):
         pkt = parse_packet(data)
@@ -1917,50 +1931,22 @@ class DHCPServer:
 # PID / SIGNAL
 # =============================================================================
 
-def _pid_is_pydhcpd(pid):
-    try:
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            cmdline = f.read().replace(b"\x00", b" ").decode("utf-8", "replace")
-    except OSError:
-        return False
-    return "pydhcpd.py" in cmdline
-
 def write_pid(path):
-    old_pid = None
+    # An exclusive lock, not the PID, is what proves a live instance: a
+    # recycled PID or a foreign process cannot hold it. The descriptor is
+    # returned so the caller keeps it open for the whole run; the kernel
+    # releases the lock when the process ends, however it ends. The file
+    # itself is never removed, so every instance locks the same inode.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            with os.fdopen(fd, 'r') as f:
-                old_pid = int(f.read().strip())
-        except (ValueError, OSError):
-            old_pid = None
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        old_pid = None
-
-    if old_pid is not None:
-        try:
-            os.kill(old_pid, 0)
-            alive = True
-        except ProcessLookupError:
-            alive = False
-        except OSError:
-            # Process exists but we cannot signal it (different owner).
-            alive = True
-        if alive and _pid_is_pydhcpd(old_pid):
-            log.error("pydhcpd already running (pid %d) -- abort", old_pid)
-            sys.exit(1)
-        elif alive:
-            log.warning("PID %d alive, not pydhcpd -- alert", old_pid)
-
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, "w") as f:
-        f.write(str(os.getpid()))
-
-def remove_pid(path):
-    try:
-        os.remove(path)
-    except FileNotFoundError:
-        pass
+        os.close(fd)
+        log.error("pydhcpd already running -- abort")
+        sys.exit(1)
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode())
+    return fd
 
 def test_config(config_path):
     try:
@@ -2020,6 +2006,12 @@ def main():
         log.error("server-identifier missing in config -- abort")
         sys.exit(1)
 
+    # Held, never closed: closing it would drop the lock that identifies
+    # this instance to the init script. Taken before LeaseManager, whose
+    # constructor already prunes and rewrites the shared lease file: a second
+    # instance must be rejected before it can touch the data of the live one.
+    pid_fd = write_pid(defaults["pid"])  # noqa: F841
+
     lease_mgr = LeaseManager(defaults["leases"], config,
                              daemon_user=defaults["user"],
                              daemon_group=defaults["group"],
@@ -2028,8 +2020,6 @@ def main():
                              rate_limit_max=defaults["rate_limit_max"],
                              reservation_ttl=defaults["reservation_ttl"])
     server    = DHCPServer(interface, config, lease_mgr)
-
-    write_pid(defaults["pid"])
 
     def signal_shutdown(signum, frame):
         log.info("Signal %d received, shutting down...", signum)
@@ -2065,7 +2055,6 @@ def main():
         server.start()
     finally:
         server.stop()
-        remove_pid(defaults["pid"])
 
 
 if __name__ == "__main__":
