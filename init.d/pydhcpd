@@ -73,7 +73,7 @@ read_pid() {
 
 start_daemon() {
     if [ "$(id -u)" -ne 0 ]; then
-        echo "ERROR: must be run as root -- abort" >&2
+        echo "ERROR: must be run as root -abort" >&2
         exit 1
     fi
     # Without systemd there is no RuntimeDirectory=, so the PID directory is
@@ -81,7 +81,7 @@ start_daemon() {
     _pid_dir=$(dirname "$PID_FILE")
     if [ ! -d "$_pid_dir" ]; then
         mkdir -p "$_pid_dir" || {
-            echo "ERROR: cannot create $_pid_dir -- abort" >&2
+            echo "ERROR: cannot create $_pid_dir -abort" >&2
             exit 1
         }
     fi
@@ -97,7 +97,7 @@ start_daemon() {
             --ambient-caps +net_raw,+net_bind_service \
             "$DAEMON" "$DAEMON_ARGS" &
     else
-        echo "ERROR: setpriv not found; refusing to start $NAME as root -- abort" >&2
+        echo "ERROR: setpriv not found; refusing to start $NAME as root -abort" >&2
         echo "       Install util-linux (setpriv) or start via systemd: systemctl start $NAME" >&2
         exit 1
     fi
@@ -126,7 +126,7 @@ case "${1:-}" in
         if pid_is_pydhcpd "$pid"; then
             echo "$NAME started (pid $pid)"
         else
-            echo "ERROR: $NAME failed to start, check $LOG_FILE -- abort"
+            echo "ERROR: $NAME failed to start, check $LOG_FILE -abort"
             exit 1
         fi
         ;;
@@ -154,7 +154,7 @@ case "${1:-}" in
             # check is whether the process is still there. A PID file whose
             # lock is gone already reads as stopped, so it is kept.
             if pid_is_pydhcpd "$pid"; then
-                echo "ERROR: could not stop $NAME (pid $pid) -- abort" >&2
+                echo "ERROR: could not stop $NAME (pid $pid) -abort" >&2
                 exit 1
             fi
             echo "$NAME stopped"

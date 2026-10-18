@@ -5,21 +5,24 @@
 #
 # pywebmin -- PyDHCP module installer for Webmin
 #
-# DESCRIPTION:
-# Installs or uninstalls the optional PyDHCP module for Webmin.
-# Requires root, Webmin and pydhcpd already installed.
-#
 # USAGE:
-# sudo ./pywebmin.sh install      Install the module
-# sudo ./pywebmin.sh uninstall    Uninstall the module
+# sudo ./pywebmin.sh --install      Install the module
+# sudo ./pywebmin.sh --uninstall    Uninstall the module
 # ./pywebmin.sh -h, --help        Show this help
+#
+# LOG: pywebmin.log, in this script's directory
 #
 ################################################################################
 
 set -euo pipefail
 
+# logging
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+log_file="${script_dir}/pywebmin.log"
 log() {
-    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+    local msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then echo "$msg" >&2; else echo "$msg"; fi
 }
 
 log_error() {
@@ -36,11 +39,11 @@ show_usage() {
     echo "  uninstall    Uninstall PyDHCP Webmin module"
     echo "  -h, --help   Show this help message"
     echo ""
-    echo "If no option is provided, interactive menu will be shown."
+    echo "If no option is provided, interactive menu will be shown"
     echo ""
     echo "Examples:"
-    echo "  $0 install"
-    echo "  $0 uninstall"
+    echo "  $0 --install"
+    echo "  $0 --uninstall"
     echo "  $0"
     echo ""
 }
@@ -58,23 +61,29 @@ esac
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$script_lock")
+(umask 077; : >> "$script_lock") || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot open $(basename "$script_lock") -abort" >&2
+    exit 1
+}
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -abort" >&2
     exit 1
 fi
+
+# reset the installer log
+{ > "$log_file"; } 2>/dev/null || true
 
 # dependencies
 for dep_pkg in coreutils util-linux systemd grep sed ncurses-bin perl; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log_error "ERROR: missing dependency '$dep_pkg' -- abort"
+        log_error "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
 done
@@ -82,13 +91,13 @@ done
 # dependencies (external repo)
 for dep_pkg in webmin; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log_error "ERROR: 'webmin' is not installed -- abort"
+        log_error "ERROR: 'webmin' is not installed -abort"
         exit 1
     fi
 done
 
 if [ ! -f "/etc/pydhcp/core/pydhcpd.py" ]; then
-    log_error "ERROR: pydhcpd not installed; install it first -- abort"
+    log_error "ERROR: pydhcpd not installed; install it first -abort"
     exit 1
 fi
 
@@ -125,7 +134,7 @@ detect_local_user() {
 }
 
 if ! local_user=$(detect_local_user); then
-    log_error "ERROR: no local user; create one with sudo access -- abort"
+    log_error "ERROR: no local user; create one with sudo access -abort"
     exit 1
 fi
 log "INFO: using local user $local_user"
@@ -143,12 +152,13 @@ module_conf_dir="/etc/webmin/$module_name"
 # ------------------------------------------------------------------------------
 
 install_module() {
+    log "pywebmin start..."
     log "INFO: installing PyDHCP Webmin module"
 
     log "INFO: creating PyDHCP module structure"
     for module_subdir in "$module_dir/images" "$module_dir/lang" "$module_dir/help" "$module_conf_dir"; do
         if ! mkdir -p "$module_subdir"; then
-            log_error "ERROR: cannot create $module_subdir -- abort"
+            log_error "ERROR: cannot create $module_subdir -abort"
             exit 1
         fi
     done
@@ -768,7 +778,7 @@ R0lGODlhMAAwAPAAAAAAAAAAACH5BAEAAAAALAAAAAAwADAAAAKrhI+py+0Po5wqJEszCpyf7mkUiAGk
 ICONEOF
     then
         rm -f "$module_dir/images/icon.gif"
-        log_error "WARNING: cannot write module icon -- alert"
+        log_error "WARNING: cannot write module icon -alert"
     fi
 
     chown -R root:root "$module_dir" "$module_conf_dir"
@@ -781,7 +791,7 @@ ICONEOF
         for webmin_account in root "$local_user"; do
             [ -z "$webmin_account" ] && continue
             if ! grep -qE "^${webmin_account}:" /etc/webmin/webmin.acl; then
-                log "INFO: no ${webmin_account} entry in webmin.acl -- skip"
+                log "INFO: no ${webmin_account} entry in webmin.acl -skip"
                 continue
             fi
             grep -qE "^${webmin_account}:.*\b${module_name}\b" /etc/webmin/webmin.acl && continue
@@ -790,14 +800,14 @@ ICONEOF
         done
         unset webmin_account
     else
-        log_error "WARNING: webmin.acl not found -- alert"
+        log_error "WARNING: webmin.acl not found -alert"
     fi
 
     rm -f /var/webmin/module.infos.cache
 
     log "INFO: restarting Webmin service"
     if ! { systemctl restart webmin.service 2>/dev/null || /etc/webmin/restart 2>/dev/null; }; then
-        log_error "WARNING: Webmin restart failed, reload it -- alert"
+        log_error "WARNING: Webmin restart failed, reload it -alert"
     fi
 
     log "INFO: PyDHCP Webmin module installed"
@@ -808,6 +818,7 @@ ICONEOF
 }
 
 uninstall_module() {
+    log "pywebmin start..."
     log "INFO: uninstalling PyDHCP Webmin module"
 
     if [ ! -d "$module_dir" ]; then
@@ -826,7 +837,7 @@ uninstall_module() {
             log "INFO: module removed from webmin.acl"
         fi
     else
-        log_error "WARNING: webmin.acl not found -- alert"
+        log_error "WARNING: webmin.acl not found -alert"
     fi
 
     rm -f /var/webmin/module.infos.cache
@@ -834,7 +845,7 @@ uninstall_module() {
 
     log "INFO: restarting Webmin service"
     if ! { systemctl restart webmin.service 2>/dev/null || /etc/webmin/restart 2>/dev/null; }; then
-        log_error "WARNING: Webmin restart failed, reload it -- alert"
+        log_error "WARNING: Webmin restart failed, reload it -alert"
     fi
 
     log "INFO: PyDHCP Webmin module uninstalled"
@@ -861,16 +872,18 @@ show_menu() {
 main() {
     if [ $# -gt 0 ]; then
         case "$1" in
-            install)
+            --install)
                 install_module
+                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;
-            uninstall)
+            --uninstall)
                 uninstall_module || true
+                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;
             *)
-                log_error "ERROR: invalid option '$1' -- abort"
+                log_error "ERROR: invalid option '$1' -abort"
                 echo ""
                 show_usage
                 exit 1
@@ -887,22 +900,24 @@ main() {
             1)
                 install_module
                 echo ""
+                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;
             2)
                 uninstall_module || true
                 echo ""
+                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;
             3)
                 echo ""
-                echo "Exiting..."
+                echo "$(date '+%Y-%m-%d %H:%M:%S') Exiting..."
                 echo ""
                 exit 0
                 ;;
             *)
                 echo ""
-                echo "Invalid option. Please select 1, 2, or 3."
+                echo "Invalid option. Please select 1, 2, or 3"
                 echo ""
                 sleep 2
                 ;;

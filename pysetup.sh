@@ -5,10 +5,6 @@
 #
 # pysetup -- pydhcp installer / updater
 #
-# DESCRIPTION:
-# Installs, updates or removes pydhcp. Run from inside the cloned repo.
-# Requires root.
-#
 # USAGE:
 # sudo bash pysetup.sh --install      Install
 # sudo bash pysetup.sh --update       Update code only (preserves user config)
@@ -17,7 +13,7 @@
 # sudo bash pysetup.sh                Interactive menu
 # sudo bash pysetup.sh -h             Show usage
 #
-# LOG: pysetup.log, in the directory this script is run from
+# LOG: pysetup.log, in the directory containing this script
 #
 ################################################################################
 
@@ -32,16 +28,19 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # root check
 if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$script_lock")
+(umask 077; : >> "$script_lock") || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot open $(basename "$script_lock") -abort" >&2
+    exit 1
+}
 exec 200>"$script_lock"
 if ! flock -n 200; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -- abort" >&2
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -abort" >&2
     exit 1
 fi
 
@@ -64,7 +63,7 @@ log() {
 # iputils-ping is used by pydhcpd.py when it cannot open a raw ICMP socket.
 for dep_pkg in python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate; do
     if ! dpkg -s "$dep_pkg" &>/dev/null; then
-        log "ERROR: dependency $dep_pkg not installed -- abort"
+        log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
 done
@@ -109,7 +108,8 @@ abort() { err "$*"; exit 1; }
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
-# --- Interactive prompts ------------------------------------------------------
+# INTERACTIVE PROMPTS
+# Each one asks for a value, validates it and repeats until it is correct
 ask_interface_number() {
     local prompt_text="$1" default_value="$2" target_var="$3" max_value="$4" user_answer
     while true; do
@@ -121,7 +121,7 @@ ask_interface_number() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        info "Invalid selection, try again -- retry"
+        info "Invalid selection, try again -retry"
     done
 }
 
@@ -143,7 +143,7 @@ ask_netmask() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        info "'$user_answer' is not a valid netmask -- retry"
+        info "'$user_answer' is not a valid netmask -retry"
     done
 }
 
@@ -155,13 +155,13 @@ ask_octet() {
         user_answer="${user_answer:-$default_value}"
         if [[ "$user_answer" =~ $UH_OCT ]] && (( user_answer >= 1 && user_answer <= 254 )); then
             if [[ -n "$ref_start" ]] && (( user_answer <= ref_start )); then
-                info "Pool end must be greater than pool start (${ref_start}) -- retry"
+                info "Pool end must be greater than pool start (${ref_start}) -retry"
                 continue
             fi
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        info "Invalid value, enter a number between 1 and 254 -- retry"
+        info "Invalid value, enter a number between 1 and 254 -retry"
     done
 }
 
@@ -174,7 +174,7 @@ ask_dns() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        info "Invalid DNS format, try again -- retry"
+        info "Invalid DNS format, try again -retry"
     done
 }
 
@@ -187,7 +187,7 @@ ask_number() {
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        info "Invalid value, enter a positive integer -- retry"
+        info "Invalid value, enter a positive integer -retry"
     done
 }
 
@@ -205,18 +205,18 @@ confirm() {
 verify_source() {
     local source_file="$1"
     local real_path
-    real_path=$(realpath "$source_file" 2>/dev/null) || abort "cannot resolve source path -- abort"
-    [[ "$real_path" == "$script_dir"/* ]] || abort "source file outside the repo -- abort"
-    [ -f "$real_path" ] || abort "source is not a regular file -- abort"
-    [ -s "$real_path" ] || abort "source file is empty -- abort"
+    real_path=$(realpath "$source_file" 2>/dev/null) || abort "$(basename "$source_file"): cannot resolve source path -abort"
+    [[ "$real_path" == "$script_dir"/* ]] || abort "$(basename "$source_file"): source is outside the repo -abort"
+    [ -f "$real_path" ] || abort "$(basename "$real_path"): not a regular file -abort"
+    [ -s "$real_path" ] || abort "$(basename "$real_path"): source file is empty -abort"
     local file_mode file_owner
     file_mode=$(stat -c '%a' "$real_path")
     file_owner=$(stat -c '%u' "$real_path")
     if (( (8#$file_mode & 8#002) != 0 )); then
-        { err "world-writable source (mode $file_mode)"; abort "$(basename "$real_path") -- abort"; }
+        abort "$(basename "$real_path"): others can write -abort"
     fi
     if [[ "$file_owner" != "0" && "$file_owner" != "${SUDO_UID:-$(id -u)}" ]]; then
-        { err "unexpected owner (uid $file_owner)"; abort "$(basename "$real_path") -- abort"; }
+        abort "$(basename "$real_path"): owner UID $file_owner rejected -abort"
     fi
 }
 
@@ -231,9 +231,9 @@ check_conflicts() {
     done
     if [ "${#found[@]}" -gt 0 ]; then
         for dep_pkg in "${found[@]}"; do
-            err "conflicting $role package: $dep_pkg"
+            warn "conflicting $role: $dep_pkg -alert"
         done
-        abort "remove them with apt purge -- abort"
+        abort "remove them with apt purge -abort"
     fi
 }
 
@@ -243,7 +243,7 @@ warn_overlap() {
     local dep_pkg
     for dep_pkg in "$@"; do
         if dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null | grep -q "ok installed"; then
-            warn "$dep_pkg installed, keep its $feature disabled -- alert"
+            warn "$dep_pkg installed, keep its $feature disabled -alert"
         fi
     done
 }
@@ -253,7 +253,7 @@ check_port() {
     local proto="$1" port="$2" role="$3"
     if [ -n "$(ss -lnH "-${proto,,}" "sport = :$port" 2>/dev/null)" ]; then
         err "${proto^^} port $port in use by another $role"
-        abort "stop that service before installing -- abort"
+        abort "stop that service before installing -abort"
     fi
 }
 
@@ -263,36 +263,36 @@ check_port() {
 
 do_uninstall() {
     echo ""
-    echo "This removes pydhcp completely from $install_dir."
-    echo "The service, init.d wrapper, log and Webmin module are also removed."
-    echo "Run tools/pybk.sh first if you want a backup."
-    echo "/etc/bak is NOT touched."
-    echo "Package dependencies are NOT removed."
+    echo "This removes pydhcp completely from $install_dir"
+    echo "The service, init.d wrapper, log and Webmin module are also removed"
+    echo "Run tools/pybk.sh first if you want a backup"
+    echo "/etc/bak is NOT touched"
+    echo "Package dependencies are NOT removed"
     echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" \
         || {
-            info "Aborted by user."
+            info "Aborted by user"
             log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
             exit 0
         }
 
     echo ""
-    echo "Final confirmation required."
+    echo "Final confirmation required"
     echo "Type word YES (uppercase) to remove pydhcp:"
     echo ""
     read -rp " > " confirm_answer
     if [[ "$confirm_answer" != "YES" ]]; then
-        info "Aborted by user."
+        info "Aborted by user"
         log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
         exit 0
     fi
     echo ""
 
-    info "Stopping and disabling pydhcpd service..."
+    log "Stopping and disabling pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
     systemctl disable pydhcpd 2>/dev/null || true
 
-    info "Removing system files..."
+    log "Removing system files..."
     rm -f "$service_file"
     rm -f "$init_file"
     rm -f /etc/logrotate.d/pydhcp
@@ -301,30 +301,29 @@ do_uninstall() {
     rm -f /var/log/pydhcpd.log
 
     if [ -x "$install_dir/tools/pybk.sh" ]; then
-        info "Removing pybk.sh cron entry ..."
-        "$install_dir/tools/pybk.sh" uninstall || true
+        "$install_dir/tools/pybk.sh" --uninstall || true
     fi
 
     if [ -x "$install_dir/tools/pywebmin.sh" ]; then
-        info "Removing Webmin module ..."
-        "$install_dir/tools/pywebmin.sh" uninstall || true
+        log "Removing Webmin module ..."
+        "$install_dir/tools/pywebmin.sh" --uninstall || true
     fi
 
-    [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -- abort"
+    [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -abort"
 
     # Everything under install_dir goes, including the config and the block
     # list: uninstalling means removing the project. tools/pybk.sh is the
     # way to keep a copy, and it writes to /etc/bak, outside this directory.
-    info "Removing $install_dir ..."
+    log "Removing $install_dir ..."
     rm -rf "$install_dir"
 
-    info "Removing system user and group $daemon_owner ..."
-    userdel "$daemon_owner" 2>/dev/null || info "User $daemon_owner not found or already removed -- skip"
+    log "Removing system user and group $daemon_owner ..."
+    userdel "$daemon_owner" 2>/dev/null || warn "cannot remove user $daemon_owner -alert"
     groupdel "$daemon_owner" 2>/dev/null || true
 
     systemctl daemon-reload
 
-    info "pydhcpd has been removed from system."
+    info "pydhcpd has been removed from system"
     rm -f "$pydhcp_log_file"
 }
 
@@ -334,25 +333,25 @@ do_uninstall() {
 
 do_update() {
     if [ ! -d "$install_dir" ]; then
-        { err "no installation found in $install_dir"; abort "use --install to install first -- abort"; }
+        { err "no installation found in $install_dir"; abort "use --install to install first -abort"; }
     fi
     if [ ! -f "$install_dir/pydhcp.env" ]; then
         err "pydhcp.env not found, pre-dates config persistence"
-        abort "run 'pysetup.sh --uninstall' then reinstall -- abort"
+        abort "run 'pysetup.sh --uninstall' then reinstall -abort"
     fi
     if [ ! -d "$install_dir/tools" ]; then
         err "$install_dir/tools not found (unexpected state)"
-        abort "run 'pysetup.sh --uninstall' then reinstall -- abort"
+        abort "run 'pysetup.sh --uninstall' then reinstall -abort"
     fi
 
     if [ -x "$install_dir/tools/pybk.sh" ]; then
         if "$install_dir/tools/pybk.sh"; then
             info "backup taken with pybk.sh"
         else
-            warn "backup failed, continuing -- alert"
+            warn "pybk.sh: backup failed -alert"
         fi
     else
-        warn "pybk.sh not found, no backup -- alert"
+        warn "pybk.sh: missing or not executable -alert"
     fi
 
     systemctl stop pydhcpd 2>/dev/null || true
@@ -368,13 +367,13 @@ do_update() {
     cp "$script_dir/service/pydhcpd.service" "$service_file"
     chown root:root "$service_file"
     chmod 644 "$service_file"
-    info "updated $service_file"
+    info "updated pydhcpd.service"
 
     verify_source "$script_dir/init.d/pydhcpd"
     cp "$script_dir/init.d/pydhcpd" "$init_file"
     chown root:root "$init_file"
     chmod 755 "$init_file"
-    info "updated $init_file"
+    info "updated init.d/pydhcpd"
 
     verify_source "$script_dir/tools/pydhcpenv.sh"
     install -m 644 -o root -g root "$script_dir/tools/pydhcpenv.sh" "$install_dir/tools/pydhcpenv.sh"
@@ -433,15 +432,13 @@ EOF
 
     systemctl daemon-reload
     if ! systemctl start pydhcpd; then
-        { err "pydhcpd failed to start after update"; abort "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
+        { err "pydhcpd failed to start after update"; abort "check it with: journalctl -u pydhcpd -n 50 -abort"; }
     fi
 
-    echo ""
     info "pydhcpd updated. Backups in /etc/bak"
     info "$core_dir/pydhcpd.conf unchanged"
     info "$install_dir/pydhcp.env unchanged"
     info "$core_dir/pydhcpd.leases unchanged"
-    echo ""
 }
 
 # ------------------------------------------------------------------------------
@@ -451,7 +448,7 @@ EOF
 do_install() {
     if [ -f "$core_dir/pydhcpd.py" ]; then
         err "pydhcpd is already installed at $install_dir"
-        abort "use --update or --uninstall instead -- abort"
+        abort "use --update or --uninstall instead -abort"
     fi
 
     check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
@@ -463,14 +460,14 @@ do_install() {
     info "Available network interfaces:"
     mapfile -t iface_list < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
     if [[ ${#iface_list[@]} -eq 0 ]]; then
-        abort "no network interfaces found -- abort"
+        abort "no network interfaces found -abort"
     fi
 
     # LAN interface -- a wrapper installer that already resolved it (e.g. uhm)
     # can supply it directly, so pydhcp does not ask again for the same value.
     if [ -n "${PYDHCP_LAN_IFACE:-}" ]; then
         ip link show "$PYDHCP_LAN_IFACE" &>/dev/null \
-            || abort "PYDHCP_LAN_IFACE='$PYDHCP_LAN_IFACE' not found -- abort"
+            || abort "PYDHCP_LAN_IFACE='$PYDHCP_LAN_IFACE' not found -abort"
         iface_selected="$PYDHCP_LAN_IFACE"
         info "Using interface: $iface_selected (from caller)"
     else
@@ -488,7 +485,7 @@ do_install() {
     mapfile -t iface_ips < <(ip -4 -o addr show dev "$iface_selected" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
     case "${#iface_ips[@]}" in
         0)
-            abort "interface has no IPv4 address -- abort"
+            abort "interface has no IPv4 address -abort"
             ;;
         1)
             server_ip_answer="${iface_ips[0]}"
@@ -538,7 +535,8 @@ do_install() {
     " "$local_subnet" "$netmask_answer" "$local_net_base" "$pool_start_answer" "$pool_end_answer"; then
             break
         fi
-        { info "pool ${local_net_base}.${pool_start_answer}-${pool_end_answer} is outside the subnet"; info "subnet is ${local_subnet}/${netmask_answer}, try again -- retry"; }
+        info "DHCP pool ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"
+        info "DHCP pool is outside the selected subnet -retry"
     done
     info "Pool range: ${local_net_base}.${pool_start_answer} -> ${local_net_base}.${pool_end_answer}"
 
@@ -554,7 +552,8 @@ do_install() {
     pool_end = ipaddress.IPv4Address(sys.argv[3])
     print('1' if pool_start <= server_ip <= pool_end else '0')
     " "$server_ip_answer" "${local_net_base}.${pool_start_answer}" "${local_net_base}.${pool_end_answer}" 2>/dev/null | grep -q '^1$'; then
-        { err "server IP $server_ip_answer overlaps pool ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"; abort "choose a server IP outside the pool -- abort"; }
+        err "DHCP pool ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"
+        abort "Invalid DHCP pool: SERVER_IP is inside -abort"
     fi
 
     # DNS servers
@@ -589,7 +588,7 @@ do_install() {
     echo ""
     if [ -n "${PYDHCP_WAN_IFACE:-}" ]; then
         ip link show "$PYDHCP_WAN_IFACE" &>/dev/null \
-            || abort "PYDHCP_WAN_IFACE='$PYDHCP_WAN_IFACE' not found -- abort"
+            || abort "PYDHCP_WAN_IFACE='$PYDHCP_WAN_IFACE' not found -abort"
         wan_iface_answer="$PYDHCP_WAN_IFACE"
         info "WAN interface: $wan_iface_answer (from caller)"
     else
@@ -612,26 +611,25 @@ do_install() {
 
     # Verify source files exist
     for source_file in core/pydhcpd.py core/pydhcpd.conf service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh; do
-        [ -f "$script_dir/$source_file" ] || { err "missing source file: $source_file"; abort "run pysetup.sh from the project directory -- abort"; }
+        [ -f "$script_dir/$source_file" ] || { err "missing source file: $source_file"; abort "run pysetup.sh from the project directory -abort"; }
     done
 
     # Create system group and user
     if ! getent group "$daemon_owner" &>/dev/null; then
-        info "Creating system group: $daemon_owner"
         groupadd --system "$daemon_owner"
+        info "created group $daemon_owner"
     else
-        info "Group $daemon_owner already exists -- skip"
+        info "Group $daemon_owner already exists -skip"
     fi
 
     if ! id "$daemon_owner" &>/dev/null; then
-        info "Creating system user: $daemon_owner"
         useradd --system --no-create-home --shell /bin/false --gid "$daemon_owner" --comment "Python DHCP Daemon" "$daemon_owner"
+        info "created user $daemon_owner"
     else
-        info "User $daemon_owner already exists -- skip"
+        info "User $daemon_owner already exists -skip"
     fi
 
     # Create install directory
-    info "Creating $install_dir ..."
     mkdir -p "$install_dir"
     chown root:"$daemon_owner" "$install_dir"
     chmod 770 "$install_dir"
@@ -640,9 +638,9 @@ do_install() {
     chmod 770 "$core_dir"
 
     # Deploy daemon and config files
-    info "Deploying pydhcpd.py ..."
     verify_source "$script_dir/core/pydhcpd.py"
     cp "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py"
+    info "updated pydhcpd.py"
     chown root:root "$core_dir/pydhcpd.py"
     chmod 755 "$core_dir/pydhcpd.py"
 
@@ -650,9 +648,9 @@ do_install() {
     if [ -f "$core_dir/pydhcpd.conf" ]; then
         { info "pydhcpd.conf already exists in $install_dir"; info "static hosts and blocked MACs kept"; info "network parameters updated with your answers"; }
     else
-        info "Deploying pydhcpd.conf ..."
         verify_source "$script_dir/core/pydhcpd.conf"
         cp "$script_dir/core/pydhcpd.conf" "$core_dir/pydhcpd.conf"
+        info "updated pydhcpd.conf"
     fi
     chown root:"$daemon_owner" "$core_dir/pydhcpd.conf"
     chmod 640 "$core_dir/pydhcpd.conf"
@@ -678,10 +676,10 @@ do_install() {
     # any other future script read these from here instead of asking again,
     # adding only their own keys if missing.
     if [ -f "$install_dir/pydhcp.env" ]; then
-        info "pydhcp.env already exists, not overwritten -- skip"
+        info "pydhcp.env already exists, not overwritten -skip"
         info "interface not changed, keeping value in pydhcp.env"
     else
-        info "Creating pydhcp.env ..."
+        log "Creating pydhcp.env ..."
         cat > "$install_dir/pydhcp.env" <<ENVEOF
 # =============================================================================
 # PYDHCP
@@ -739,7 +737,7 @@ ENVEOF
     chmod 640 "$install_dir/pydhcp.env"
 
     # Apply network parameters to pydhcpd.conf
-    conf_tmp=$(mktemp "$install_dir/.pydhcpd.conf.XXXXXX") || abort "cannot create temp file -- abort"
+    conf_tmp=$(mktemp "$install_dir/.pydhcpd.conf.XXXXXX") || abort "cannot create temp file -abort"
     cp -f "$core_dir/pydhcpd.conf" "$conf_tmp"
     sed -i "s|^server-identifier .*|server-identifier ${server_ip_answer};|" "$conf_tmp"
     sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${local_subnet} netmask ${netmask_answer}|" "$conf_tmp"
@@ -766,47 +764,46 @@ ENVEOF
 
     # Initialize empty leases file if not present
     if [ ! -f "$core_dir/pydhcpd.leases" ]; then
-        info "Creating empty pydhcpd.leases ..."
+        log "Creating empty pydhcpd.leases ..."
         touch "$core_dir/pydhcpd.leases"
         chown "$daemon_owner":"$daemon_owner" "$core_dir/pydhcpd.leases"
         chmod 640 "$core_dir/pydhcpd.leases"
     fi
 
     # Deploy tools
-    info "Creating $install_dir/tools ..."
     mkdir -p "$install_dir/tools"
     chown root:root "$install_dir/tools"
     chmod 755 "$install_dir/tools"
 
     verify_source "$script_dir/tools/pydhcpenv.sh"
     install -m 644 -o root -g root "$script_dir/tools/pydhcpenv.sh" "$install_dir/tools/pydhcpenv.sh"
+    info "updated tools/pydhcpenv.sh"
 
     for tool_script in pyleases.sh pywebmin.sh pybk.sh; do
         if [ -f "$script_dir/tools/$tool_script" ]; then
-            info "Deploying tools/$tool_script ..."
             verify_source "$script_dir/tools/$tool_script"
             cp "$script_dir/tools/$tool_script" "$install_dir/tools/$tool_script"
+            info "updated tools/$tool_script"
             chown root:root "$install_dir/tools/$tool_script"
             chmod 755 "$install_dir/tools/$tool_script"
         fi
     done
 
     if [ -x "$install_dir/tools/pybk.sh" ]; then
-        info "Registering pybk.sh monthly cron entry ..."
-        "$install_dir/tools/pybk.sh" install || warn "cron entry not registered -- alert"
+        "$install_dir/tools/pybk.sh" --install || warn "pybk.sh: monthly backup setup failed -alert"
     fi
 
     # Deploy systemd service
-    info "Deploying systemd unit ..."
     verify_source "$script_dir/service/pydhcpd.service"
     cp "$script_dir/service/pydhcpd.service" "$service_file"
+    info "updated pydhcpd.service"
     chown root:root "$service_file"
     chmod 644 "$service_file"
 
     # Deploy init.d wrapper
-    info "Deploying init.d wrapper ..."
     verify_source "$script_dir/init.d/pydhcpd"
     cp "$script_dir/init.d/pydhcpd" "$init_file"
+    info "updated init.d/pydhcpd"
     chown root:root "$init_file"
     chmod 755 "$init_file"
 
@@ -816,7 +813,7 @@ ENVEOF
     chmod 640 "$pydhcp_log_file"
 
     # Deploy logrotate config
-    info "Deploying logrotate config ..."
+    log "Deploying logrotate config ..."
     rm -f /etc/logrotate.d/pydhcpd
     cat > /etc/logrotate.d/pydhcp << 'EOF'
 /var/log/pydhcp.log {
@@ -836,21 +833,18 @@ EOF
     chown root:root /etc/logrotate.d/pydhcp
 
     # Enable and start service
-    info "Enabling and starting pydhcpd ..."
+    log "Enabling and starting pydhcpd ..."
     systemctl daemon-reload
     systemctl enable --force pydhcpd
     if ! systemctl start pydhcpd; then
-        { err "pydhcpd failed to start"; abort "check it with: journalctl -u pydhcpd -n 50 -- abort"; }
+        { err "pydhcpd failed to start"; abort "check it with: journalctl -u pydhcpd -n 50 -abort"; }
     fi
 
-    echo ""
-    info "pydhcpd installed and running."
-    echo ""
+    info "pydhcpd installed and running"
     info "Configuration : $core_dir/pydhcpd.conf"
     info "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"
     info "Leases : $core_dir/pydhcpd.leases"
     info "Logs : journalctl -u pydhcpd -f"
-    echo ""
     info "To remove : sudo bash pysetup.sh --uninstall"
 }
 
@@ -922,7 +916,7 @@ show_menu() {
             3) do_uninstall; break ;;
             4) do_status; break ;;
             5) exit 0 ;;
-            *) info "invalid option -- retry" ;;
+            *) info "invalid option -retry" ;;
         esac
     done
 }
@@ -956,7 +950,7 @@ case "${1:-}" in
     "") show_menu ;;
     -h|--help) usage ;;
     *)
-        err "unknown option $1 -- abort"
+        err "unknown option $1 -abort"
         usage
         exit 1
         ;;
