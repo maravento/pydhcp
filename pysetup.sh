@@ -4,6 +4,7 @@
 ################################################################################
 #
 # pysetup -- pydhcp installer / updater
+# FILE: pysetup.sh
 #
 # USAGE:
 # sudo bash pysetup.sh --install      Install
@@ -265,7 +266,7 @@ do_uninstall() {
     echo ""
     echo "This removes pydhcp completely from $install_dir"
     echo "The service, init.d wrapper, log and Webmin module are also removed"
-    echo "Run tools/pybk.sh first if you want a backup"
+    echo "A backup is taken with tools/pybk.sh before anything is removed"
     echo "/etc/bak is NOT touched"
     echo "Package dependencies are NOT removed"
     echo ""
@@ -287,6 +288,16 @@ do_uninstall() {
         exit 0
     fi
     echo ""
+
+    if [ -x "$install_dir/tools/pybk.sh" ]; then
+        if "$install_dir/tools/pybk.sh"; then
+            info "backup taken with pybk.sh"
+        else
+            abort "pybk.sh: backup failed -abort"
+        fi
+    else
+        abort "pybk.sh: missing or not executable -abort"
+    fi
 
     log "Stopping and disabling pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
@@ -348,10 +359,10 @@ do_update() {
         if "$install_dir/tools/pybk.sh"; then
             info "backup taken with pybk.sh"
         else
-            warn "pybk.sh: backup failed -alert"
+            abort "pybk.sh: backup failed -abort"
         fi
     else
-        warn "pybk.sh: missing or not executable -alert"
+        abort "pybk.sh: missing or not executable -abort"
     fi
 
     systemctl stop pydhcpd 2>/dev/null || true
@@ -925,7 +936,7 @@ show_menu() {
             2) do_update; break ;;
             3) do_uninstall; break ;;
             4) do_status; break ;;
-            5) exit 0 ;;
+            5) break ;;
             *) info "invalid option -retry" ;;
         esac
     done

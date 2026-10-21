@@ -1,3 +1,7 @@
+<!--
+PyDHCP documentation
+FILE: README.md
+-->
 # [PyDHCP](https://github.com/maravento)
 
 [![status-maintained](https://img.shields.io/badge/status-maintained-purple.svg)](https://github.com/maravento/pydhcp)

@@ -4,6 +4,7 @@
 ################################################################################
 #
 # pywebmin -- PyDHCP module installer for Webmin
+# FILE: tools/pywebmin.sh
 #
 # USAGE:
 # sudo ./pywebmin.sh --install      Install the module
@@ -899,20 +900,16 @@ main() {
         case $menu_option in
             1)
                 install_module
-                echo ""
                 log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;
             2)
                 uninstall_module || true
-                echo ""
                 log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;
             3)
-                echo ""
-                echo "$(date '+%Y-%m-%d %H:%M:%S') Exiting..."
-                echo ""
+                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;
             *)

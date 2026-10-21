@@ -4,6 +4,7 @@
 ################################################################################
 #
 # pyleases -- DHCP Leases & ACL Manager for pydhcpd
+# FILE: tools/pyleases.sh
 #
 # USAGE:
 # sudo bash pyleases.sh    (no arguments)
