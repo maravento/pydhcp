@@ -414,7 +414,7 @@ do_update() {
     cat > /etc/logrotate.d/pydhcp << 'EOF'
 /var/log/pydhcp.log {
     daily
-    rotate 4
+    rotate 7
     compress
     delaycompress
     missingok
@@ -685,7 +685,8 @@ do_install() {
 # PYDHCP
 # /etc/pydhcp/pydhcp.env
 # =============================================================================
-# -- Daemon bootstrap (/etc/default/isc-dhcp-server migration) ----------------
+
+# Daemon
 DHCPDv4_CONF=/etc/pydhcp/core/pydhcpd.conf
 DHCPDv4_BIN=/usr/bin/python3
 DHCPDv4_SCRIPT=/etc/pydhcp/core/pydhcpd.py
@@ -693,7 +694,8 @@ PYDHCPD_LEASES=$core_dir/pydhcpd.leases
 INTERFACESv4=$iface_selected
 DAEMON_USER=pydhcpd
 DAEMON_GROUP=pydhcpd
-# -- Network values (chosen by the administrator during install) --------------
+
+# Network
 SERVER_IP=$server_ip_answer
 SERV_SUBNET=$local_subnet
 SERV_BROADCAST=$local_broadcast
@@ -701,28 +703,36 @@ SERV_MASK=$netmask_answer
 SERV_INI_RANGE_BLOCK=${local_net_base}.${pool_start_answer}
 SERV_END_RANGE_BLOCK=${local_net_base}.${pool_end_answer}
 SERV_DNS=$dns_answer
-# -- ACL paths, administrator's own lists (edited by hand) --------------------
+
+# ACL
 ACL_PATH=$acl_base_dir
 ACL_MAC_PATH=$acl_mac_dir
 ACL_MAC_LIMITED=$acl_limited_file
 ACL_MAC_UNLIMITED=$acl_unlimited_file
-# -- ACL paths, pydhcp's own list (written by pyleases.sh) --------------------
+
+# DHCP ACL
 ACL_DHCP_PATH=$acl_dhcp_dir
 ACL_BLOCK_FILE=$acl_block_file
-# -- Lease timers (pyleases.sh -> pydhcpd.conf pool/subnet directives) --------
+
+# Leases
 CLEANUP_INTERVAL=$cleanup_answer
 AUTHORIZED_LEASE_TIME=2592000
 QUARANTINE_DURATION=60
-# -- Optional features (pyleases.sh -> pydhcpd.conf wpad/ping-check) ----------
+
+# Features
 WPAD_ENABLED=$wpad_detected
 WPAD_PORT=$wpad_port_value
 PING_CHECK_ENABLED=$ping_check_value
 PING_TIMEOUT_SECONDS=1
-# -- pydhcp-only features (no isc-dhcp-server equivalent) ---------------------
+
+# Performance
 PING_CACHE_TTL_SECONDS=120
 RATE_LIMIT_WINDOW_SECONDS=60
 RATE_LIMIT_MAX=5
 RESERVATION_TTL_SECONDS=30
+
+# Backup
+BACKUP_DIR=/etc/bak/pydhcp
 # =============================================================================
 
 # =============================================================================
@@ -813,12 +823,11 @@ ENVEOF
     chmod 640 "$pydhcp_log_file"
 
     # Deploy logrotate config
-    log "Deploying logrotate config ..."
     rm -f /etc/logrotate.d/pydhcpd
     cat > /etc/logrotate.d/pydhcp << 'EOF'
 /var/log/pydhcp.log {
     daily
-    rotate 4
+    rotate 7
     compress
     delaycompress
     missingok
@@ -833,6 +842,7 @@ EOF
     chown root:root /etc/logrotate.d/pydhcp
 
     # Enable and start service
+    info "updated /etc/logrotate.d/pydhcp"
     log "Enabling and starting pydhcpd ..."
     systemctl daemon-reload
     systemctl enable --force pydhcpd

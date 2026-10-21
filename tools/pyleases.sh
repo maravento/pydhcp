@@ -88,6 +88,7 @@ UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+UH_BOOL='^(true|false)$'
 UH_MAC_RE='([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}'
 UH_MAC="^${UH_MAC_RE}$"
 
@@ -437,11 +438,20 @@ load_pydhcp_env "$pydhcp_env" "$env_keys" || true
 key_errors=()
 for env_key in ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED \
                ACL_BLOCK_FILE PYDHCPD_LEASES DHCPDv4_CONF DAEMON_USER \
-               DAEMON_GROUP WPAD_ENABLED PING_CHECK_ENABLED; do
+               DAEMON_GROUP; do
     if ! grep -q "^${env_key}=" "$pydhcp_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
+    fi
+done
+for env_key in WPAD_ENABLED PING_CHECK_ENABLED; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    elif ! [[ "${!env_key}" =~ $UH_BOOL ]]; then
+        key_errors+=("$env_key invalid boolean")
     fi
 done
 for env_key in SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_INI_RANGE_BLOCK \
@@ -489,35 +499,14 @@ elif ! [[ "$WPAD_PORT" =~ $UH_UINT ]] \
 fi
 if (( ${#key_errors[@]} > 0 )); then
     for key_error in "${key_errors[@]}"; do
-        log "ERROR: $key_error -abort"
+        log "WARNING: $key_error -alert"
     done
     log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
     exit 1
 fi
 unset key_errors key_error env_key
 
-# FALLBACK
-# Second layer of protection, behind KEY CHECK -- by design never reached
-if [ -z "${CLEANUP_INTERVAL:-}" ]; then
-    log "WARNING: no CLEANUP_INTERVAL in pydhcp.env -fallback"
-fi
-CLEANUP_INTERVAL="${CLEANUP_INTERVAL:-60}"
-if [ -z "${AUTHORIZED_LEASE_TIME:-}" ]; then
-    log "WARNING: no AUTHORIZED_LEASE_TIME in pydhcp.env -fallback"
-fi
-AUTHORIZED_LEASE_TIME="${AUTHORIZED_LEASE_TIME:-2592000}"
-if [ -z "${QUARANTINE_DURATION:-}" ]; then
-    log "WARNING: no QUARANTINE_DURATION in pydhcp.env -fallback"
-fi
-QUARANTINE_DURATION="${QUARANTINE_DURATION:-60}"
-if [ -z "${PING_TIMEOUT_SECONDS:-}" ]; then
-    log "WARNING: no PING_TIMEOUT_SECONDS in pydhcp.env -fallback"
-fi
-PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
-if [ -z "${WPAD_PORT:-}" ]; then
-    log "WARNING: no WPAD_PORT in pydhcp.env -fallback"
-fi
-wpad_port="${WPAD_PORT:-18100}"
+wpad_port="$WPAD_PORT"
 
 # KEY GUARD
 # Guard: SERVER_IP must never fall inside its own block-pool range -- pydhcpd.py
@@ -543,7 +532,7 @@ fi
 wpad_url="http://$SERVER_IP:$wpad_port/wpad.pac"
 
 wpad_ready=0
-if [[ "${WPAD_ENABLED:-false}" == "true" ]]; then
+if [ "$WPAD_ENABLED" = true ]; then
     if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "$wpad_url"; then
         wpad_ready=1
     else
@@ -559,7 +548,7 @@ else
     wpad_subnet="#option wpad \"$wpad_url\";"
 fi
 
-if [[ "${PING_CHECK_ENABLED:-true}" == "true" ]]; then
+if [ "$PING_CHECK_ENABLED" = true ]; then
     ping_check_line="ping-check true;"
     ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS:-1};"
 else

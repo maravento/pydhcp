@@ -158,7 +158,7 @@ sudo bash pysetup.sh --help   # or -h
 | `pydhcpd.leases` | ⛔ preserved | ✅ removed |
 | `pydhcp.env` | ⛔ preserved | ✅ removed |
 | `/var/log/pydhcp.log` (shared by the daemon, `pysetup.sh` and `tools/pyleases.sh`) | ⛔ preserved | ✅ removed |
-| `/etc/logrotate.d/pydhcp` | ⛔ preserved | ✅ removed |
+| `/etc/logrotate.d/pydhcp` | ✅ policy refreshed | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
 | `acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ✅ removed |
 | `core/pydhcpd.conf.bak`, `core/pydhcpd.conf.webmin.bak` (rollback copies) | ⛔ preserved | ✅ removed |
@@ -628,6 +628,10 @@ sudo bash tools/pyleases.sh
 
 #### pybk
 
+> `pybk.sh` reads `BACKUP_DIR` from `pydhcp.env` (Backup block). Default: `/etc/bak/pydhcp`. Missing, empty or relative paths abort before backup. Existing configurations require this key.
+>
+> `pybk.sh` lee `BACKUP_DIR` de `pydhcp.env` (bloque Backup). Valor predeterminado: `/etc/bak/pydhcp`. Las rutas ausentes, vacías o relativas abortan antes del respaldo. Las configuraciones existentes requieren esta clave.
+
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
@@ -745,6 +749,11 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 
 ### Logs
 
+> Project log: `/var/log/pydhcp.log`. Installation and update configure daily rotation in `/etc/logrotate.d/pydhcp`, keeping seven previous files plus the active log. Compression starts on the next rotation. Empty logs are not rotated; missing logs are tolerated. Squid and Apache keep their own policies.
+>
+> Log del proyecto: `/var/log/pydhcp.log`. La instalación y la actualización configuran rotación diaria en `/etc/logrotate.d/pydhcp`. Se conservan siete archivos anteriores y el activo. La compresión comienza en la siguiente rotación. Los logs vacíos no se rotan; los ausentes se toleran. Squid y Apache conservan sus propias políticas.
+
+
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
@@ -806,9 +815,6 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 2026-09-30 14:07:12 ERROR: 6 key(s) invalid in pydhcp.env -abort
 ```
 
-> A `-fallback` on a `pydhcp.env` key is a second layer of protection, behind this check. By design it never runs, because the check aborts first. It would only appear if the check failed to catch the problem.
->
-> Un `-fallback` sobre una clave de `pydhcp.env` es una segunda medida de protección, detrás de esta verificación. Por diseño no se ejecuta nunca, porque la verificación aborta antes. Solo aparecería si la verificación no detectara el problema.
 
 #### Log line width
 
