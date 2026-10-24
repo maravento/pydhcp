@@ -1248,6 +1248,8 @@ def parse_packet(data):
 
     pkt = {}
     pkt["op"]    = data[0]
+    if pkt["op"] != 1:
+        return None
     pkt["htype"] = data[1]
     if pkt["htype"] != 1:
         return None

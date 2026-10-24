@@ -85,17 +85,18 @@ service_file="/etc/systemd/system/pydhcpd.service"
 init_file="/etc/init.d/pydhcpd"
 daemon_owner="pydhcpd"
 
-# ACL layout. Two groups, by who owns the list:
-# - acl_base_dir holds the administrator's own lists (mac-*.txt), edited by hand.
+# ACL layout. Two groups, by who owns the list, both under acl_base_dir:
+# - acl_mac_dir holds the administrator's own lists (mac-*.txt), edited by hand.
 # - acl_dhcp_dir holds pydhcp's own list (blockdhcp.txt), written by
-#   pyleases.sh alone, so it lives under install_dir -- same arrangement uhm
-#   uses for its own lists under /etc/uhm/acl.
+#   pyleases.sh alone.
+# acl_base_dir stays outside install_dir because access control lists are never
+# removed by any installer: --uninstall leaves /etc/acl untouched.
 # pydhcp.env itself is written with these already resolved -- it is parsed
 # key=value (never sourced), so a "$VAR" inside it would be stored as that
 # literal string, not as a path.
 acl_base_dir="/etc/acl"
 acl_mac_dir="${acl_base_dir}/mac"
-acl_dhcp_dir="${install_dir}/acl"
+acl_dhcp_dir="${acl_base_dir}/dhcp"
 acl_limited_file="${acl_mac_dir}/mac-limited.txt"
 acl_unlimited_file="${acl_mac_dir}/mac-unlimited.txt"
 acl_block_file="${acl_dhcp_dir}/blockdhcp.txt"
@@ -108,6 +109,71 @@ abort() { err "$*"; exit 1; }
 # ------------------------------------------------------------------------------
 # FUNCTIONS
 # ------------------------------------------------------------------------------
+
+# ACL PREPARATION
+# Canonical block -- copied byte for byte into every script that creates a
+# directory or a list under /etc/acl. Prepare /etc/acl first, then only the
+# subdirectory and the lists this script needs. Never recursive.
+# Usage: acl_prepare <dir> <dir_mode> <file_mode> [file ...]
+acl_prepare() {
+    local acl_dir="$1" dir_mode="$2" file_mode="$3" acl_file
+    shift 3
+
+    # mkdir without -p fails when the directory already exists, so a success
+    # means this run created it and no concurrent run did.
+    if mkdir -m "$dir_mode" -- "$acl_dir" 2>/dev/null; then
+        if ! chown root:root -- "$acl_dir"; then
+            log "ERROR: cannot set owner of $acl_dir -abort"
+            exit 1
+        fi
+        log "WARNING: created ACL directory $acl_dir -alert"
+    elif [ -d "$acl_dir" ] && [ ! -L "$acl_dir" ]; then
+        acl_fix_perms "$acl_dir" "$dir_mode"
+    else
+        log "ERROR: $acl_dir is not a regular directory -abort"
+        exit 1
+    fi
+
+    for acl_file in "$@"; do
+        # Checked before the redirection: noclobber only protects regular
+        # files, and opening a FIFO for writing blocks until a reader shows up.
+        if [ -L "$acl_file" ] || { [ -e "$acl_file" ] && [ ! -f "$acl_file" ]; }; then
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
+        fi
+        # noclobber makes the redirection fail when the file already exists,
+        # and umask 077 keeps the new file closed until chmod sets its mode.
+        if (set -C; umask 077; : > "$acl_file") 2>/dev/null; then
+            if ! { chmod "$file_mode" -- "$acl_file" \
+                && chown root:root -- "$acl_file"; }; then
+                log "ERROR: cannot set perms of $(basename "$acl_file") -abort"
+                exit 1
+            fi
+            log "WARNING: created empty $(basename "$acl_file") -alert"
+        elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
+            acl_fix_perms "$acl_file" "$file_mode"
+        else
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
+        fi
+    done
+}
+
+# Repairs mode and owner of an existing ACL object, per Autorreparación
+acl_fix_perms() {
+    local acl_path="$1" want_mode="$2" cur_mode cur_owner
+    cur_mode=$(stat -c '%a' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    cur_owner=$(stat -c '%U:%G' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    [[ "$cur_mode" == "$want_mode" && "$cur_owner" == "root:root" ]] && return 0
+    if ! { chmod "$want_mode" -- "$acl_path" \
+        && chown root:root -- "$acl_path"; }; then
+        log "ERROR: cannot fix $acl_path perms -abort"
+        exit 1
+    fi
+    log "INFO: $acl_path perms fixed -fixed"
+}
 
 # INTERACTIVE PROMPTS
 # Each one asks for a value, validates it and repeats until it is correct
@@ -306,9 +372,9 @@ do_uninstall() {
     log "Removing system files..."
     rm -f "$service_file"
     rm -f "$init_file"
-    rm -f /etc/logrotate.d/pydhcp
+    rm -f /etc/logrotate.d/pydhcp && info "Removed /etc/logrotate.d/pydhcp"
     rm -f /var/log/pydhcp.log
-    rm -f /etc/logrotate.d/pydhcpd
+    rm -f /etc/logrotate.d/pydhcpd && info "Removed /etc/logrotate.d/pydhcpd"
     rm -f /var/log/pydhcpd.log
 
     if [ -x "$install_dir/tools/pybk.sh" ]; then
@@ -322,9 +388,10 @@ do_uninstall() {
 
     [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -abort"
 
-    # Everything under install_dir goes, including the config and the block
-    # list: uninstalling means removing the project. tools/pybk.sh is the
-    # way to keep a copy, and it writes to /etc/bak, outside this directory.
+    # Everything under install_dir goes, including the config: uninstalling
+    # means removing the project. The ACL lists are not here: they live under
+    # /etc/acl, which no installer ever removes. tools/pybk.sh is the way to
+    # keep a copy of the config, and it writes to /etc/bak.
     log "Removing $install_dir ..."
     rm -rf "$install_dir"
 
@@ -670,16 +737,9 @@ do_install() {
     # overwritten). These lists are only consumed by the optional pyleases.sh
     # tool, but are created here unconditionally so their paths can be recorded
     # in pydhcp.env from the start -- not deferred until pyleases.sh first runs.
-    mkdir -p "$acl_mac_dir" "$acl_dhcp_dir"
-    chmod 700 "$acl_mac_dir" "$acl_dhcp_dir"
-
-    for source_file in "$acl_block_file" "$acl_limited_file" "$acl_unlimited_file"; do
-        if [ ! -f "$source_file" ]; then
-            touch "$source_file"
-            chmod 600 "$source_file"
-            chown root:root "$source_file"
-        fi
-    done
+    acl_prepare "$acl_base_dir" 755 644
+    acl_prepare "$acl_mac_dir" 700 600 "$acl_limited_file" "$acl_unlimited_file"
+    acl_prepare "$acl_dhcp_dir" 700 600 "$acl_block_file"
     info "ACL directories/files present in $acl_base_dir"
 
     # Create pydhcp.env (preserved on update -- never overwritten). Single source
@@ -743,6 +803,7 @@ RATE_LIMIT_MAX=5
 RESERVATION_TTL_SECONDS=30
 
 # Backup
+# Changing these defaults is not recommended
 BACKUP_DIR=/etc/bak/pydhcp
 # =============================================================================
 

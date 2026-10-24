@@ -148,43 +148,79 @@ verify_dhcp_config() {
     chown root:"${DAEMON_GROUP:-pydhcpd}" "${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
 }
 
-verify_directories() {
-    for check_dir in "$ACL_MAC_PATH" "$ACL_DHCP_PATH"; do
-        if [ ! -d "$check_dir" ]; then
-            log "ERROR: ACL directory missing -abort"
+# ACL PREPARATION
+# Canonical block -- copied byte for byte into every script that creates a
+# directory or a list under /etc/acl. Prepare /etc/acl first, then only the
+# subdirectory and the lists this script needs. Never recursive.
+# Usage: acl_prepare <dir> <dir_mode> <file_mode> [file ...]
+acl_prepare() {
+    local acl_dir="$1" dir_mode="$2" file_mode="$3" acl_file
+    shift 3
+
+    # mkdir without -p fails when the directory already exists, so a success
+    # means this run created it and no concurrent run did.
+    if mkdir -m "$dir_mode" -- "$acl_dir" 2>/dev/null; then
+        if ! chown root:root -- "$acl_dir"; then
+            log "ERROR: cannot set owner of $acl_dir -abort"
+            exit 1
+        fi
+        log "WARNING: created ACL directory $acl_dir -alert"
+    elif [ -d "$acl_dir" ] && [ ! -L "$acl_dir" ]; then
+        acl_fix_perms "$acl_dir" "$dir_mode"
+    else
+        log "ERROR: $acl_dir is not a regular directory -abort"
+        exit 1
+    fi
+
+    for acl_file in "$@"; do
+        # Checked before the redirection: noclobber only protects regular
+        # files, and opening a FIFO for writing blocks until a reader shows up.
+        if [ -L "$acl_file" ] || { [ -e "$acl_file" ] && [ ! -f "$acl_file" ]; }; then
+            log "ERROR: $acl_file is not a regular file -abort"
+            exit 1
+        fi
+        # noclobber makes the redirection fail when the file already exists,
+        # and umask 077 keeps the new file closed until chmod sets its mode.
+        if (set -C; umask 077; : > "$acl_file") 2>/dev/null; then
+            if ! { chmod "$file_mode" -- "$acl_file" \
+                && chown root:root -- "$acl_file"; }; then
+                log "ERROR: cannot set perms of $(basename "$acl_file") -abort"
+                exit 1
+            fi
+            log "WARNING: created empty $(basename "$acl_file") -alert"
+        elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
+            acl_fix_perms "$acl_file" "$file_mode"
+        else
+            log "ERROR: $acl_file is not a regular file -abort"
             exit 1
         fi
     done
 }
 
-ensure_acl_lists() {
-    local check_file file_owner file_perms
-    for check_file in "$@"; do
-        if [ ! -f "$check_file" ]; then
-            touch "$check_file"
-            chmod 600 "$check_file"
-            chown root:root "$check_file"
-            continue
-        fi
-        file_owner=$(stat -c '%U' "$check_file" 2>/dev/null)
-        file_perms=$(stat -c '%a' "$check_file" 2>/dev/null)
-        if [[ "$file_owner" != "root" ]] || [[ "$file_perms" != "600" ]]; then
-            if chown root:root "$check_file" 2>/dev/null && chmod 600 "$check_file" 2>/dev/null; then
-                log "INFO: $(basename "$check_file") perms fixed -fixed"
-            else
-                log "ERROR: cannot fix $(basename "$check_file") perms -abort"
-                exit 1
-            fi
-        fi
-    done
+# Repairs mode and owner of an existing ACL object, per Autorreparación
+acl_fix_perms() {
+    local acl_path="$1" want_mode="$2" cur_mode cur_owner
+    cur_mode=$(stat -c '%a' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    cur_owner=$(stat -c '%U:%G' -- "$acl_path" 2>/dev/null) || {
+        log "ERROR: cannot stat $acl_path -abort"; exit 1; }
+    [[ "$cur_mode" == "$want_mode" && "$cur_owner" == "root:root" ]] && return 0
+    if ! { chmod "$want_mode" -- "$acl_path" \
+        && chown root:root -- "$acl_path"; }; then
+        log "ERROR: cannot fix $acl_path perms -abort"
+        exit 1
+    fi
+    log "INFO: $acl_path perms fixed -fixed"
 }
 
 initialize_empty_files() {
     shopt -s nullglob
     local mac_lists=("$ACL_MAC_PATH"/mac-*.txt)
     shopt -u nullglob
-    ensure_acl_lists "$ACL_BLOCK_FILE" "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" \
+    acl_prepare "$ACL_PATH" 755 644
+    acl_prepare "$ACL_MAC_PATH" 700 600 "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" \
         "${mac_lists[@]+"${mac_lists[@]}"}"
+    acl_prepare "$ACL_DHCP_PATH" 700 600 "$ACL_BLOCK_FILE"
 }
 
 # DUPLICATE GUARD
@@ -428,7 +464,7 @@ unset env_owner env_perms
 # LOAD_CONF
 # so a tampered or maliciously replaced env file cannot execute code.
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh"
-env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
+env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 
 # LOAD
 # Reads pydhcp.env; a missing key is handled by the check below
@@ -437,9 +473,9 @@ load_pydhcp_env "$pydhcp_env" "$env_keys" || true
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
-for env_key in ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED \
-               ACL_BLOCK_FILE PYDHCPD_LEASES DHCPDv4_CONF DAEMON_USER \
-               DAEMON_GROUP; do
+for env_key in ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED \
+               ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES DHCPDv4_CONF \
+               DAEMON_USER DAEMON_GROUP; do
     if ! grep -q "^${env_key}=" "$pydhcp_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
@@ -485,7 +521,7 @@ for env_key in CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION \
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
         key_errors+=("$env_key not set")
-    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || (( ${!env_key} == 0 )); then
+    elif ! [[ "${!env_key}" =~ $UH_UINT ]] || [[ "${!env_key}" == 0 ]]; then
         key_errors+=("$env_key invalid seconds")
     fi
 done
@@ -566,7 +602,6 @@ log "pyleases start..."
 verify_dhcp_service
 verify_dhcp_files
 verify_dhcp_config
-verify_directories
 initialize_empty_files
 normalize_acl_lists
 check_duplicate
@@ -797,11 +832,11 @@ class "blockdhcp" {
 
         if (( removed_count > 0 )); then
             local grep_rc=0 block_tmp
-        block_tmp=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -abort"; exit 1; }
+            block_tmp=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -abort"; exit 1; }
             temp_files+=("${block_tmp}")
             grep -viFf "$line_patterns" "$ACL_BLOCK_FILE" > "$block_tmp" || grep_rc=$?
             if (( grep_rc > 1 )); then
-                log "WARNING: grep failed (rc=$grep_rc) -alert"
+                log "WARNING: cannot filter blockdhcp.txt (rc=$grep_rc) -alert"
                 rm -f "$block_tmp"
             else
                 chmod 600 "$block_tmp"

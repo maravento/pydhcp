@@ -17,19 +17,6 @@
 
 set -euo pipefail
 
-# logging
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-log_file="${script_dir}/pywebmin.log"
-log() {
-    local msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
-    echo "$msg" >> "$log_file" 2>/dev/null || true
-    if [[ "$1" == ERROR:* ]]; then echo "$msg" >&2; else echo "$msg"; fi
-}
-
-log_error() {
-    log "$*" >&2
-}
-
 # USAGE
 # Answered before any check: --help must work without root
 show_usage() {
@@ -65,6 +52,19 @@ if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
+
+# logging
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+log_file="${script_dir}/pywebmin.log"
+log() {
+    local msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$msg" >> "$log_file" 2>/dev/null || true
+    if [[ "$1" == ERROR:* ]]; then echo "$msg" >&2; else echo "$msg"; fi
+}
+
+log_error() {
+    log "$*" >&2
+}
 
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
@@ -824,25 +824,28 @@ uninstall_module() {
 
     if [ ! -d "$module_dir" ]; then
         log "INFO: PyDHCP Webmin module is not installed"
-        return 1
+        return 0
     fi
 
     log "INFO: removing module directories"
-    rm -rf "$module_dir"
-    rm -rf "$module_conf_dir"
-    log "INFO: module directories removed"
+    if ! rm -rf "$module_dir" "$module_conf_dir"; then
+        log_error "ERROR: cannot remove module directories -abort"
+        return 1
+    fi
 
     if [ -f /etc/webmin/webmin.acl ]; then
-        if grep -qw "$module_name" /etc/webmin/webmin.acl; then
-            sed -i "s/[[:space:]]\+${module_name}\b//g" /etc/webmin/webmin.acl
-            log "INFO: module removed from webmin.acl"
+        if ! sed -i "s/[[:space:]]\+${module_name}\b//g" /etc/webmin/webmin.acl; then
+            log_error "ERROR: cannot edit webmin.acl -abort"
+            return 1
         fi
     else
         log_error "WARNING: webmin.acl not found -alert"
     fi
 
-    rm -f /var/webmin/module.infos.cache
-    log "INFO: module cache cleared"
+    if ! rm -f /var/webmin/module.infos.cache; then
+        log_error "ERROR: cannot clear module cache -abort"
+        return 1
+    fi
 
     log "INFO: restarting Webmin service"
     if ! { systemctl restart webmin.service 2>/dev/null || /etc/webmin/restart 2>/dev/null; }; then
@@ -879,7 +882,7 @@ main() {
                 exit 0
                 ;;
             --uninstall)
-                uninstall_module || true
+                uninstall_module
                 log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;
@@ -904,7 +907,7 @@ main() {
                 exit 0
                 ;;
             2)
-                uninstall_module || true
+                uninstall_module
                 log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
                 exit 0
                 ;;

@@ -57,9 +57,6 @@ FILE: README.md
 
 ```
 pydhcp/
-├── acl/
-│   └── blockdhcp.txt       # MAC addresses blocked from getting a DHCP lease
-│
 ├── core/
 │   ├── pydhcpd.py          # DHCP daemon: handles DISCOVER/OFFER/REQUEST/ACK
 │   └── pydhcpd.conf        # Daemon config: hosts, pools, lease timers
@@ -161,10 +158,10 @@ sudo bash pysetup.sh --help   # or -h
 | `pydhcpd.conf` | ⛔ preserved | ✅ removed |
 | `pydhcpd.leases` | ⛔ preserved | ✅ removed |
 | `pydhcp.env` | ⛔ preserved | ✅ removed |
-| `/var/log/pydhcp.log` (shared by the daemon, `pysetup.sh` and `tools/pyleases.sh`) | ⛔ preserved | ✅ removed |
+| `/var/log/pydhcp.log` (shared by the daemon and `tools/pyleases.sh`; `pysetup.sh` only creates it and consolidates older logs into it, writing its own messages to `pysetup.log`) | ⛔ preserved | ✅ removed |
 | `/etc/logrotate.d/pydhcp` | ✅ policy refreshed | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
-| `acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ✅ removed |
+| `/etc/acl/dhcp/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ⛔ preserved |
 | `core/pydhcpd.conf.bak`, `core/pydhcpd.conf.webmin.bak` (rollback copies) | ⛔ preserved | ✅ removed |
 | `/etc/bak/` (project backups written by `tools/pybk.sh`) | ⛔ preserved | ⛔ preserved |
 | `/etc/acl/mac/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
@@ -173,9 +170,9 @@ sudo bash pysetup.sh --help   # or -h
 >
 > `/etc/acl` permanece intacto al ejecutar `--uninstall`. Allí se guardan las listas `mac-*.txt` del administrador. `pydhcp` solo las utiliza si se ejecuta la herramienta opcional `tools/pyleases.sh`. Como `pysetup.sh` crea ese directorio, la desinstalación no elimina esos datos.
 
-> `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is therefore stored under `/etc/pydhcp/acl/`, like `uhm`'s own lists under `/etc/uhm/acl/`. The `--uninstall` option deletes it along with the rest of `/etc/pydhcp`; to keep a copy, run `tools/pybk.sh` first.
+> `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is stored under `/etc/acl/dhcp/`, next to the administrator's lists in `/etc/acl/mac/`. No installer ever removes `/etc/acl`, because access control lists outlive the project that reads them, so `--uninstall` leaves it in place.
 >
-> `blockdhcp.txt` es un caso distinto: es la lista propia de `pydhcp`, escrita solo por `pyleases.sh` y no se edita manualmente. Por eso se guarda en `/etc/pydhcp/acl/`, igual que las listas propias de `uhm` se guardan en `/etc/uhm/acl/`. La opción `--uninstall` la elimina junto con el resto de `/etc/pydhcp`; para conservar una copia, se ejecuta antes `tools/pybk.sh`.
+> `blockdhcp.txt` es un caso distinto: es la lista propia de `pydhcp`, escrita solo por `pyleases.sh` y no se edita manualmente. Se guarda en `/etc/acl/dhcp/`, junto a las listas del administrador en `/etc/acl/mac/`. Ningún instalador elimina `/etc/acl`, porque las listas de control de acceso sobreviven al proyecto que las lee, así que `--uninstall` la conserva.
 
 ### Daily operation
 
@@ -341,17 +338,17 @@ Every key in this table is verified by `pyleases.sh` before it rewrites `pydhcpd
 
 Todas las claves de esta tabla las verifica `pyleases.sh` antes de reescribir `pydhcpd.conf`. `SERVER_IP`, `SERV_SUBNET`, `SERV_BROADCAST`, `SERV_INI_RANGE_BLOCK` y `SERV_END_RANGE_BLOCK` deben ser direcciones IPv4 válidas, `SERV_MASK` una máscara y `SERV_DNS` una lista de IPv4. Ver «Key check».
 
-#### pydhcp.env — shared (not used by pydhcp itself)
+#### pydhcp.env — shared settings
 
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      A fourth group in <code>pydhcp.env</code>: values pydhcp itself never reads, hosted here only because pydhcp.env is the one file every project on this host already reads. A project that also depends on pydhcp can read its own key from here instead of asking the same question again or hardcoding it. <br>
+      A fourth group in <code>pydhcp.env</code> contains shared settings. <code>pyleases.sh</code> reads <code>ACL_PATH</code> to prepare the ACL parent directory. Other projects can reuse these settings instead of asking the same question again or hardcoding them. <br>
       <br>
       <code>pysetup.sh</code> creates the two keys below during installation. A project that needs a further shared key adds it here the first time it runs, and any project running after it reuses the existing value instead of asking again.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El último grupo contiene valores que PyDHCP no utiliza, pero que otros proyectos pueden compartir desde <code>pydhcp.env</code>. Así, esos proyectos pueden leer aquí su configuración en lugar de volver a solicitarla o escribirla directamente en el código. <br>
+      El último grupo contiene valores compartidos de <code>pydhcp.env</code>. <code>pyleases.sh</code> lee <code>ACL_PATH</code> para preparar el directorio padre de las ACL. Otros proyectos pueden reutilizar estos valores sin volver a solicitarlos ni escribirlos directamente en el código. <br>
       <br>
       <code>pysetup.sh</code> crea las dos claves de abajo durante la instalación. El proyecto que necesite otra clave compartida la añade; los demás proyectos pueden reutilizarla.
     </td>
@@ -360,7 +357,7 @@ Todas las claves de esta tabla las verifica `pyleases.sh` antes de reescribir `p
 
 | Variable | Description | Descripción |
 |----------|--------------|-------------|
-| `ACL_PATH` | Parent directory of the ACL tree, `ACL_MAC_PATH` and `ACL_DHCP_PATH` hang from it. No pydhcp script reads it; it is written so other projects sharing `/etc/acl` can read the base path | Directorio padre del árbol de ACL, del que cuelgan `ACL_MAC_PATH` y `ACL_DHCP_PATH`. Ningún script de pydhcp la lee; se escribe para que otros proyectos que comparten `/etc/acl` lean la ruta base |
+| `ACL_PATH` | Parent directory of the ACL tree, containing `ACL_MAC_PATH` and `ACL_DHCP_PATH`. `pyleases.sh` reads it and prepares it as `root:root`, mode `755`; other projects can reuse the base path | Directorio padre del árbol de ACL, que contiene `ACL_MAC_PATH` y `ACL_DHCP_PATH`. `pyleases.sh` lo lee y prepara como `root:root`, modo `755`; otros proyectos pueden reutilizar la ruta base |
 | `WAN_IFACE` | Name of the host's WAN network interface. Not used by pydhcp; added to the `.env` to share it with other projects that also use pydhcp | Nombre de la interfaz de red WAN del host. No es utilizada por pydhcp; se agrega al entorno `.env` para compartirla con otros proyectos que utilizan pydhcp |
 
 #### Fixed values (not configurable anywhere)
@@ -417,7 +414,7 @@ Todas las claves de esta tabla las verifica `pyleases.sh` antes de reescribir `p
 | `pydhcpd.leases` | `pydhcpd:pydhcpd` | `640` | replaces atomically | Daemon-owned because the daemon writes it: the atomic replace creates a new file and renames it over this one, so the result carries the writer's ownership |
 | `pydhcpd.conf.bak` | `root:root` | `640` | never touches it | Single rollback copy written by `tools/pyleases.sh` before it regenerates the config, and restored automatically if the daemon then fails to start. Created with `cp`, which preserves the source's `640` |
 | `pydhcpd.conf.webmin.bak` | `root:root` | `640` | never touches it | Single rollback copy written by the Webmin module (`tools/pywebmin.sh`) before each save from the browser editor. Kept under its own name, not `pydhcpd.conf.bak`, so the two never overwrite each other: that one belongs to `pyleases.sh`/`uhmleases.sh` and undoes an automatic rebuild, this one undoes a manual edit. Perl's `File::Copy` does not preserve the source mode, so `config.cgi` applies `chmod 0640` explicitly — otherwise the backup would land at whatever root's umask dictates and end up more permissive than the config it copies |
-| `/var/log/pydhcp.log` | `pydhcpd:pydhcpd` | `640` | appends | Daemon-owned so it can write. `pysetup.sh` and `tools/pyleases.sh` also write to it, but they run as root |
+| `/var/log/pydhcp.log` | `pydhcpd:pydhcpd` | `640` | appends | Daemon-owned so it can write. `tools/pyleases.sh` also writes to it as root. `pysetup.sh` creates it, sets its ownership and mode, and consolidates older logs into it, but its own messages go to `pysetup.log` next to the installer |
 | `tools/` | `root:root` | `755` | never touches it | Run manually by root; not part of the daemon's runtime |
 | `pydhcpd.service` | `root:root` | `644` | — | Belongs to systemd |
 | `/etc/init.d/pydhcpd` | `root:root` | `755` | — | Belongs to sysvinit |
@@ -480,10 +477,10 @@ sudo ls -l /etc/pydhcp/ /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> loads it with <code>source</code> and declares its allowed keys. It parses <code>pydhcp.env</code> without executing it; file permissions and key validation remain in <code>pyleases.sh</code>. The installer deploys the reader before <code>pyleases.sh</code> during installation and update. Do not run it separately or schedule it in cron.
+      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> loads it with <code>source</code> and declares its allowed keys. It parses <code>pydhcp.env</code> without executing it; file permissions and key validation remain in <code>pyleases.sh</code>. The installer deploys the reader before <code>pyleases.sh</code> during installation and update. Do not run it separately or schedule it in cron.<br><br>Because the file is parsed and never sourced, every value is taken literally. A line such as <code>ACL_MAC_PATH=$ACL_PATH/mac</code> would store those characters as the path itself, not <code>/etc/acl/mac</code>. The daemon reads the same file from Python, which does not expand shell variables either. Write every path in full, as the installer does.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> lo carga mediante <code>source</code> y declara sus claves permitidas. Interpreta <code>pydhcp.env</code> sin ejecutarlo; los permisos y la validación de claves permanecen en <code>pyleases.sh</code>. El instalador despliega el lector antes de <code>pyleases.sh</code> durante la instalación y la actualización. No se ejecuta por separado ni se programa en cron.
+      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> lo carga mediante <code>source</code> y declara sus claves permitidas. Interpreta <code>pydhcp.env</code> sin ejecutarlo; los permisos y la validación de claves permanecen en <code>pyleases.sh</code>. El instalador despliega el lector antes de <code>pyleases.sh</code> durante la instalación y la actualización. No se ejecuta por separado ni se programa en cron.<br><br>Como el archivo se interpreta y nunca se ejecuta con <code>source</code>, cada valor se toma literal. Una línea como <code>ACL_MAC_PATH=$ACL_PATH/mac</code> guardaría esos caracteres como la ruta misma, no <code>/etc/acl/mac</code>. El demonio lee el mismo archivo desde Python, que tampoco expande variables de shell. Escriba cada ruta completa, como hace el instalador.
     </td>
   </tr>
 </table>
@@ -494,7 +491,7 @@ sudo ls -l /etc/pydhcp/ /var/log/pydhcp.log
   <tr>
     <td style="width: 50%; vertical-align: top;">
       <b>pyleases.sh</b> — Advanced DHCP lease and ACL manager for pydhcpd. Parses <code>pydhcpd.leases</code>, detects unauthorized clients, rebuilds <code>pydhcpd.conf</code> from ACL files, and restarts the daemon. Designed for environments enforcing DHCP-based access control.<br><br>
-      ACL directories: <code>/etc/acl/mac/</code> (administrator's own, authorized: <code>mac-limited.txt</code>, <code>mac-unlimited.txt</code>) and <code>/etc/pydhcp/acl/</code> (pydhcp's own, blocked: <code>blockdhcp.txt</code>).<br>
+      ACL directories: <code>/etc/acl/mac/</code> (administrator's own, authorized: <code>mac-limited.txt</code>, <code>mac-unlimited.txt</code>) and <code>/etc/acl/dhcp/</code> (pydhcp's own, blocked: <code>blockdhcp.txt</code>).<br>
       Entry format: <code>a;MAC;IP;HOSTNAME;</code>. <br>
       <br>
       The leading <code>a</code> means "active" and marks a well-formed entry. Any other leading character makes the line malformed. <br>
@@ -510,7 +507,7 @@ sudo ls -l /etc/pydhcp/ /var/log/pydhcp.log
     </td>
     <td style="width: 50%; vertical-align: top;">
       <b>pyleases.sh</b> — Gestor avanzado de concesiones y ACLs DHCP para pydhcpd. Parsea <code>pydhcpd.leases</code>, detecta clientes no autorizados, reconstruye <code>pydhcpd.conf</code> a partir de archivos ACL y reinicia el demonio. Diseñado para entornos que aplican control de acceso basado en DHCP.<br><br>
-      Directorios ACL: <code>/etc/acl/mac/</code> (propios del administrador, autorizados: <code>mac-limited.txt</code>, <code>mac-unlimited.txt</code>) y <code>/etc/pydhcp/acl/</code> (propio de pydhcp, bloqueados: <code>blockdhcp.txt</code>).<br>
+      Directorios ACL: <code>/etc/acl/mac/</code> (propios del administrador, autorizados: <code>mac-limited.txt</code>, <code>mac-unlimited.txt</code>) y <code>/etc/acl/dhcp/</code> (propio de pydhcp, bloqueados: <code>blockdhcp.txt</code>).<br>
       Formato: <code>a;MAC;IP;HOSTNAME;</code>. <br>
       <br>
       La letra <code>a</code> al inicio indica que la entrada está activa y tiene el formato esperado. Si la línea comienza con otro carácter, se considera mal formada. <br>
@@ -632,9 +629,9 @@ sudo bash tools/pyleases.sh
 
 #### pybk
 
-> `pybk.sh` reads `BACKUP_DIR` from `pydhcp.env` (Backup block). Default: `/etc/bak/pydhcp`. Missing, empty or relative paths abort before backup. Existing configurations require this key.
+> `pybk.sh` reads `BACKUP_DIR` from `pydhcp.env` (Backup block). Default: `/etc/bak/pydhcp`. Changing this default is not recommended. Missing, empty or relative paths abort before backup. Existing configurations require this key.
 >
-> `pybk.sh` lee `BACKUP_DIR` de `pydhcp.env` (bloque Backup). Valor predeterminado: `/etc/bak/pydhcp`. Las rutas ausentes, vacías o relativas abortan antes del respaldo. Las configuraciones existentes requieren esta clave.
+> `pybk.sh` lee `BACKUP_DIR` de `pydhcp.env` (bloque Backup). Valor predeterminado: `/etc/bak/pydhcp`. No se recomienda modificar este valor. Las rutas ausentes, vacías o relativas abortan antes del respaldo. Las configuraciones existentes requieren esta clave.
 
 <table width="100%">
   <tr>
@@ -890,7 +887,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | `option routers` | ⚠️ | Accepts a comma-separated list but uses only the first address; the rest are ignored with a notice. No failover between routers | Acepta varias direcciones separadas por comas, pero entrega solo la primera e informa que ignora las demás. No cambia automáticamente a otro router si el primero falla |
 | `option broadcast-address` | ✅ | Served as option 28 | Se entrega como opción 28 |
 | `option domain-name-servers` | ✅ | Comma-separated list, all served | Lista separada por comas, se entregan todas |
-| `option wpad ...;` | ✅ | Option 252, gated by `WPAD_ENABLED` in `pydhcp.env` | Opción 252, condicionada por `WPAD_ENABLED` en `pydhcp.env` |
+| `option wpad ...;` | ✅ | Option 252. The daemon serves it whenever the directive is present in `pydhcpd.conf`; `WPAD_ENABLED` in `pydhcp.env` decides whether `tools/pyleases.sh` writes it when it regenerates the config | Opción 252. El demonio la entrega siempre que la directiva esté en `pydhcpd.conf`; `WPAD_ENABLED` en `pydhcp.env` decide si `tools/pyleases.sh` la escribe al regenerar la configuración |
 | `one-lease-per-client` | ⚠️ | Always enforced; one MAC can hold only one pool lease at a time | Se aplica siempre: cada MAC puede tener una sola concesión del pool a la vez |
 | `option domain-name` | ⛔ | Option 15, the DNS search domain. Validating it would mean resolving a name at config load, which this daemon never does, and a search domain often has no record of its own | La opción 15 configura el dominio de búsqueda DNS. PyDHCP no la admite porque no valida ni resuelve nombres al cargar la configuración; además, el dominio de búsqueda no siempre tiene un registro DNS propio |
 | `option subnet-mask` override | ⛔ | The netmask sent always matches the `subnet ... netmask ...` declaration | La máscara enviada siempre coincide con la declaración `subnet ... netmask ...` |
@@ -992,7 +989,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 
 | isc-dhcp-server | pydhcpd |
 |---|---|
-| Supports scoping any option — including `option wpad` (252) — at multiple levels: `subnet`, `class`/`subclass`, or an individual `host`. A more specific scope overrides a broader one, so an admin can declare WPAD at the `subnet` level for every client and then override or omit it for a specific `class` or `host` (e.g. exclude a group of trusted/unrestricted devices from the PAC).<br><br>Soporta el alcance de cualquier opción — incluyendo `option wpad` (252) — en varios niveles: `subnet`, `class`/`subclass`, o un `host` individual. Un alcance más específico sobreescribe uno más amplio, así que un administrador puede declarar WPAD a nivel `subnet` para todos los clientes y luego sobreescribirlo u omitirlo para una `class` o `host` específico (ej. excluir a un grupo de dispositivos confiables/sin restricción del PAC). | Has no option-scoping mechanism at all — `config.wpad_url` is a single global value read once from the `subnet` block, applied identically to every `OFFER`/`ACK`/`INFORM` it sends. `WPAD_ENABLED` in `pydhcp.env` is therefore all-or-nothing: on turns WPAD on for every client, off turns it off for every client. The existing `class "blockdhcp"`/`subclass` mechanism does not generalize to this — it only marks MACs for lease denial, not a scoping construct for arbitrary options like isc-dhcp-server's classes.<br><br>No tiene ningún mecanismo de alcance de opciones — `config.wpad_url` es un único valor global leído una vez del bloque `subnet`, aplicado igual a cada `OFFER`/`ACK`/`INFORM` que envía. `WPAD_ENABLED` en `pydhcp.env` es entonces todo-o-nada: activado prende WPAD para todos los clientes, desactivado lo apaga para todos. El mecanismo existente de `class "blockdhcp"`/`subclass` no generaliza a este caso — solo marca MACs para negarles el lease, no un constructo de alcance para opciones arbitrarias como sí lo son las clases de isc-dhcp-server. |
+| Supports scoping any option — including `option wpad` (252) — at multiple levels: `subnet`, `class`/`subclass`, or an individual `host`. A more specific scope overrides a broader one, so an admin can declare WPAD at the `subnet` level for every client and then override or omit it for a specific `class` or `host` (e.g. exclude a group of trusted/unrestricted devices from the PAC).<br><br>Soporta el alcance de cualquier opción — incluyendo `option wpad` (252) — en varios niveles: `subnet`, `class`/`subclass`, o un `host` individual. Un alcance más específico sobreescribe uno más amplio, así que un administrador puede declarar WPAD a nivel `subnet` para todos los clientes y luego sobreescribirlo u omitirlo para una `class` o `host` específico (ej. excluir a un grupo de dispositivos confiables/sin restricción del PAC). | Has no option-scoping mechanism at all — `config.wpad_url` is a single global value read once from the `subnet` block, applied identically to every `OFFER`/`ACK`/`INFORM` it sends. `WPAD_ENABLED` in `pydhcp.env` is therefore all-or-nothing: on turns WPAD on for every client, off turns it off for every client. It acts on the generator, not on the daemon, so a change only takes effect once `tools/pyleases.sh` regenerates `pydhcpd.conf`. The existing `class "blockdhcp"`/`subclass` mechanism does not generalize to this — it only marks MACs for lease denial, not a scoping construct for arbitrary options like isc-dhcp-server's classes.<br><br>No tiene ningún mecanismo de alcance de opciones — `config.wpad_url` es un único valor global leído una vez del bloque `subnet`, aplicado igual a cada `OFFER`/`ACK`/`INFORM` que envía. `WPAD_ENABLED` en `pydhcp.env` es entonces todo-o-nada: activado prende WPAD para todos los clientes, desactivado lo apaga para todos. Actúa sobre el generador, no sobre el demonio, así que un cambio solo surte efecto cuando `tools/pyleases.sh` regenera `pydhcpd.conf`. El mecanismo existente de `class "blockdhcp"`/`subclass` no generaliza a este caso — solo marca MACs para negarles el lease, no un constructo de alcance para opciones arbitrarias como sí lo son las clases de isc-dhcp-server. |
 
 #### External Workaround
 
