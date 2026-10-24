@@ -9,6 +9,10 @@
 # Description:       Starts, stops, restarts and reports status of pydhcpd
 # Author:            maravento.com
 ### END INIT INFO
+#
+# pydhcpd -- SysV init wrapper for the pydhcp daemon
+# FILE: init.d/pydhcpd
+#
 
 set -e
 

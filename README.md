@@ -34,15 +34,13 @@ FILE: README.md
 
 ---
 
-### ⚠️ WARNING
-
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <p>WARNING: Only tested on Ubuntu 24.04/26.04 LTS. Other versions or distributions are not tested and are used at your own risk.</p>
+      <p>Only tested on Ubuntu 24.04/26.04 LTS. Other versions or distributions are not tested and are used at your own risk.</p>
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <p>ADVERTENCIA: Solo probado en Ubuntu 24.04/26.04 LTS. Otras versiones o distribuciones no están probadas y se usan bajo tu responsabilidad.</p>
+      <p>Solo probado en Ubuntu 24.04/26.04 LTS. Otras versiones o distribuciones no están probadas y se usan bajo tu responsabilidad.</p>
     </td>
   </tr>
 </table>
@@ -57,9 +55,6 @@ FILE: README.md
 
 ```
 pydhcp/
-├── acl/
-│   └── blockdhcp.txt       # MAC addresses blocked from getting a DHCP lease
-│
 ├── core/
 │   ├── pydhcpd.py          # DHCP daemon: handles DISCOVER/OFFER/REQUEST/ACK
 │   └── pydhcpd.conf        # Daemon config: hosts, pools, lease timers
@@ -77,26 +72,6 @@ pydhcp/
 │   └── pywebmin.sh         # Installs the Webmin module for managing pydhcpd from the browser (see Tools section)
 │
 └── pysetup.sh          # Installs, updates or removes pydhcp
-```
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      Files generated at runtime (not included in the repository):
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      Archivos generados en runtime (no incluidos en el repositorio):
-    </td>
-  </tr>
-</table>
-
-```
-/etc/pydhcp/core/pydhcpd.leases                  # Active leases database
-/run/pydhcp/pydhcpd.pid                          # PID file, written by the daemon
-                                                 # (systemd creates the directory)
-/etc/bak/pydhcp/pybk_<TIMESTAMP>.zip             # Full project backup written by tools/pybk.sh, up to 3 kept
-/etc/pydhcp/core/pydhcpd.conf.webmin.bak         # Rollback copy written by the Webmin module (pywebmin.sh) on each save, 1 kept
-/etc/webmin/pydhcp/.csrf_token                   # CSRF secret for the Webmin module (pywebmin.sh), mode 0600
 ```
 
 ## HOW TO USE
@@ -126,19 +101,6 @@ sudo bash pysetup.sh
 sudo bash pysetup.sh --help   # or -h
 ```
 
-### Actions
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <code>pysetup.sh</code> takes one action per run. Without arguments it opens the interactive menu, with the same four actions and an exit option.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <code>pysetup.sh</code> ejecuta una acción por vez. Sin argumentos abre el menú interactivo, con las mismas cuatro acciones y una opción de salida.
-    </td>
-  </tr>
-</table>
-
 | Action | Description | Descripción |
 |---|---|---|
 | `sudo bash pysetup.sh` | Opens the interactive menu | Abre el menú interactivo |
@@ -148,6 +110,188 @@ sudo bash pysetup.sh --help   # or -h
 | `sudo bash pysetup.sh --status` | Reports the service, the DHCP port, the configuration and the last log lines. Modifies nothing | Informa el servicio, el puerto DHCP, la configuración y las últimas líneas del log. No modifica nada |
 | `sudo bash pysetup.sh -h` | Shows the usage | Muestra el uso |
 
+> `pysetup.sh` takes one action per run. Without arguments it opens the interactive menu, with the same four actions and an exit option.
+>
+> `pysetup.sh` ejecuta una acción por vez. Sin argumentos abre el menú interactivo, con las mismas cuatro acciones y una opción de salida.
+
+## ISC-DHCP-SERVER VS PYDHCP
+
+---
+
+> **Legend:** ✅ same behaviour · ⚠️ works, with a difference · ⛔ not implemented
+>
+> **Leyenda:** ✅ mismo comportamiento · ⚠️ funciona, con una diferencia · ⛔ no implementado
+
+### Protocol and architecture
+
+| isc-dhcp-server | pydhcp | Description | Descripción |
+|---|---|---|---|
+| DHCPv4 (RFC 2131) over UDP 67/68 | ✅ | Python daemon, same protocol | Demonio Python, mismo protocolo |
+| DHCPv6 | ⛔ | IPv4 only | Solo IPv4 |
+| Multiple interfaces | ⛔ | Single interface, set in `INTERFACESv4` | Interfaz única, definida en `INTERFACESv4` |
+| BOOTP / PXE | ⛔ | Packets are padded to the BOOTP minimum for protocol compliance, but BOOTP clients are not served | PyDHCP completa los paquetes hasta el tamaño mínimo de BOOTP, pero no atiende a clientes BOOTP |
+| DHCP relay agents | ⛔ | No legitimate use without multi-segment support. `giaddr`/`hops` are parsed only to close a spoofing hole | PyDHCP no ofrece servicio de relay. Lee `giaddr` y `hops` para detectar y descartar paquetes de relay falsificados |
+| Clients whose `chaddr` differs from the frame source MAC | ⛔ | Dropped and logged: closes a spoofing hole | PyDHCP descarta y registra los paquetes si la MAC de `chaddr` no coincide con la MAC de origen Ethernet |
+| LDAP backend | ⛔ | Host reservations live in `pydhcpd.conf`, or in the `mac-*.txt` lists that `pyleases.sh` turns into reservations | Las reservas de host viven en `pydhcpd.conf`, o en las listas `mac-*.txt` que `pyleases.sh` convierte en reservas |
+| DDNS | ⛔ | The daemon never registers names in DNS; a lease grants an address, nothing else | El demonio nunca registra nombres en DNS; una concesión entrega una dirección, nada más |
+| `client-updates` / `deny client-updates` | ⛔ | Depends on DDNS plus the client FQDN option, neither implemented | Depende de DDNS y de la opción FQDN del cliente, ninguna implementada |
+
+### Directives
+
+| isc-dhcp-server | pydhcp | Description | Descripción |
+|---|---|---|---|
+| `authoritative;` | ✅ | pydhcpd's default, accepted for compatibility | Es el valor por defecto de pydhcpd, se acepta por compatibilidad |
+| `not authoritative;` | ✅ | The only way to disable authoritative mode | Única forma de desactivar el modo autoritativo |
+| `server-identifier IP;` | ✅ | Mandatory: the daemon refuses to start without it | Obligatoria: el demonio no arranca sin ella |
+| `cleanup-interval N;` | ✅ | Seconds between expired-lease sweeps | Segundos entre barridos de concesiones expiradas |
+| `abandon-lease-time N;` | ✅ | Seconds an IP is held out of the pool after a DHCPDECLINE | Segundos que una IP queda fuera del pool tras un DHCPDECLINE |
+| `deny duplicates;` | ✅ | Re-offers the MAC's existing lease on DISCOVER | Reofrece la concesión existente de la MAC en el DISCOVER |
+| `deny declines;` | ✅ | Ignores DHCPDECLINE messages | Ignora mensajes DHCPDECLINE |
+| `ping-check true\|false;` | ✅ | Enabled by default in the shipped config, unlike isc | Activado por defecto en la configuración que se entrega, al revés que isc |
+| `ping-timeout N;` | ✅ | Seconds to wait for the ICMP reply before sending the OFFER | Segundos de espera de la respuesta ICMP antes de enviar el OFFER |
+| `subnet ... { pool { ... } }` | ✅ | Several `pool { }` blocks per subnet are accepted | Se aceptan varios bloques `pool { }` por subred |
+| `host NAME { hardware ethernet MAC; fixed-address IP; }` | ✅ | `fixed-address` validated at config load and on `SIGHUP` | `fixed-address` se valida al cargar la configuración y en cada `SIGHUP` |
+| `class` / `subclass` / `deny members of` | ✅ | Any class name is accepted, not just `blockdhcp` | Se acepta cualquier nombre de clase, no solo `blockdhcp` |
+| `allow\|deny unknown-clients`, `known-clients` | ✅ | Pool-level admission rules | Reglas de admisión a nivel de pool |
+| `min-lease-time`, `default-lease-time`, `max-lease-time` | ✅ | Validated together (`0 < min <= default <= max`), at subnet and pool level | Se validan en conjunto (`0 < min <= default <= max`), a nivel de subred y de pool |
+| `option routers` | ⚠️ | Accepts a comma-separated list but uses only the first address; the rest are ignored with a notice. No failover between routers | Acepta varias direcciones separadas por comas, pero entrega solo la primera e informa que ignora las demás. No cambia automáticamente a otro router si el primero falla |
+| `option broadcast-address` | ✅ | Served as option 28 | Se entrega como opción 28 |
+| `option domain-name-servers` | ✅ | Comma-separated list, all served | Lista separada por comas, se entregan todas |
+| `option wpad ...;` | ✅ | Option 252. The daemon serves it whenever the directive is present in `pydhcpd.conf`; `WPAD_ENABLED` in `pydhcp.env` decides whether `tools/pyleases.sh` writes it when it regenerates the config | Opción 252. El demonio la entrega siempre que la directiva esté en `pydhcpd.conf`; `WPAD_ENABLED` en `pydhcp.env` decide si `tools/pyleases.sh` la escribe al regenerar la configuración |
+| `one-lease-per-client` | ⚠️ | Always enforced; one MAC can hold only one pool lease at a time | Se aplica siempre: cada MAC puede tener una sola concesión del pool a la vez |
+| `option domain-name` | ⛔ | Option 15, the DNS search domain. Validating it would mean resolving a name at config load, which this daemon never does, and a search domain often has no record of its own | La opción 15 configura el dominio de búsqueda DNS. PyDHCP no la admite porque no valida ni resuelve nombres al cargar la configuración; además, el dominio de búsqueda no siempre tiene un registro DNS propio |
+| `option subnet-mask` override | ⛔ | The netmask sent always matches the `subnet ... netmask ...` declaration | La máscara enviada siempre coincide con la declaración `subnet ... netmask ...` |
+| Per-host / per-class option scoping | ⛔ | Options declared at `subnet` level apply to every client uniformly | Las opciones declaradas a nivel `subnet` aplican a todos los clientes por igual |
+
+### Files and paths
+
+| isc-dhcp-server | pydhcp | Description | Descripción |
+|---|---|---|---|
+| `/etc/dhcp/dhcpd.conf` | `/etc/pydhcp/core/pydhcpd.conf` | Same syntax | Misma sintaxis |
+| `/var/lib/dhcp/dhcpd.leases` | `/etc/pydhcp/core/pydhcpd.leases` | Same format | Mismo formato |
+| `/etc/default/isc-dhcp-server` | `/etc/pydhcp/pydhcp.env` | Bootstrap values, plus pydhcp's own extras | Valores iniciales de configuración, junto con otras variables propias de PyDHCP |
+| `/run/dhcp-server/dhcpd.pid` | `/run/pydhcp/pydhcpd.pid` | Fixed path, not configurable | Ruta fija, no configurable |
+| `/etc/systemd/system/isc-dhcp-server.service` | `/etc/systemd/system/pydhcpd.service` | pydhcp starts already unprivileged (`User=pydhcpd`); isc starts as root and drops privileges itself | pydhcp arranca ya sin privilegios (`User=pydhcpd`); isc arranca como root y baja de privilegios él mismo |
+| `/etc/init.d/isc-dhcp-server` | `/etc/init.d/pydhcpd` | Compatible wrapper | Wrapper compatible |
+| `/var/log/syslog` | `/var/log/pydhcp.log` | Writes directly to file, does not use syslog, so no `log-facility` directive is needed | Escribe directamente al archivo, no usa syslog, así que no hace falta la directiva `log-facility` |
+| *(none)* | `pysetup.log` | Installer log, written in the directory containing `pysetup.sh` and rewritten on each run. Kept out of `/var/log/pydhcp.log` so install, update and remove runs never mix with daily operation | Log del instalador, escrito en el directorio que contiene `pysetup.sh` y reescrito en cada corrida. Se mantiene fuera de `/var/log/pydhcp.log` para que las corridas de instalación, actualización y desinstalación no se mezclen con la operación diaria |
+| `/etc/logrotate.d/rsyslog` | `/etc/logrotate.d/pydhcp` | Daily, one config for the whole project | Diaria, una sola configuración para todo el proyecto |
+| `journalctl -u isc-dhcp-server` | `journalctl -u pydhcpd` | Both also reach journald through systemd | Ambos llegan además a journald a través de systemd |
+
+### Commands
+
+| isc-dhcp-server | pydhcp | Description | Descripción |
+|---|---|---|---|
+| `systemctl start\|stop\|restart\|status isc-dhcp-server` | `systemctl start\|stop\|restart\|status pydhcpd` | Same verbs, same behaviour | Mismos verbos, mismo comportamiento |
+| `service isc-dhcp-server start\|stop\|restart\|status` | `service pydhcpd start\|stop\|restart\|status` | Goes through the `init.d` wrapper, which delegates to `systemctl` when systemd is the active init | Pasa por el wrapper de `init.d`, que delega en `systemctl` cuando systemd es el init activo |
+| `dhcpd -t -cf /etc/dhcp/dhcpd.conf` | `pydhcpd.py -t -cf /etc/pydhcp/core/pydhcpd.conf` | Config syntax test | Prueba de sintaxis de la configuración |
+
+### Log output
+
+| isc-dhcp-server | pydhcp | Description | Descripción |
+|---|---|---|---|
+| `DHCPREQUEST for 192.168.0.50 (192.168.0.2) from aa:bb:cc:dd:ee:ff via enpXsX`<br>`DHCPACK on 192.168.0.50 to aa:bb:cc:dd:ee:ff (FOO) via enpXsX` | `REQUEST from aa:bb:cc:dd:ee:ff (FOO)`<br>`ACK aa:bb:cc:dd:ee:ff → 192.168.0.50`<br>`(lease 2592000s)` | Authorized client with static IP (renewal) | Cliente autorizado con dirección IP fija (renovación) |
+| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX`<br>`DHCPOFFER on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPREQUEST for 192.168.0.230 (192.168.0.2) from bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPACK on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`OFFER bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`REQUEST from bb:cc:dd:ee:ff:aa (BAR)`<br>`ACK bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`(lease 60s)` | Unknown client entering the block pool | Cliente desconocido ingresando al pool de bloqueo |
+| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`No IP for bb:cc:dd:ee:ff:aa -skip` | Pool exhausted | Pool agotado |
+| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`Blocked bb:cc:dd:ee:ff:aa -skip` | Blocked client — `isc-dhcp-server` reports it as a full pool | Cliente bloqueado — `isc-dhcp-server` lo reporta como pool lleno |
+
+> A pool with `deny members of "blockdhcp"` becomes invisible to that class, so `isc-dhcp-server` sees no lease available and logs the same message as a genuinely full pool. `pydhcpd` logs the real cause: `Blocked` or `No IP`.
+>
+> Un pool con `deny members of "blockdhcp"` se vuelve invisible para esa clase, así que `isc-dhcp-server` no ve ninguna concesión disponible y escribe el mismo mensaje que un pool genuinamente lleno. `pydhcpd` registra la causa real: `Blocked` o `No IP`.
+
+### Authoritative behaviour
+
+| Configuration | isc-dhcp-server | pydhcpd | Description | Descripción |
+|---|---|---|---|---|
+| `authoritative;` present | authoritative | authoritative | ✅ same. In pydhcpd it is already the default, so the line changes nothing | ✅ igual. En pydhcpd ya es el valor por defecto, así que la línea no cambia nada |
+| `not authoritative;` present | non-authoritative | non-authoritative | ✅ same syntax, same result | ✅ misma sintaxis, mismo resultado |
+| **neither directive present** | non-authoritative | **authoritative** | ⚠️ **The only difference.** PyDHCP is authoritative by default; isc-dhcp-server is not | ⚠️ **La única diferencia.** PyDHCP funciona en modo autoritativo por defecto; isc-dhcp-server no |
+
+> **Migrating from isc-dhcp-server:** if your `dhcpd.conf` did not carry `authoritative;` and you relied on that, add `not authoritative;` explicitly to keep the old behavior. Everyone else needs to change nothing.
+>
+> **Migración desde isc-dhcp-server:** si tu archivo `dhcpd.conf` no incluía `authoritative;` y quieres conservar ese comportamiento, añade `not authoritative;`. Si ya incluía `authoritative;`, o no necesitas desactivar ese modo, no tienes que cambiar nada.
+
+| Event | isc-dhcp-server (as authoritative) | pydhcpd (as authoritative) |
+|-------|-------------------------------------|-----------------------------|
+| Rogue offers IP to client | *(not observed)* † | *(not observed)* † |
+| Client requests rogue IP | `DHCPREQUEST for 192.168.0.222 (192.168.0.249) from bb:cc:dd:ee:ff:aa (BAR) via enpXsX` | `REQUEST from bb:cc:dd:ee:ff:aa (BAR)` |
+| Rogue acknowledges | *(not observed)* † | *(not observed)* † |
+| **Authoritative server rejects** | `DHCPNAK on 192.168.0.222 to bb:cc:dd:ee:ff:aa via enpXsX` | `NAK → bb:cc:dd:ee:ff:aa`<br>`(Not authorized for this IP)` |
+| Client rediscovers | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)` |
+
+> † Neither daemon sees these packets: `DHCPOFFER`/`DHCPACK` are addressed to the client, not to other DHCP servers on the segment.
+>
+> † Ninguno de los dos demonios ve esos paquetes: `DHCPOFFER`/`DHCPACK` van dirigidos al cliente, no a otros servidores DHCP del segmento.
+
+### Rate limiting
+
+| isc-dhcp-server | pydhcpd |
+|---|---|
+| Has no built-in per-client rate limit for lease allocation. Mitigation relies on `deny duplicates;` and pool exhaustion. Identification uses `chaddr` (or `client-id`, option 61), not the Ethernet source MAC. | Adds a per-MAC limit of up to five new lease allocations per 60-second window by default. Each client MAC has a separate counter, including clients behind the same relay. Renewals that keep the same IP do not consume the limit. Further new allocations are rejected until earlier requests leave the window. The limit is internal and has no `pydhcpd.conf` directive. |
+
+#### Known Limitation
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <p><strong>Known limitation, both servers.</strong> Neither one controls an attacker who rotates MAC addresses to exhaust the pool.</p>
+      <p><code>isc-dhcp-server</code> has no per-client throttle at all. A plain flood from a single MAC already drains the pool, with no rotation needed.</p>
+      <p><code>pydhcpd</code> has a narrower gap. Its per-MAC limit stops a single-MAC flood, but it is keyed by MAC (<code>chaddr</code>). It therefore bounds how fast one MAC can allocate, and does not cap the total across many different MACs. An attacker rotating MACs can still drain the pool, one new MAC at a time.</p>
+      <p>A global limit across all MACs was considered for <code>pydhcpd</code> and left out on purpose. It would need careful tuning to avoid rejecting legitimate clients during a normal burst of reconnections, for example many devices rejoining after a power outage. There is no evidence that MAC-rotation abuse is a live threat worth that trade-off. It is documented here as a known and accepted limitation.</p>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <p><strong>Limitación conocida, en ambos servidores.</strong> Ninguno controla a un atacante que rota direcciones MAC para agotar el pool.</p>
+      <p><code>isc-dhcp-server</code> no tiene ningún control por cliente. Una inundación simple desde una sola MAC ya agota el pool, sin necesidad de rotar.</p>
+      <p><code>pydhcpd</code> tiene una brecha más acotada. Su límite por MAC frena la inundación de una sola MAC, pero está indexado por MAC (<code>chaddr</code>). Por eso acota qué tan rápido puede asignar una MAC, y no limita el total entre muchas MAC distintas. Un atacante que rote MAC igual puede vaciar el pool, una MAC nueva a la vez.</p>
+      <p>Se evaluó un límite global entre todas las MAC para <code>pydhcpd</code> y se dejó fuera a propósito. Requeriría un ajuste cuidadoso para no rechazar clientes legítimos durante una ráfaga normal de reconexiones, por ejemplo varios dispositivos reconectándose tras un corte de luz. No hay evidencia de que el abuso por rotación de MAC sea una amenaza activa que justifique ese costo. Se documenta aquí como una limitación conocida y aceptada.</p>
+    </td>
+  </tr>
+</table>
+
+### Pool leases per client
+
+| isc-dhcp-server | pydhcpd |
+|---|---|
+| Does not limit how many pool IPs a single MAC can accumulate | Always limits a MAC to a single pool IP at a time; fixed daemon behavior, not a configurable directive |
+| No tiene restricción sobre cuántas IPs del pool puede acumular una MAC | Siempre limita a una MAC a una sola IP del pool a la vez; comportamiento fijo del demonio, no es una directiva configurable |
+
+### WPAD/PAC option scoping
+
+| isc-dhcp-server | pydhcpd |
+|---|---|
+| Supports scoping any option — including `option wpad` (252) — at multiple levels: `subnet`, `class`/`subclass`, or an individual `host`. A more specific scope overrides a broader one, so an admin can declare WPAD at the `subnet` level for every client and then override or omit it for a specific `class` or `host` (e.g. exclude a group of trusted/unrestricted devices from the PAC).<br><br>Soporta el alcance de cualquier opción — incluyendo `option wpad` (252) — en varios niveles: `subnet`, `class`/`subclass`, o un `host` individual. Un alcance más específico sobreescribe uno más amplio, así que un administrador puede declarar WPAD a nivel `subnet` para todos los clientes y luego sobreescribirlo u omitirlo para una `class` o `host` específico (ej. excluir a un grupo de dispositivos confiables/sin restricción del PAC). | Has no option-scoping mechanism at all — `config.wpad_url` is a single global value read once from the `subnet` block, applied identically to every `OFFER`/`ACK`/`INFORM` it sends. `WPAD_ENABLED` in `pydhcp.env` is therefore all-or-nothing: on turns WPAD on for every client, off turns it off for every client. It acts on the generator, not on the daemon, so a change only takes effect once `tools/pyleases.sh` regenerates `pydhcpd.conf`. The existing `class "blockdhcp"`/`subclass` mechanism does not generalize to this — it only marks MACs for lease denial, not a scoping construct for arbitrary options like isc-dhcp-server's classes.<br><br>No tiene ningún mecanismo de alcance de opciones — `config.wpad_url` es un único valor global leído una vez del bloque `subnet`, aplicado igual a cada `OFFER`/`ACK`/`INFORM` que envía. `WPAD_ENABLED` en `pydhcp.env` es entonces todo-o-nada: activado prende WPAD para todos los clientes, desactivado lo apaga para todos. Actúa sobre el generador, no sobre el demonio, así que un cambio solo surte efecto cuando `tools/pyleases.sh` regenera `pydhcpd.conf`. El mecanismo existente de `class "blockdhcp"`/`subclass` no generaliza a este caso — solo marca MACs para negarles el lease, no un constructo de alcance para opciones arbitrarias como sí lo son las clases de isc-dhcp-server. |
+
+#### External Workaround
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <p><strong>Workaround, external to pydhcp.</strong> If <code>WPAD_ENABLED=true</code> and some MACs must never see the PAC, block their access to the PAC's port, for example 18100, at the firewall.</p>
+      <p>This does not stop <code>pydhcpd</code> from sending option 252 to them. The client can never fetch the PAC file, and the PAC's own <code>DIRECT</code> fallback lets it proceed without a proxy.</p>
+      <p>This is a firewall-side workaround, not a <code>pydhcp</code> feature. <code>pydhcp</code> has no firewall component and neither ships nor manages that rule.</p>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <p><strong>Workaround, externo a pydhcp.</strong> Si <code>WPAD_ENABLED=true</code> y algunas MAC nunca deben ver el PAC, bloquee su acceso al puerto del PAC, por ejemplo 18100, en el firewall.</p>
+      <p>Esto no evita que <code>pydhcpd</code> les mande la opción 252. El cliente nunca podrá descargar el archivo PAC, y el fallback <code>DIRECT</code> del propio PAC le permite seguir sin proxy.</p>
+      <p>Es un workaround del lado del firewall, no una funcionalidad de <code>pydhcp</code>. <code>pydhcp</code> no tiene componente de firewall y no provee ni gestiona esa regla.</p>
+    </td>
+  </tr>
+</table>
+
+### Improvements over isc-dhcp-server
+
+| isc-dhcp-server | pydhcp | Description | Descripción |
+|---|---|---|---|
+| ⛔ | ✅ | Per-MAC allocation rate limit: 5 allocations per minute per MAC | Límite de asignación por MAC: 5 asignaciones por minuto y por MAC |
+| ⛔ | ✅ | DISCOVER reservations: a DISCOVER earns a 30s in-memory reservation, never a full lease, so a flood cannot hold pool IPs | Reservas por DISCOVER: un DISCOVER obtiene una reserva en memoria de 30s, nunca una concesión completa, así que una inundación no puede retener IPs del pool |
+| ⛔ | ✅ | Lease cleanup at startup: malformed entries and already-expired leases are removed from the leases file, and the cleaned file is written back to disk | Limpieza de concesiones al arrancar: las entradas malformadas y las concesiones ya vencidas se eliminan del archivo, y el archivo limpio se vuelve a escribir en disco |
+| ⛔ | ✅ | ACL automation: `pyleases.sh` rebuilds `pydhcpd.conf` from MAC lists | Automatización de ACL: `pyleases.sh` reconstruye `pydhcpd.conf` desde listas de MAC |
+
+## HOW IT WORKS
+
+---
+
+### Installer file handling
 
 | File | `--update` | `--uninstall` |
 |------|-----------|------------|
@@ -161,10 +305,10 @@ sudo bash pysetup.sh --help   # or -h
 | `pydhcpd.conf` | ⛔ preserved | ✅ removed |
 | `pydhcpd.leases` | ⛔ preserved | ✅ removed |
 | `pydhcp.env` | ⛔ preserved | ✅ removed |
-| `/var/log/pydhcp.log` (shared by the daemon, `pysetup.sh` and `tools/pyleases.sh`) | ⛔ preserved | ✅ removed |
+| `/var/log/pydhcp.log` (shared by the daemon and `tools/pyleases.sh`; `pysetup.sh` only creates it and consolidates older logs into it, writing its own messages to `pysetup.log`) | ⛔ preserved | ✅ removed |
 | `/etc/logrotate.d/pydhcp` | ✅ policy refreshed | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
-| `acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ✅ removed |
+| `/etc/acl/dhcp/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ⛔ preserved |
 | `core/pydhcpd.conf.bak`, `core/pydhcpd.conf.webmin.bak` (rollback copies) | ⛔ preserved | ✅ removed |
 | `/etc/bak/` (project backups written by `tools/pybk.sh`) | ⛔ preserved | ⛔ preserved |
 | `/etc/acl/mac/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
@@ -173,9 +317,9 @@ sudo bash pysetup.sh --help   # or -h
 >
 > `/etc/acl` permanece intacto al ejecutar `--uninstall`. Allí se guardan las listas `mac-*.txt` del administrador. `pydhcp` solo las utiliza si se ejecuta la herramienta opcional `tools/pyleases.sh`. Como `pysetup.sh` crea ese directorio, la desinstalación no elimina esos datos.
 
-> `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is therefore stored under `/etc/pydhcp/acl/`, like `uhm`'s own lists under `/etc/uhm/acl/`. The `--uninstall` option deletes it along with the rest of `/etc/pydhcp`; to keep a copy, run `tools/pybk.sh` first.
+> `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is stored under `/etc/acl/dhcp/`, next to the administrator's lists in `/etc/acl/mac/`. No installer ever removes `/etc/acl`, because access control lists outlive the project that reads them, so `--uninstall` leaves it in place.
 >
-> `blockdhcp.txt` es un caso distinto: es la lista propia de `pydhcp`, escrita solo por `pyleases.sh` y no se edita manualmente. Por eso se guarda en `/etc/pydhcp/acl/`, igual que las listas propias de `uhm` se guardan en `/etc/uhm/acl/`. La opción `--uninstall` la elimina junto con el resto de `/etc/pydhcp`; para conservar una copia, se ejecuta antes `tools/pybk.sh`.
+> `blockdhcp.txt` es un caso distinto: es la lista propia de `pydhcp`, escrita solo por `pyleases.sh` y no se edita manualmente. Se guarda en `/etc/acl/dhcp/`, junto a las listas del administrador en `/etc/acl/mac/`. Ningún instalador elimina `/etc/acl`, porque las listas de control de acceso sobreviven al proyecto que las lee, así que `--uninstall` la conserva.
 
 ### Daily operation
 
@@ -288,7 +432,9 @@ sudo tail -f /var/log/pydhcp.log
       <code>pydhcpd.py</code> reads them directly from <code>pydhcp.env</code> at startup, the same way it reads the bootstrap group above. <code>pyleases.sh</code> never touches them: it only builds <code>pydhcpd.conf</code>, and these values are not directives of that file.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>pydhcp.env</code> también contiene opciones propias de PyDHCP que no tienen una directiva equivalente en <code>pydhcpd.conf</code>. <code>pydhcpd.py</code> las lee directamente al arrancar. <code>pyleases.sh</code> no las modifica: solo genera <code>pydhcpd.conf</code>.
+      Un segundo grupo de <code>pydhcp.env</code>, distinto del anterior, contiene funciones sin una directiva equivalente en <code>pydhcpd.conf</code>. No hay valores que sincronizar con una plantilla de <code>pydhcpd.conf</code>. <br>
+      <br>
+      <code>pydhcpd.py</code> las lee directamente de <code>pydhcp.env</code> al arrancar, igual que el grupo de configuración inicial descrito arriba. <code>pyleases.sh</code> no las modifica: solo genera <code>pydhcpd.conf</code>, y estos valores no son directivas de ese archivo.
     </td>
   </tr>
 </table>
@@ -299,9 +445,9 @@ sudo tail -f /var/log/pydhcp.log
 | `RATE_LIMIT_WINDOW_SECONDS`, `RATE_LIMIT_MAX` | Anti-abuse throttle: at most `RATE_LIMIT_MAX` new lease allocations per MAC within `RATE_LIMIT_WINDOW_SECONDS`, to limit pool exhaustion by an attacker rotating MACs; defaults `60`/`5` | Límite contra abusos: permite como máximo `RATE_LIMIT_MAX` nuevas concesiones por MAC durante `RATE_LIMIT_WINDOW_SECONDS`, para dificultar que un atacante agote el grupo de direcciones al rotar las MAC; valores predeterminados: `60` y `5` |
 | `RESERVATION_TTL_SECONDS` | Seconds a DISCOVER-only provisional reservation holds an IP before expiring, if no matching REQUEST follows; default `30` | Segundos durante los que una solicitud `DISCOVER` puede reservar provisionalmente una IP si no llega el `REQUEST` correspondiente; valor predeterminado: `30` |
 
-All four values above must be at least `1`. A value below `1` (for example `RATE_LIMIT_MAX=0`, which does not mean "unlimited") is rejected with a `WARNING` in the log and the default is used instead.
-
-Los cuatro valores anteriores deben ser como mínimo `1`. Un valor menor que `1` (por ejemplo, `RATE_LIMIT_MAX=0`, que no significa «sin límite») se rechaza con una advertencia (`WARNING`) en el registro y se usa el valor predeterminado.
+> All four values above must be at least `1`. A value below `1` (for example `RATE_LIMIT_MAX=0`, which does not mean "unlimited") is rejected with a `WARNING` in the log and the default is used instead.
+>
+> Los cuatro valores anteriores deben ser como mínimo `1`. Un valor menor que `1` (por ejemplo, `RATE_LIMIT_MAX=0`, que no significa «sin límite») se rechaza con una advertencia (`WARNING`) en el registro y se usa el valor predeterminado.
 
 #### pydhcp.env — pyleases.sh automation input (mirrors dhcpd.conf directives)
 
@@ -315,7 +461,11 @@ Los cuatro valores anteriores deben ser como mínimo `1`. Un valor menor que `1`
       <code>pyleases.sh</code> never writes a key into the file. It checks the keys it consumes and aborts if one is wrong. See Key check.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>pydhcp.env</code> incluye valores que <code>pyleases.sh</code> utiliza para generar directivas de <code>pydhcpd.conf</code>. <code>pysetup.sh</code> crea estas claves y <code>pyleases.sh</code> las lee en cada ejecución, pero no las modifica. Este grupo no es necesario si la instalación se administra sin <code>pyleases.sh</code>. La información ampliada está en las secciones «Directivas compatibles» y «Comprobación de claves».
+      Un tercer grupo de <code>pydhcp.env</code>, distinto de los dos anteriores, contiene los valores de entrada para la automatización opcional de <code>pyleases.sh</code>. <br>
+      <br>
+      A diferencia del grupo de configuración inicial, <code>pydhcpd.py</code> no los lee directamente. <code>pysetup.sh</code> los crea y <code>pyleases.sh</code> escribe la directiva correspondiente en <code>pydhcpd.conf</code> en cada ejecución. Consulte Supported directives. Una instalación administrada manualmente no necesita este grupo. <br>
+      <br>
+      <code>pyleases.sh</code> nunca escribe claves en el archivo. Comprueba las claves que utiliza y aborta si alguna es incorrecta. Consulte Key check.
     </td>
   </tr>
 </table>
@@ -337,21 +487,21 @@ Los cuatro valores anteriores deben ser como mínimo `1`. Un valor menor que `1`
 | `ACL_MAC_PATH`, `ACL_MAC_LIMITED`, `ACL_MAC_UNLIMITED` | `host` entries | Directory and files holding the administrator's MAC lists. `pyleases.sh` reads every `mac-*.txt` in that directory, not only those two files | Directorio y archivos con las listas MAC del administrador. `pyleases.sh` lee todos los `mac-*.txt` del directorio, no solo esos dos archivos |
 | `ACL_DHCP_PATH`, `ACL_BLOCK_FILE` | `class blockdhcp` members | Directory and file holding pydhcp's own blocked-MAC list, written by `pyleases.sh` | Directorio y archivo con la lista de MAC bloqueadas propia de pydhcp, escrita por `pyleases.sh` |
 
-Every key in this table is verified by `pyleases.sh` before it rewrites `pydhcpd.conf`. `SERVER_IP`, `SERV_SUBNET`, `SERV_BROADCAST`, `SERV_INI_RANGE_BLOCK` and `SERV_END_RANGE_BLOCK` must parse as an IPv4 address, `SERV_MASK` as a netmask and `SERV_DNS` as an IPv4 list. See Key check.
+> Every key in this table is verified by `pyleases.sh` before it rewrites `pydhcpd.conf`. `SERVER_IP`, `SERV_SUBNET`, `SERV_BROADCAST`, `SERV_INI_RANGE_BLOCK` and `SERV_END_RANGE_BLOCK` must parse as an IPv4 address, `SERV_MASK` as a netmask and `SERV_DNS` as an IPv4 list. See Key check.
 
-Todas las claves de esta tabla las verifica `pyleases.sh` antes de reescribir `pydhcpd.conf`. `SERVER_IP`, `SERV_SUBNET`, `SERV_BROADCAST`, `SERV_INI_RANGE_BLOCK` y `SERV_END_RANGE_BLOCK` deben ser direcciones IPv4 válidas, `SERV_MASK` una máscara y `SERV_DNS` una lista de IPv4. Ver «Key check».
+> Todas las claves de esta tabla las verifica `pyleases.sh` antes de reescribir `pydhcpd.conf`. `SERVER_IP`, `SERV_SUBNET`, `SERV_BROADCAST`, `SERV_INI_RANGE_BLOCK` y `SERV_END_RANGE_BLOCK` deben ser direcciones IPv4 válidas, `SERV_MASK` una máscara y `SERV_DNS` una lista de IPv4. Ver «Key check».
 
-#### pydhcp.env — shared (not used by pydhcp itself)
+#### pydhcp.env — shared settings
 
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      A fourth group in <code>pydhcp.env</code>: values pydhcp itself never reads, hosted here only because pydhcp.env is the one file every project on this host already reads. A project that also depends on pydhcp can read its own key from here instead of asking the same question again or hardcoding it. <br>
+      A fourth group in <code>pydhcp.env</code> contains shared settings. <code>pyleases.sh</code> reads <code>ACL_PATH</code> to prepare the ACL parent directory. Other projects can reuse these settings instead of asking the same question again or hardcoding them. <br>
       <br>
       <code>pysetup.sh</code> creates the two keys below during installation. A project that needs a further shared key adds it here the first time it runs, and any project running after it reuses the existing value instead of asking again.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El último grupo contiene valores que PyDHCP no utiliza, pero que otros proyectos pueden compartir desde <code>pydhcp.env</code>. Así, esos proyectos pueden leer aquí su configuración en lugar de volver a solicitarla o escribirla directamente en el código. <br>
+      El último grupo contiene valores compartidos de <code>pydhcp.env</code>. <code>pyleases.sh</code> lee <code>ACL_PATH</code> para preparar el directorio padre de las ACL. Otros proyectos pueden reutilizar estos valores sin volver a solicitarlos ni escribirlos directamente en el código. <br>
       <br>
       <code>pysetup.sh</code> crea las dos claves de abajo durante la instalación. El proyecto que necesite otra clave compartida la añade; los demás proyectos pueden reutilizarla.
     </td>
@@ -360,7 +510,7 @@ Todas las claves de esta tabla las verifica `pyleases.sh` antes de reescribir `p
 
 | Variable | Description | Descripción |
 |----------|--------------|-------------|
-| `ACL_PATH` | Parent directory of the ACL tree, `ACL_MAC_PATH` and `ACL_DHCP_PATH` hang from it. No pydhcp script reads it; it is written so other projects sharing `/etc/acl` can read the base path | Directorio padre del árbol de ACL, del que cuelgan `ACL_MAC_PATH` y `ACL_DHCP_PATH`. Ningún script de pydhcp la lee; se escribe para que otros proyectos que comparten `/etc/acl` lean la ruta base |
+| `ACL_PATH` | Parent directory of the ACL tree, containing `ACL_MAC_PATH` and `ACL_DHCP_PATH`. `pyleases.sh` reads it and prepares it as `root:root`, mode `755`; other projects can reuse the base path | Directorio padre del árbol de ACL, que contiene `ACL_MAC_PATH` y `ACL_DHCP_PATH`. `pyleases.sh` lo lee y prepara como `root:root`, modo `755`; otros proyectos pueden reutilizar la ruta base |
 | `WAN_IFACE` | Name of the host's WAN network interface. Not used by pydhcp; added to the `.env` to share it with other projects that also use pydhcp | Nombre de la interfaz de red WAN del host. No es utilizada por pydhcp; se agrega al entorno `.env` para compartirla con otros proyectos que utilizan pydhcp |
 
 #### Fixed values (not configurable anywhere)
@@ -417,41 +567,19 @@ Todas las claves de esta tabla las verifica `pyleases.sh` antes de reescribir `p
 | `pydhcpd.leases` | `pydhcpd:pydhcpd` | `640` | replaces atomically | Daemon-owned because the daemon writes it: the atomic replace creates a new file and renames it over this one, so the result carries the writer's ownership |
 | `pydhcpd.conf.bak` | `root:root` | `640` | never touches it | Single rollback copy written by `tools/pyleases.sh` before it regenerates the config, and restored automatically if the daemon then fails to start. Created with `cp`, which preserves the source's `640` |
 | `pydhcpd.conf.webmin.bak` | `root:root` | `640` | never touches it | Single rollback copy written by the Webmin module (`tools/pywebmin.sh`) before each save from the browser editor. Kept under its own name, not `pydhcpd.conf.bak`, so the two never overwrite each other: that one belongs to `pyleases.sh`/`uhmleases.sh` and undoes an automatic rebuild, this one undoes a manual edit. Perl's `File::Copy` does not preserve the source mode, so `config.cgi` applies `chmod 0640` explicitly — otherwise the backup would land at whatever root's umask dictates and end up more permissive than the config it copies |
-| `/var/log/pydhcp.log` | `pydhcpd:pydhcpd` | `640` | appends | Daemon-owned so it can write. `pysetup.sh` and `tools/pyleases.sh` also write to it, but they run as root |
+| `/var/log/pydhcp.log` | `pydhcpd:pydhcpd` | `640` | appends | Daemon-owned so it can write. `tools/pyleases.sh` also writes to it as root. `pysetup.sh` creates it, sets its ownership and mode, and consolidates older logs into it, but its own messages go to `pysetup.log` next to the installer |
 | `tools/` | `root:root` | `755` | never touches it | Run manually by root; not part of the daemon's runtime |
 | `pydhcpd.service` | `root:root` | `644` | — | Belongs to systemd |
 | `/etc/init.d/pydhcpd` | `root:root` | `755` | — | Belongs to sysvinit |
 | `/etc/logrotate.d/pydhcp` | `root:root` | `644` | — | logrotate ignores configuration files not owned by root |
 
-#### ⚠️ WARNING
+> **⚠️ WARNING -- File ownership:** Do not "unify" these into a single owner. Making everything `pydhcpd:pydhcpd` would hand the directory to the daemon, which could then replace any entry in it, including its own code. Making everything `root:pydhcpd` would break the leases and PID files, whose atomic replace and removal require ownership, and would need `CAP_FOWNER` to work around.
+>
+> **⚠️ WARNING -- File ownership:** No "unifique" esto en un solo propietario. Poner todo en `pydhcpd:pydhcpd` le entregaría el directorio al demonio, que podría entonces reemplazar cualquier entrada, incluido su propio código. Poner todo en `root:pydhcpd` rompería los archivos de concesiones y PID, cuyo reemplazo atómico y borrado exigen ser propietario, y requeriría `CAP_FOWNER` para sortearlo.
 
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <p>Do not "unify" these into a single owner. Making everything <code>pydhcpd:pydhcpd</code> would hand the directory to the daemon, which could then replace any entry in it, including its own code. Making everything <code>root:pydhcpd</code> would break the leases and PID files, whose atomic replace and removal require ownership, and would need <code>CAP_FOWNER</code> to work around.</p>
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <p>No "unifique" esto en un solo propietario. Poner todo en <code>pydhcpd:pydhcpd</code> le entregaría el directorio al demonio, que podría entonces reemplazar cualquier entrada, incluido su propio código. Poner todo en <code>root:pydhcpd</code> rompería los archivos de concesiones y PID, cuyo reemplazo atómico y borrado exigen ser propietario, y requeriría <code>CAP_FOWNER</code> para sortearlo.</p>
-    </td>
-  </tr>
-</table>
-
-#### ⚠️ WARNING
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <p>A sticky bit (<code>1770</code>) would stop the daemon from deleting entries it does not own, which looks like obvious hardening. It is not usable here.</p>
-      <p>With <code>fs.protected_regular=2</code>, the default on several distributions, the kernel refuses to let any process, including root, truncate or replace a file owned by another user inside a sticky directory. That check ignores capabilities, so <code>CAP_DAC_OVERRIDE</code> does not bypass it.</p>
-      <p>The lease-manager tools run as root and rewrite <code>pydhcpd.leases</code>, which is owned by the daemon. With the sticky bit set they fail with <code>EACCES</code> and the reload chain aborts. The directory is therefore <code>770</code>, matching the other service directories of this project.</p>
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <p>Un bit sticky (<code>1770</code>) impediría que el demonio borrara entradas que no le pertenecen, y parece un endurecimiento evidente. Aquí no es utilizable.</p>
-      <p>Con <code>fs.protected_regular=2</code>, el valor por defecto en varias distribuciones, el núcleo impide que cualquier proceso, incluido root, trunque o reemplace un archivo de otro usuario dentro de un directorio con sticky. Esa comprobación ignora las capacidades, así que <code>CAP_DAC_OVERRIDE</code> no la sortea.</p>
-      <p>Las herramientas de gestión de concesiones corren como root y reescriben <code>pydhcpd.leases</code>, que pertenece al demonio. Con el sticky puesto fallan con <code>EACCES</code> y la cadena de recarga se aborta. Por eso el directorio es <code>770</code>, en línea con los demás directorios de servicio de este proyecto.</p>
-    </td>
-  </tr>
-</table>
+> **⚠️ WARNING -- Sticky-bit restrictions:** A sticky bit (`1770`) would stop the daemon from deleting entries it does not own, which looks like obvious hardening. It is not usable here. With `fs.protected_regular=2`, the default on several distributions, the kernel refuses to let any process, including root, truncate or replace a file owned by another user inside a sticky directory. That check ignores capabilities, so `CAP_DAC_OVERRIDE` does not bypass it. The lease-manager tools run as root and rewrite `pydhcpd.leases`, which is owned by the daemon. With the sticky bit set they fail with `EACCES` and the reload chain aborts. The directory is therefore `770`, matching the other service directories of this project.
+>
+> **⚠️ WARNING -- Sticky-bit restrictions:** Un bit sticky (`1770`) impediría que el demonio borrara entradas que no le pertenecen, y parece un endurecimiento evidente. Aquí no es utilizable. Con `fs.protected_regular=2`, el valor por defecto en varias distribuciones, el núcleo impide que cualquier proceso, incluido root, trunque o reemplace un archivo de otro usuario dentro de un directorio con sticky. Esa comprobación ignora las capacidades, así que `CAP_DAC_OVERRIDE` no la sortea. Las herramientas de gestión de concesiones corren como root y reescriben `pydhcpd.leases`, que pertenece al demonio. Con el sticky puesto fallan con `EACCES` y la cadena de recarga se aborta. Por eso el directorio es `770`, en línea con los demás directorios de servicio de este proyecto.
 
 ```bash
 # Verify ownership and permissions | Verificar propietarios y permisos
@@ -480,10 +608,10 @@ sudo ls -l /etc/pydhcp/ /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> loads it with <code>source</code> and declares its allowed keys. It parses <code>pydhcp.env</code> without executing it; file permissions and key validation remain in <code>pyleases.sh</code>. The installer deploys the reader before <code>pyleases.sh</code> during installation and update. Do not run it separately or schedule it in cron.
+      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> loads it with <code>source</code> and declares its allowed keys. It parses <code>pydhcp.env</code> without executing it; file permissions and key validation remain in <code>pyleases.sh</code>. The installer deploys the reader before <code>pyleases.sh</code> during installation and update. Do not run it separately or schedule it in cron.<br><br>Because the file is parsed and never sourced, every value is taken literally. A line such as <code>ACL_MAC_PATH=$ACL_PATH/mac</code> would store those characters as the path itself, not <code>/etc/acl/mac</code>. The daemon reads the same file from Python, which does not expand shell variables either. Write every path in full, as the installer does.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> lo carga mediante <code>source</code> y declara sus claves permitidas. Interpreta <code>pydhcp.env</code> sin ejecutarlo; los permisos y la validación de claves permanecen en <code>pyleases.sh</code>. El instalador despliega el lector antes de <code>pyleases.sh</code> durante la instalación y la actualización. No se ejecuta por separado ni se programa en cron.
+      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code> (root:root, 644). <code>pyleases.sh</code> lo carga mediante <code>source</code> y declara sus claves permitidas. Interpreta <code>pydhcp.env</code> sin ejecutarlo; los permisos y la validación de claves permanecen en <code>pyleases.sh</code>. El instalador despliega el lector antes de <code>pyleases.sh</code> durante la instalación y la actualización. No se ejecuta por separado ni se programa en cron.<br><br>Como el archivo se interpreta y nunca se ejecuta con <code>source</code>, cada valor se toma literal. Una línea como <code>ACL_MAC_PATH=$ACL_PATH/mac</code> guardaría esos caracteres como la ruta misma, no <code>/etc/acl/mac</code>. El demonio lee el mismo archivo desde Python, que tampoco expande variables de shell. Escriba cada ruta completa, como hace el instalador.
     </td>
   </tr>
 </table>
@@ -494,7 +622,7 @@ sudo ls -l /etc/pydhcp/ /var/log/pydhcp.log
   <tr>
     <td style="width: 50%; vertical-align: top;">
       <b>pyleases.sh</b> — Advanced DHCP lease and ACL manager for pydhcpd. Parses <code>pydhcpd.leases</code>, detects unauthorized clients, rebuilds <code>pydhcpd.conf</code> from ACL files, and restarts the daemon. Designed for environments enforcing DHCP-based access control.<br><br>
-      ACL directories: <code>/etc/acl/mac/</code> (administrator's own, authorized: <code>mac-limited.txt</code>, <code>mac-unlimited.txt</code>) and <code>/etc/pydhcp/acl/</code> (pydhcp's own, blocked: <code>blockdhcp.txt</code>).<br>
+      ACL directories: <code>/etc/acl/mac/</code> (administrator's own, authorized: <code>mac-limited.txt</code>, <code>mac-unlimited.txt</code>) and <code>/etc/acl/dhcp/</code> (pydhcp's own, blocked: <code>blockdhcp.txt</code>).<br>
       Entry format: <code>a;MAC;IP;HOSTNAME;</code>. <br>
       <br>
       The leading <code>a</code> means "active" and marks a well-formed entry. Any other leading character makes the line malformed. <br>
@@ -510,7 +638,7 @@ sudo ls -l /etc/pydhcp/ /var/log/pydhcp.log
     </td>
     <td style="width: 50%; vertical-align: top;">
       <b>pyleases.sh</b> — Gestor avanzado de concesiones y ACLs DHCP para pydhcpd. Parsea <code>pydhcpd.leases</code>, detecta clientes no autorizados, reconstruye <code>pydhcpd.conf</code> a partir de archivos ACL y reinicia el demonio. Diseñado para entornos que aplican control de acceso basado en DHCP.<br><br>
-      Directorios ACL: <code>/etc/acl/mac/</code> (propios del administrador, autorizados: <code>mac-limited.txt</code>, <code>mac-unlimited.txt</code>) y <code>/etc/pydhcp/acl/</code> (propio de pydhcp, bloqueados: <code>blockdhcp.txt</code>).<br>
+      Directorios ACL: <code>/etc/acl/mac/</code> (propios del administrador, autorizados: <code>mac-limited.txt</code>, <code>mac-unlimited.txt</code>) y <code>/etc/acl/dhcp/</code> (propio de pydhcp, bloqueados: <code>blockdhcp.txt</code>).<br>
       Formato: <code>a;MAC;IP;HOSTNAME;</code>. <br>
       <br>
       La letra <code>a</code> al inicio indica que la entrada está activa y tiene el formato esperado. Si la línea comienza con otro carácter, se considera mal formada. <br>
@@ -538,93 +666,22 @@ sudo bash tools/pyleases.sh
 >
 > Las líneas que comienzan con `#` se consideran desactivadas y serán bloqueadas. Solo aplica a las ACL con Priority Level 1 y 2.
 
-**Warning**
+##### Configuration rebuilding and updates
 
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <ul>
-        <li><code>--update</code> calls <code>tools/pybk.sh</code> before overwriting anything, which writes a full backup to <code>/etc/bak/</code>. <br>
-          <code>pydhcpd.conf</code> is never overwritten. <br>
-          <code>pydhcp.env</code> is never overwritten by <code>--update</code>: every key keeps the value chosen at install time. <br>
-          Any manual edit to the code files, <code>pydhcpd.py</code>, <code>pyleases.sh</code> and <code>pywebmin.sh</code>, is replaced.</li>
-        <li>⚠️ <b>WARNING:</b> <code>pyleases.sh</code> fully rebuilds <code>/etc/pydhcp/core/pydhcpd.conf</code> on every run from its ACL files and <code>pydhcp.env</code>. Any manual edits to <code>pydhcpd.conf</code> — including custom lease times, pools, or directives — will be lost. If you manage <code>pydhcpd.conf</code> manually, do not use <code>pyleases.sh</code>.</li>
-        <li><b>Classes and pools:</b> the daemon supports several <code>pool { }</code> blocks and any number of <code>class</code> and <code>subclass</code> declarations. <br>
-          <code>pyleases.sh</code>, by design, writes only what this project documents: one pool with <code>deny members of "blockdhcp";</code>, plus the <code>fixed-address</code> reservations from the <code>mac-*.txt</code> lists. Any extra class or pool added by hand is discarded on the next run. <br>
-          Neither is a hard limit. <code>pyleases.sh</code> is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes <code>pydhcpd.conf</code> and emit them there. The daemon honours whatever the file ends up containing. <br>
-          Keep your own copy of such a change. <code>pysetup.sh --update</code> replaces the script with the shipped version. <code>tools/pybk.sh</code> saves the previous one inside <code>/etc/bak/pydhcp/pybk_&lt;TIMESTAMP&gt;.zip</code>, but the edit has to be reapplied by hand after every update.</li>
-      </ul>
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <ul>
-        <li><code>--update</code> llama a <code>tools/pybk.sh</code> antes de sobrescribir nada, que escribe una copia completa en <code>/etc/bak/</code>. <br>
-          <code>pydhcpd.conf</code> nunca se sobrescribe. <br>
-          <code>pydhcp.env</code> nunca se sobrescribe con <code>--update</code>: cada clave conserva el valor elegido en la instalación. <br>
-          Cualquier edición manual a los archivos de código, <code>pydhcpd.py</code>, <code>pyleases.sh</code> y <code>pywebmin.sh</code>, se reemplaza.</li>
-        <li>⚠️ <b>ADVERTENCIA:</b> <code>pyleases.sh</code> reconstruye completamente <code>/etc/pydhcp/core/pydhcpd.conf</code> en cada ejecución a partir de sus archivos ACL y <code>pydhcp.env</code>. Cualquier edición manual a <code>pydhcpd.conf</code> — incluyendo lease times, pools o directivas personalizadas — se perderá. Si gestiona <code>pydhcpd.conf</code> manualmente, no utilice <code>pyleases.sh</code>.</li>
-        <li><b>Clases y pools:</b> el demonio soporta varios bloques <code>pool { }</code> y cualquier cantidad de declaraciones <code>class</code> y <code>subclass</code>. <br>
-          <code>pyleases.sh</code>, por diseño, escribe solo lo que este proyecto documenta: un pool con <code>deny members of "blockdhcp";</code>, más las reservas <code>fixed-address</code> de las listas <code>mac-*.txt</code>. Cualquier clase o pool agregado a mano se descarta en la siguiente ejecución. <br>
-          Ninguna de las dos es una camisa de fuerza. <code>pyleases.sh</code> es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe <code>pydhcpd.conf</code> y emitirlos ahí. El demonio respeta lo que el archivo termine conteniendo. <br>
-          Guarde su propia copia de ese cambio. <code>pysetup.sh --update</code> reemplaza el script por la versión del repositorio. <code>tools/pybk.sh</code> respalda el anterior dentro de <code>/etc/bak/pydhcp/pybk_&lt;TIMESTAMP&gt;.zip</code>, pero la edición hay que volver a aplicarla a mano tras cada actualización.</li>
-      </ul>
-    </td>
-  </tr>
-</table>
+| Description | Descripción |
+|---|---|
+| <ul> <li>`--update` calls `tools/pybk.sh` before overwriting anything, which writes a full backup to `/etc/bak/`. <br> `pydhcpd.conf` is never overwritten. <br> `pydhcp.env` is never overwritten by `--update`: every key keeps the value chosen at install time. <br> Any manual edit to the code files, `pydhcpd.py`, `pyleases.sh` and `pywebmin.sh`, is replaced.</li>  <li>**Classes and pools:** the daemon supports several `pool { }` blocks and any number of `class` and `subclass` declarations. <br> `pyleases.sh`, by design, writes only what this project documents: one pool with `deny members of "blockdhcp";`, plus the `fixed-address` reservations from the `mac-*.txt` lists. Any extra class or pool added by hand is discarded on the next run. <br> Neither is a hard limit. `pyleases.sh` is a plain shell script, so anyone who needs extra classes or pools can edit the block that writes `pydhcpd.conf` and emit them there. The daemon honours whatever the file ends up containing. <br> Keep your own copy of such a change. `pysetup.sh --update` replaces the script with the shipped version. `tools/pybk.sh` saves the previous one inside `/etc/bak/pydhcp/pybk_&lt;TIMESTAMP&gt;.zip`, but the edit has to be reapplied by hand after every update.</li> </ul> | <ul> <li>`--update` llama a `tools/pybk.sh` antes de sobrescribir nada, que escribe una copia completa en `/etc/bak/`. <br> `pydhcpd.conf` nunca se sobrescribe. <br> `pydhcp.env` nunca se sobrescribe con `--update`: cada clave conserva el valor elegido en la instalación. <br> Cualquier edición manual a los archivos de código, `pydhcpd.py`, `pyleases.sh` y `pywebmin.sh`, se reemplaza.</li>  <li>**Clases y pools:** el demonio soporta varios bloques `pool { }` y cualquier cantidad de declaraciones `class` y `subclass`. <br> `pyleases.sh`, por diseño, escribe solo lo que este proyecto documenta: un pool con `deny members of "blockdhcp";`, más las reservas `fixed-address` de las listas `mac-*.txt`. Cualquier clase o pool agregado a mano se descarta en la siguiente ejecución. <br> Ninguna de las dos es una camisa de fuerza. `pyleases.sh` es un script de shell corriente, así que quien necesite clases o pools adicionales puede editar el bloque que escribe `pydhcpd.conf` y emitirlos ahí. El demonio respeta lo que el archivo termine conteniendo. <br> Guarde su propia copia de ese cambio. `pysetup.sh --update` reemplaza el script por la versión del repositorio. `tools/pybk.sh` respalda el anterior dentro de `/etc/bak/pydhcp/pybk_&lt;TIMESTAMP&gt;.zip`, pero la edición hay que volver a aplicarla a mano tras cada actualización.</li> </ul> |
+
+> **⚠️ WARNING -- Generated DHCP configuration:** `pyleases.sh` fully rebuilds `/etc/pydhcp/core/pydhcpd.conf` on every run from its ACL files and `pydhcp.env`. Any manual edits to `pydhcpd.conf` — including custom lease times, pools, or directives — will be lost. If you manage `pydhcpd.conf` manually, do not use `pyleases.sh`.
+>
+> **⚠️ WARNING -- Generated DHCP configuration:** `pyleases.sh` reconstruye completamente `/etc/pydhcp/core/pydhcpd.conf` en cada ejecución a partir de sus archivos ACL y `pydhcp.env`. Cualquier edición manual a `pydhcpd.conf` — incluyendo lease times, pools o directivas personalizadas — se perderá. Si gestiona `pydhcpd.conf` manualmente, no utilice `pyleases.sh`.
 
 ##### WPAD/PAC via DHCP option 252 (optional)
 
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <code>pyleases.sh</code> generates <code>/etc/pydhcp/core/pydhcpd.conf</code> dynamically on every run. WPAD/PAC support is controlled entirely from <code>pydhcp.env</code> — no manual editing of <code>pyleases.sh</code> is required.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <code>pyleases.sh</code> genera <code>/etc/pydhcp/core/pydhcpd.conf</code> dinámicamente en cada ejecución. El soporte WPAD/PAC se controla completamente desde <code>pydhcp.env</code> — no se requiere editar manualmente <code>pyleases.sh</code>.
-    </td>
-  </tr>
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <b>WPAD is enabled by setting:</b>
-      <ul>
-        <li><code>WPAD_ENABLED=true</code> in <code>/etc/pydhcp/pydhcp.env</code>.</li>
-        <li>To disable it, set <code>WPAD_ENABLED=false</code>; this is the default.</li>
-      </ul>
-      <b>Before enabling WPAD, the following setup is required:</b>
-      <ol>
-        <li>Apache2 must be installed.</li>
-        <li>A VirtualHost must be configured to listen on the desired port (18100 by default), and that port must be added to Apache's <code>ports.conf</code> as <code>Listen SERVER_IP:PORT</code>.</li>
-        <li>A valid <code>wpad.pac</code> file must be placed in that VirtualHost's document root.</li>
-        <li>If a different port is used, it must be set as <code>WPAD_PORT</code> in <code>/etc/pydhcp/pydhcp.env</code>.</li>
-      </ol>
-      <b>Guard:</b> <code>pyleases.sh</code> never trusts <code>WPAD_ENABLED=true</code> on its own. <br>
-      <br>
-      On every run it fetches <code>http://SERVER_IP:WPAD_PORT/wpad.pac</code> and writes the two <code>option wpad</code> lines only if it receives an HTTP <code>200</code>. Otherwise it logs a <code>WARNING</code>, leaves the lines commented out and continues normally. <br>
-      <br>
-      This check prevents WPAD-aware clients on the LAN from stalling on an unreachable PAC URL, a problem that may appear only as general network slowness and produce no server-side error. Availability can be checked with:
-      <br><code>curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://SERVER_IP:WPAD_PORT/wpad.pac"; echo $?</code><br>
-      A result of <code>0</code> means WPAD will be activated; anything else means it will not.
-      <br><br>The project does not deploy the Apache side: no VirtualHost, no <code>wpad.pac</code>. That setup is the administrator's responsibility.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <b>Para activar WPAD, se asigna:</b>
-      <ul>
-        <li><code>WPAD_ENABLED=true</code> en <code>/etc/pydhcp/pydhcp.env</code>.</li>
-        <li>Para desactivarlo, se asigna <code>WPAD_ENABLED=false</code>, que es el valor predeterminado.</li>
-      </ul>
-      <b>Antes de activar WPAD, se requiere lo siguiente:</b>
-      <ol>
-        <li>Instalar Apache.</li>
-        <li>Crear un VirtualHost que escuche en el puerto deseado (18100 por defecto) y declarar ese puerto en <code>ports.conf</code> como <code>Listen SERVER_IP:PORT</code>.</li>
-        <li>Colocar un archivo <code>wpad.pac</code> válido en la raíz de documentos del VirtualHost.</li>
-        <li>Si se utiliza otro puerto, asignarlo a <code>WPAD_PORT</code> en <code>/etc/pydhcp/pydhcp.env</code>.</li>
-      </ol>
-      <b>Comprobación:</b> <code>pyleases.sh</code> no activa WPAD solo porque <code>WPAD_ENABLED=true</code>. En cada ejecución solicita <code>http://SERVER_IP:WPAD_PORT/wpad.pac</code> y añade la opción DHCP <code>option wpad</code> solo si recibe HTTP <code>200</code>. Si no, registra una advertencia (<code>WARNING</code>), deja la opción desactivada y continúa. <br><br>Así se evita que los clientes esperen una dirección PAC inaccesible. La disponibilidad puede comprobarse con:
-      <br><code>curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://SERVER_IP:WPAD_PORT/wpad.pac"; echo $?</code><br>
-      Un resultado <code>0</code> significa que WPAD se activará; cualquier otro, que no.
-      <br><br>El proyecto no despliega la parte de Apache: ni el VirtualHost ni el <code>wpad.pac</code>. Ese montaje es responsabilidad del administrador.
-    </td>
-  </tr>
-</table>
+| Description | Descripción |
+|---|---|
+| `pyleases.sh` generates `/etc/pydhcp/core/pydhcpd.conf` dynamically on every run. WPAD/PAC support is controlled entirely from `pydhcp.env` — no manual editing of `pyleases.sh` is required. | `pyleases.sh` genera `/etc/pydhcp/core/pydhcpd.conf` dinámicamente en cada ejecución. El soporte WPAD/PAC se controla completamente desde `pydhcp.env` — no se requiere editar manualmente `pyleases.sh`. |
+| **WPAD is enabled by setting:** <ul> <li>`WPAD_ENABLED=true` in `/etc/pydhcp/pydhcp.env`.</li> <li>To disable it, set `WPAD_ENABLED=false`; this is the default.</li> </ul> **Before enabling WPAD, the following setup is required:** <ol> <li>Apache2 must be installed.</li> <li>A VirtualHost must be configured to listen on the desired port (18100 by default), and that port must be added to Apache's `ports.conf` as `Listen SERVER_IP:PORT`.</li> <li>A valid `wpad.pac` file must be placed in that VirtualHost's document root.</li> <li>If a different port is used, it must be set as `WPAD_PORT` in `/etc/pydhcp/pydhcp.env`.</li> </ol> **Guard:** `pyleases.sh` never trusts `WPAD_ENABLED=true` on its own. <br> <br> On every run it fetches `http://SERVER_IP:WPAD_PORT/wpad.pac` and writes the two `option wpad` lines only if it receives an HTTP `200`. Otherwise it logs a `WARNING`, leaves the lines commented out and continues normally. <br> <br> This check prevents WPAD-aware clients on the LAN from stalling on an unreachable PAC URL, a problem that may appear only as general network slowness and produce no server-side error. Availability can be checked with: <br>`curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://SERVER_IP:WPAD_PORT/wpad.pac"; echo $?`<br> A result of `0` means WPAD will be activated; anything else means it will not. <br><br>The project does not deploy the Apache side: no VirtualHost, no `wpad.pac`. That setup is the administrator's responsibility. | **Para activar WPAD, se asigna:** <ul> <li>`WPAD_ENABLED=true` en `/etc/pydhcp/pydhcp.env`.</li> <li>Para desactivarlo, se asigna `WPAD_ENABLED=false`, que es el valor predeterminado.</li> </ul> **Antes de activar WPAD, se requiere lo siguiente:** <ol> <li>Instalar Apache.</li> <li>Crear un VirtualHost que escuche en el puerto deseado (18100 por defecto) y declarar ese puerto en `ports.conf` como `Listen SERVER_IP:PORT`.</li> <li>Colocar un archivo `wpad.pac` válido en la raíz de documentos del VirtualHost.</li> <li>Si se utiliza otro puerto, asignarlo a `WPAD_PORT` en `/etc/pydhcp/pydhcp.env`.</li> </ol> **Comprobación:** `pyleases.sh` no activa WPAD solo porque `WPAD_ENABLED=true`. En cada ejecución solicita `http://SERVER_IP:WPAD_PORT/wpad.pac` y añade la opción DHCP `option wpad` solo si recibe HTTP `200`. Si no, registra una advertencia (`WARNING`), deja la opción desactivada y continúa. <br><br>Así se evita que los clientes esperen una dirección PAC inaccesible. La disponibilidad puede comprobarse con: <br>`curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://SERVER_IP:WPAD_PORT/wpad.pac"; echo $?`<br> Un resultado `0` significa que WPAD se activará; cualquier otro, que no. <br><br>El proyecto no despliega la parte de Apache: ni el VirtualHost ni el `wpad.pac`. Ese montaje es responsabilidad del administrador. |
 
 > Android and iOS ignore DHCP option 252. The proxy must be configured manually on those devices.
 >
@@ -632,20 +689,9 @@ sudo bash tools/pyleases.sh
 
 #### pybk
 
-> `pybk.sh` reads `BACKUP_DIR` from `pydhcp.env` (Backup block). Default: `/etc/bak/pydhcp`. Missing, empty or relative paths abort before backup. Existing configurations require this key.
->
-> `pybk.sh` lee `BACKUP_DIR` de `pydhcp.env` (bloque Backup). Valor predeterminado: `/etc/bak/pydhcp`. Las rutas ausentes, vacías o relativas abortan antes del respaldo. Las configuraciones existentes requieren esta clave.
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <p>Backs up pydhcp into <code>/etc/bak/pydhcp/pybk_&lt;TIMESTAMP&gt;.zip</code>: its install tree, ACL lists, systemd unit, <code>init.d</code> wrapper, logrotate configuration and Webmin module. Paths that do not exist are skipped. The archive lives outside <code>/etc/pydhcp</code>, so uninstalling pydhcp never touches it. Restore by unzipping it over <code>/</code>.</p>
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <p><code>pybk.sh</code> crea una copia de seguridad de PyDHCP en <code>/etc/bak/pydhcp/pybk_&lt;TIMESTAMP&gt;.zip</code>. Incluye los archivos de instalación, las listas ACL, la unidad de systemd, el script <code>init.d</code>, la configuración de logrotate y el módulo de Webmin. Omite las rutas que no existan. El archivo ZIP queda fuera de <code>/etc/pydhcp</code>, por lo que la desinstalación no lo elimina. Para restaurarlo, descomprímelo sobre <code>/</code>.</p>
-    </td>
-  </tr>
-</table>
+| Description | Descripción |
+|---|---|
+| Backs up pydhcp into `/etc/bak/pydhcp/pybk_&lt;TIMESTAMP&gt;.zip`: its install tree, ACL lists, systemd unit, `init.d` wrapper, logrotate configuration and Webmin module. Paths that do not exist are skipped. The archive lives outside `/etc/pydhcp`, so uninstalling pydhcp never touches it. Restore by unzipping it over `/`. | `pybk.sh` crea una copia de seguridad de PyDHCP en `/etc/bak/pydhcp/pybk_&lt;TIMESTAMP&gt;.zip`. Incluye los archivos de instalación, las listas ACL, la unidad de systemd, el script `init.d`, la configuración de logrotate y el módulo de Webmin. Omite las rutas que no existan. El archivo ZIP queda fuera de `/etc/pydhcp`, por lo que la desinstalación no lo elimina. Para restaurarlo, descomprímelo sobre `/`. |
 
 | Command | Description | Descripción |
 |---|---|---|
@@ -653,9 +699,11 @@ sudo bash tools/pyleases.sh
 | `sudo bash pybk.sh --install` | Register the `@monthly` cron entry | Registrar la entrada mensual en cron |
 | `sudo bash pybk.sh --uninstall` | Remove the cron entry, keeping the archives | Quitar la entrada de cron, conservando los comprimidos |
 
+> `pybk.sh` reads `BACKUP_DIR` from `pydhcp.env` (Backup block). Default: `/etc/bak/pydhcp`. Changing this default is not recommended. Missing, empty or relative paths abort before backup. Existing configurations require this key.
+>
+> `pybk.sh` lee `BACKUP_DIR` de `pydhcp.env` (bloque Backup). Valor predeterminado: `/etc/bak/pydhcp`. No se recomienda modificar este valor. Las rutas ausentes, vacías o relativas abortan antes del respaldo. Las configuraciones existentes requieren esta clave.
+
 ##### Backup Contents
-
-
 
 <table width="100%">
   <tr>
@@ -682,16 +730,9 @@ sudo bash tools/pyleases.sh
 
 [![pywebmin](./img/pywebmin.png)](https://www.maravento.com/)
 
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <b>pywebmin.sh</b> — Optional installer for a PyDHCP module for Webmin. Provides a web interface to manage the pydhcpd daemon: service control (start/stop/restart/reload), active leases table, and configuration file editor. Requires Webmin to be installed on the system.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <b>pywebmin.sh</b> — Instalador opcional de un módulo PyDHCP para Webmin. Ofrece una interfaz web para administrar el servicio <code>pydhcpd</code>: iniciarlo, detenerlo, reiniciarlo o recargar su configuración; consultar las concesiones activas y editar el archivo de configuración. Requiere que Webmin esté instalado.
-    </td>
-  </tr>
-</table>
+| Description | Descripción |
+|---|---|
+| **pywebmin.sh** — Optional installer for a PyDHCP module for Webmin. Provides a web interface to manage the pydhcpd daemon: service control (start/stop/restart/reload), active leases table, and configuration file editor. Requires Webmin to be installed on the system. | **pywebmin.sh** — Instalador opcional de un módulo PyDHCP para Webmin. Ofrece una interfaz web para administrar el servicio `pydhcpd`: iniciarlo, detenerlo, reiniciarlo o recargar su configuración; consultar las concesiones activas y editar el archivo de configuración. Requiere que Webmin esté instalado. |
 
 ##### Features
 
@@ -753,10 +794,6 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 
 ### Logs
 
-> Project log: `/var/log/pydhcp.log`. Installation and update configure daily rotation in `/etc/logrotate.d/pydhcp`, keeping seven previous files plus the active log. Compression starts on the next rotation. Empty logs are not rotated; missing logs are tolerated. Squid and Apache keep their own policies.
->
-> Log del proyecto: `/var/log/pydhcp.log`. La instalación y la actualización configuran rotación diaria en `/etc/logrotate.d/pydhcp`. Se conservan siete archivos anteriores y el activo. La compresión comienza en la siguiente rotación. Los logs vacíos no se rotan; los ausentes se toleran. Squid y Apache conservan sus propias políticas.
-
 
 <table width="100%">
   <tr>
@@ -768,6 +805,10 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
     </td>
   </tr>
 </table>
+
+> Project log: `/var/log/pydhcp.log`. Installation and update configure daily rotation in `/etc/logrotate.d/pydhcp`, keeping seven previous files plus the active log. Compression starts on the next rotation. Empty logs are not rotated; missing logs are tolerated. Squid and Apache keep their own policies.
+>
+> Log del proyecto: `/var/log/pydhcp.log`. La instalación y la actualización configuran rotación diaria en `/etc/logrotate.d/pydhcp`. Se conservan siete archivos anteriores y el activo. La compresión comienza en la siguiente rotación. Los logs vacíos no se rotan; los ausentes se toleran. Squid y Apache conservan sus propias políticas.
 
 #### Log levels
 
@@ -822,220 +863,39 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 
 #### Log line width
 
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      Log lines are limited to <b>80 characters</b>, including the timestamp and level. Long values are shortened to prevent line wrapping. <b>MAC and IP addresses are never shortened</b> because their maximum lengths are 17 and 15 characters. <br><br>
-      Other values are shortened as follows:
-      <ul>
-        <li><b>Client hostname:</b> 15 characters in the daemon log and 20 in <code>tools/pyleases.sh</code>. The full hostname remains in <code>pydhcpd.leases</code> and the ACL files.</li>
-        <li>File paths appear as their basename, not the full path.</li>
-        <li>System errors show the cause, such as <code>Permission denied</code>, without Python's full message repeating the path.</li>
-      </ul>
-      If an event needs more than one line, it is written as multiple complete records, each with its own timestamp and level. It is never written as an indented continuation that a level-based <code>grep</code> would miss.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      Cada línea del registro tiene un máximo de <b>80 caracteres</b>, incluida la fecha y el nivel. Los valores largos se acortan para evitar que la línea se parta. <b>Las direcciones MAC e IP nunca se acortan</b>, porque miden como máximo 17 y 15 caracteres. <br><br>
-      Los demás valores se limitan así:
-      <ul>
-        <li><b>Nombre de host del cliente:</b> 15 caracteres en el registro del daemon y 20 en <code>tools/pyleases.sh</code>. El nombre completo se conserva en <code>pydhcpd.leases</code> y en los archivos ACL.</li>
-        <li>Las rutas aparecen con su nombre base, no con la ruta completa.</li>
-        <li>Los errores del sistema muestran la causa, por ejemplo <code>Permission denied</code>, sin repetir la ruta en el mensaje completo de Python.</li>
-      </ul>
-      Si un evento necesita más de una línea, se escribe como varios registros completos, cada uno con su fecha y nivel. No se usa una continuación indentada que no encontraría un <code>grep</code> por nivel.
-    </td>
-  </tr>
-</table>
-
-## ISC-DHCP-SERVER VS PYDHCP
-
----
-
-> **Legend:** ✅ same behaviour · ⚠️ works, with a difference · ⛔ not implemented
->
-> **Leyenda:** ✅ mismo comportamiento · ⚠️ funciona, con una diferencia · ⛔ no implementado
-
-### Protocol and architecture
-
-| isc-dhcp-server | pydhcp | Description | Descripción |
-|---|---|---|---|
-| DHCPv4 (RFC 2131) over UDP 67/68 | ✅ | Python daemon, same protocol | Demonio Python, mismo protocolo |
-| DHCPv6 | ⛔ | IPv4 only | Solo IPv4 |
-| Multiple interfaces | ⛔ | Single interface, set in `INTERFACESv4` | Interfaz única, definida en `INTERFACESv4` |
-| BOOTP / PXE | ⛔ | Packets are padded to the BOOTP minimum for protocol compliance, but BOOTP clients are not served | PyDHCP completa los paquetes hasta el tamaño mínimo de BOOTP, pero no atiende a clientes BOOTP |
-| DHCP relay agents | ⛔ | No legitimate use without multi-segment support. `giaddr`/`hops` are parsed only to close a spoofing hole | PyDHCP no ofrece servicio de relay. Lee `giaddr` y `hops` para detectar y descartar paquetes de relay falsificados |
-| Clients whose `chaddr` differs from the frame source MAC | ⛔ | Dropped and logged: closes a spoofing hole | PyDHCP descarta y registra los paquetes si la MAC de `chaddr` no coincide con la MAC de origen Ethernet |
-| LDAP backend | ⛔ | Host reservations live in `pydhcpd.conf`, or in the `mac-*.txt` lists that `pyleases.sh` turns into reservations | Las reservas de host viven en `pydhcpd.conf`, o en las listas `mac-*.txt` que `pyleases.sh` convierte en reservas |
-| DDNS | ⛔ | The daemon never registers names in DNS; a lease grants an address, nothing else | El demonio nunca registra nombres en DNS; una concesión entrega una dirección, nada más |
-| `client-updates` / `deny client-updates` | ⛔ | Depends on DDNS plus the client FQDN option, neither implemented | Depende de DDNS y de la opción FQDN del cliente, ninguna implementada |
-
-### Directives
-
-| isc-dhcp-server | pydhcp | Description | Descripción |
-|---|---|---|---|
-| `authoritative;` | ✅ | pydhcpd's default, accepted for compatibility | Es el valor por defecto de pydhcpd, se acepta por compatibilidad |
-| `not authoritative;` | ✅ | The only way to disable authoritative mode | Única forma de desactivar el modo autoritativo |
-| `server-identifier IP;` | ✅ | Mandatory: the daemon refuses to start without it | Obligatoria: el demonio no arranca sin ella |
-| `cleanup-interval N;` | ✅ | Seconds between expired-lease sweeps | Segundos entre barridos de concesiones expiradas |
-| `abandon-lease-time N;` | ✅ | Seconds an IP is held out of the pool after a DHCPDECLINE | Segundos que una IP queda fuera del pool tras un DHCPDECLINE |
-| `deny duplicates;` | ✅ | Re-offers the MAC's existing lease on DISCOVER | Reofrece la concesión existente de la MAC en el DISCOVER |
-| `deny declines;` | ✅ | Ignores DHCPDECLINE messages | Ignora mensajes DHCPDECLINE |
-| `ping-check true\|false;` | ✅ | Enabled by default in the shipped config, unlike isc | Activado por defecto en la configuración que se entrega, al revés que isc |
-| `ping-timeout N;` | ✅ | Seconds to wait for the ICMP reply before sending the OFFER | Segundos de espera de la respuesta ICMP antes de enviar el OFFER |
-| `subnet ... { pool { ... } }` | ✅ | Several `pool { }` blocks per subnet are accepted | Se aceptan varios bloques `pool { }` por subred |
-| `host NAME { hardware ethernet MAC; fixed-address IP; }` | ✅ | `fixed-address` validated at config load and on `SIGHUP` | `fixed-address` se valida al cargar la configuración y en cada `SIGHUP` |
-| `class` / `subclass` / `deny members of` | ✅ | Any class name is accepted, not just `blockdhcp` | Se acepta cualquier nombre de clase, no solo `blockdhcp` |
-| `allow\|deny unknown-clients`, `known-clients` | ✅ | Pool-level admission rules | Reglas de admisión a nivel de pool |
-| `min-lease-time`, `default-lease-time`, `max-lease-time` | ✅ | Validated together (`0 < min <= default <= max`), at subnet and pool level | Se validan en conjunto (`0 < min <= default <= max`), a nivel de subred y de pool |
-| `option routers` | ⚠️ | Accepts a comma-separated list but uses only the first address; the rest are ignored with a notice. No failover between routers | Acepta varias direcciones separadas por comas, pero entrega solo la primera e informa que ignora las demás. No cambia automáticamente a otro router si el primero falla |
-| `option broadcast-address` | ✅ | Served as option 28 | Se entrega como opción 28 |
-| `option domain-name-servers` | ✅ | Comma-separated list, all served | Lista separada por comas, se entregan todas |
-| `option wpad ...;` | ✅ | Option 252, gated by `WPAD_ENABLED` in `pydhcp.env` | Opción 252, condicionada por `WPAD_ENABLED` en `pydhcp.env` |
-| `one-lease-per-client` | ⚠️ | Always enforced; one MAC can hold only one pool lease at a time | Se aplica siempre: cada MAC puede tener una sola concesión del pool a la vez |
-| `option domain-name` | ⛔ | Option 15, the DNS search domain. Validating it would mean resolving a name at config load, which this daemon never does, and a search domain often has no record of its own | La opción 15 configura el dominio de búsqueda DNS. PyDHCP no la admite porque no valida ni resuelve nombres al cargar la configuración; además, el dominio de búsqueda no siempre tiene un registro DNS propio |
-| `option subnet-mask` override | ⛔ | The netmask sent always matches the `subnet ... netmask ...` declaration | La máscara enviada siempre coincide con la declaración `subnet ... netmask ...` |
-| Per-host / per-class option scoping | ⛔ | Options declared at `subnet` level apply to every client uniformly | Las opciones declaradas a nivel `subnet` aplican a todos los clientes por igual |
-
-### Files and paths
-
-| isc-dhcp-server | pydhcp | Description | Descripción |
-|---|---|---|---|
-| `/etc/dhcp/dhcpd.conf` | `/etc/pydhcp/core/pydhcpd.conf` | Same syntax | Misma sintaxis |
-| `/var/lib/dhcp/dhcpd.leases` | `/etc/pydhcp/core/pydhcpd.leases` | Same format | Mismo formato |
-| `/etc/default/isc-dhcp-server` | `/etc/pydhcp/pydhcp.env` | Bootstrap values, plus pydhcp's own extras | Valores iniciales de configuración, junto con otras variables propias de PyDHCP |
-| `/run/dhcp-server/dhcpd.pid` | `/run/pydhcp/pydhcpd.pid` | Fixed path, not configurable | Ruta fija, no configurable |
-| `/etc/systemd/system/isc-dhcp-server.service` | `/etc/systemd/system/pydhcpd.service` | pydhcp starts already unprivileged (`User=pydhcpd`); isc starts as root and drops privileges itself | pydhcp arranca ya sin privilegios (`User=pydhcpd`); isc arranca como root y baja de privilegios él mismo |
-| `/etc/init.d/isc-dhcp-server` | `/etc/init.d/pydhcpd` | Compatible wrapper | Wrapper compatible |
-| `/var/log/syslog` | `/var/log/pydhcp.log` | Writes directly to file, does not use syslog, so no `log-facility` directive is needed | Escribe directamente al archivo, no usa syslog, así que no hace falta la directiva `log-facility` |
-| *(none)* | `pysetup.log` | Installer log, written in the directory containing `pysetup.sh` and rewritten on each run. Kept out of `/var/log/pydhcp.log` so install, update and remove runs never mix with daily operation | Log del instalador, escrito en el directorio que contiene `pysetup.sh` y reescrito en cada corrida. Se mantiene fuera de `/var/log/pydhcp.log` para que las corridas de instalación, actualización y desinstalación no se mezclen con la operación diaria |
-| `/etc/logrotate.d/rsyslog` | `/etc/logrotate.d/pydhcp` | Daily, one config for the whole project | Diaria, una sola configuración para todo el proyecto |
-| `journalctl -u isc-dhcp-server` | `journalctl -u pydhcpd` | Both also reach journald through systemd | Ambos llegan además a journald a través de systemd |
-
-### Commands
-
-| isc-dhcp-server | pydhcp | Description | Descripción |
-|---|---|---|---|
-| `systemctl start\|stop\|restart\|status isc-dhcp-server` | `systemctl start\|stop\|restart\|status pydhcpd` | Same verbs, same behaviour | Mismos verbos, mismo comportamiento |
-| `service isc-dhcp-server start\|stop\|restart\|status` | `service pydhcpd start\|stop\|restart\|status` | Goes through the `init.d` wrapper, which delegates to `systemctl` when systemd is the active init | Pasa por el wrapper de `init.d`, que delega en `systemctl` cuando systemd es el init activo |
-| `dhcpd -t -cf /etc/dhcp/dhcpd.conf` | `pydhcpd.py -t -cf /etc/pydhcp/core/pydhcpd.conf` | Config syntax test | Prueba de sintaxis de la configuración |
-
-### Log output
-
-| isc-dhcp-server | pydhcp | Description | Descripción |
-|---|---|---|---|
-| `DHCPREQUEST for 192.168.0.50 (192.168.0.2) from aa:bb:cc:dd:ee:ff via enpXsX`<br>`DHCPACK on 192.168.0.50 to aa:bb:cc:dd:ee:ff (FOO) via enpXsX` | `REQUEST from aa:bb:cc:dd:ee:ff (FOO)`<br>`ACK aa:bb:cc:dd:ee:ff → 192.168.0.50`<br>`(lease 2592000s)` | Authorized client with static IP (renewal) | Cliente autorizado con dirección IP fija (renovación) |
-| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX`<br>`DHCPOFFER on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPREQUEST for 192.168.0.230 (192.168.0.2) from bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPACK on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`OFFER bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`REQUEST from bb:cc:dd:ee:ff:aa (BAR)`<br>`ACK bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`(lease 60s)` | Unknown client entering the block pool | Cliente desconocido ingresando al pool de bloqueo |
-| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`No IP for bb:cc:dd:ee:ff:aa -skip` | Pool exhausted | Pool agotado |
-| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`Blocked bb:cc:dd:ee:ff:aa -skip` | Blocked client — `isc-dhcp-server` reports it as a full pool | Cliente bloqueado — `isc-dhcp-server` lo reporta como pool lleno |
-
-> A pool with `deny members of "blockdhcp"` becomes invisible to that class, so `isc-dhcp-server` sees no lease available and logs the same message as a genuinely full pool. `pydhcpd` logs the real cause: `Blocked` or `No IP`.
->
-> Un pool con `deny members of "blockdhcp"` se vuelve invisible para esa clase, así que `isc-dhcp-server` no ve ninguna concesión disponible y escribe el mismo mensaje que un pool genuinamente lleno. `pydhcpd` registra la causa real: `Blocked` o `No IP`.
-
-### Authoritative behaviour
-
-| Configuration | isc-dhcp-server | pydhcpd | Description | Descripción |
-|---|---|---|---|---|
-| `authoritative;` present | authoritative | authoritative | ✅ same. In pydhcpd it is already the default, so the line changes nothing | ✅ igual. En pydhcpd ya es el valor por defecto, así que la línea no cambia nada |
-| `not authoritative;` present | non-authoritative | non-authoritative | ✅ same syntax, same result | ✅ misma sintaxis, mismo resultado |
-| **neither directive present** | non-authoritative | **authoritative** | ⚠️ **The only difference.** PyDHCP is authoritative by default; isc-dhcp-server is not | ⚠️ **La única diferencia.** PyDHCP funciona en modo autoritativo por defecto; isc-dhcp-server no |
-
-> **Migrating from isc-dhcp-server:** if your `dhcpd.conf` did not carry `authoritative;` and you relied on that, add `not authoritative;` explicitly to keep the old behavior. Everyone else needs to change nothing.
->
-> **Migración desde isc-dhcp-server:** si tu archivo `dhcpd.conf` no incluía `authoritative;` y quieres conservar ese comportamiento, añade `not authoritative;`. Si ya incluía `authoritative;`, o no necesitas desactivar ese modo, no tienes que cambiar nada.
-
-| Event | isc-dhcp-server (as authoritative) | pydhcpd (as authoritative) |
-|-------|-------------------------------------|-----------------------------|
-| Rogue offers IP to client | *(not observed)* † | *(not observed)* † |
-| Client requests rogue IP | `DHCPREQUEST for 192.168.0.222 (192.168.0.249) from bb:cc:dd:ee:ff:aa (BAR) via enpXsX` | `REQUEST from bb:cc:dd:ee:ff:aa (BAR)` |
-| Rogue acknowledges | *(not observed)* † | *(not observed)* † |
-| **Authoritative server rejects** | `DHCPNAK on 192.168.0.222 to bb:cc:dd:ee:ff:aa via enpXsX` | `NAK → bb:cc:dd:ee:ff:aa`<br>`(Not authorized for this IP)` |
-| Client rediscovers | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)` |
-
-> † Neither daemon sees these packets: `DHCPOFFER`/`DHCPACK` are addressed to the client, not to other DHCP servers on the segment.
->
-> † Ninguno de los dos demonios ve esos paquetes: `DHCPOFFER`/`DHCPACK` van dirigidos al cliente, no a otros servidores DHCP del segmento.
-
-### Rate limiting
-
-| isc-dhcp-server | pydhcpd |
+| Description | Descripción |
 |---|---|
-| Has no built-in per-client rate limit for lease allocation. Mitigation relies on `deny duplicates;` and pool exhaustion. Identification uses `chaddr` (or `client-id`, option 61), not the Ethernet source MAC. | Adds a per-MAC limit of up to five new lease allocations per 60-second window by default. Each client MAC has a separate counter, including clients behind the same relay. Renewals that keep the same IP do not consume the limit. Further new allocations are rejected until earlier requests leave the window. The limit is internal and has no `pydhcpd.conf` directive. |
+| Log lines are limited to **80 characters**, including the timestamp and level. Long values are shortened to prevent line wrapping. **MAC and IP addresses are never shortened** because their maximum lengths are 17 and 15 characters. <br><br> Other values are shortened as follows: <ul> <li>**Client hostname:** 15 characters in the daemon log and 20 in `tools/pyleases.sh`. The full hostname remains in `pydhcpd.leases` and the ACL files.</li> <li>File paths appear as their basename, not the full path.</li> <li>System errors show the cause, such as `Permission denied`, without Python's full message repeating the path.</li> </ul> If an event needs more than one line, it is written as multiple complete records, each with its own timestamp and level. It is never written as an indented continuation that a level-based `grep` would miss. | Cada línea del registro tiene un máximo de **80 caracteres**, incluida la fecha y el nivel. Los valores largos se acortan para evitar que la línea se parta. **Las direcciones MAC e IP nunca se acortan**, porque miden como máximo 17 y 15 caracteres. <br><br> Los demás valores se limitan así: <ul> <li>**Nombre de host del cliente:** 15 caracteres en el registro del daemon y 20 en `tools/pyleases.sh`. El nombre completo se conserva en `pydhcpd.leases` y en los archivos ACL.</li> <li>Las rutas aparecen con su nombre base, no con la ruta completa.</li> <li>Los errores del sistema muestran la causa, por ejemplo `Permission denied`, sin repetir la ruta en el mensaje completo de Python.</li> </ul> Si un evento necesita más de una línea, se escribe como varios registros completos, cada uno con su fecha y nivel. No se usa una continuación indentada que no encontraría un `grep` por nivel. |
 
-#### Known Limitation
+### Runtime files
 
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <p><strong>Known limitation, both servers.</strong> Neither one controls an attacker who rotates MAC addresses to exhaust the pool.</p>
-      <p><code>isc-dhcp-server</code> has no per-client throttle at all. A plain flood from a single MAC already drains the pool, with no rotation needed.</p>
-      <p><code>pydhcpd</code> has a narrower gap. Its per-MAC limit stops a single-MAC flood, but it is keyed by MAC (<code>chaddr</code>). It therefore bounds how fast one MAC can allocate, and does not cap the total across many different MACs. An attacker rotating MACs can still drain the pool, one new MAC at a time.</p>
-      <p>A global limit across all MACs was considered for <code>pydhcpd</code> and left out on purpose. It would need careful tuning to avoid rejecting legitimate clients during a normal burst of reconnections, for example many devices rejoining after a power outage. There is no evidence that MAC-rotation abuse is a live threat worth that trade-off. It is documented here as a known and accepted limitation.</p>
+      Files generated at runtime (not included in the repository):
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <p><strong>Limitación conocida, en ambos servidores.</strong> Ninguno controla a un atacante que rota direcciones MAC para agotar el pool.</p>
-      <p><code>isc-dhcp-server</code> no tiene ningún control por cliente. Una inundación simple desde una sola MAC ya agota el pool, sin necesidad de rotar.</p>
-      <p><code>pydhcpd</code> tiene una brecha más acotada. Su límite por MAC frena la inundación de una sola MAC, pero está indexado por MAC (<code>chaddr</code>). Por eso acota qué tan rápido puede asignar una MAC, y no limita el total entre muchas MAC distintas. Un atacante que rote MAC igual puede vaciar el pool, una MAC nueva a la vez.</p>
-      <p>Se evaluó un límite global entre todas las MAC para <code>pydhcpd</code> y se dejó fuera a propósito. Requeriría un ajuste cuidadoso para no rechazar clientes legítimos durante una ráfaga normal de reconexiones, por ejemplo varios dispositivos reconectándose tras un corte de luz. No hay evidencia de que el abuso por rotación de MAC sea una amenaza activa que justifique ese costo. Se documenta aquí como una limitación conocida y aceptada.</p>
+      Archivos generados en runtime (no incluidos en el repositorio):
     </td>
   </tr>
 </table>
 
-### Pool leases per client
-
-| isc-dhcp-server | pydhcpd |
-|---|---|
-| Does not limit how many pool IPs a single MAC can accumulate | Always limits a MAC to a single pool IP at a time; fixed daemon behavior, not a configurable directive |
-| No tiene restricción sobre cuántas IPs del pool puede acumular una MAC | Siempre limita a una MAC a una sola IP del pool a la vez; comportamiento fijo del demonio, no es una directiva configurable |
-
-### WPAD/PAC option scoping
-
-| isc-dhcp-server | pydhcpd |
-|---|---|
-| Supports scoping any option — including `option wpad` (252) — at multiple levels: `subnet`, `class`/`subclass`, or an individual `host`. A more specific scope overrides a broader one, so an admin can declare WPAD at the `subnet` level for every client and then override or omit it for a specific `class` or `host` (e.g. exclude a group of trusted/unrestricted devices from the PAC).<br><br>Soporta el alcance de cualquier opción — incluyendo `option wpad` (252) — en varios niveles: `subnet`, `class`/`subclass`, o un `host` individual. Un alcance más específico sobreescribe uno más amplio, así que un administrador puede declarar WPAD a nivel `subnet` para todos los clientes y luego sobreescribirlo u omitirlo para una `class` o `host` específico (ej. excluir a un grupo de dispositivos confiables/sin restricción del PAC). | Has no option-scoping mechanism at all — `config.wpad_url` is a single global value read once from the `subnet` block, applied identically to every `OFFER`/`ACK`/`INFORM` it sends. `WPAD_ENABLED` in `pydhcp.env` is therefore all-or-nothing: on turns WPAD on for every client, off turns it off for every client. The existing `class "blockdhcp"`/`subclass` mechanism does not generalize to this — it only marks MACs for lease denial, not a scoping construct for arbitrary options like isc-dhcp-server's classes.<br><br>No tiene ningún mecanismo de alcance de opciones — `config.wpad_url` es un único valor global leído una vez del bloque `subnet`, aplicado igual a cada `OFFER`/`ACK`/`INFORM` que envía. `WPAD_ENABLED` en `pydhcp.env` es entonces todo-o-nada: activado prende WPAD para todos los clientes, desactivado lo apaga para todos. El mecanismo existente de `class "blockdhcp"`/`subclass` no generaliza a este caso — solo marca MACs para negarles el lease, no un constructo de alcance para opciones arbitrarias como sí lo son las clases de isc-dhcp-server. |
-
-#### External Workaround
-
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <p><strong>Workaround, external to pydhcp.</strong> If <code>WPAD_ENABLED=true</code> and some MACs must never see the PAC, block their access to the PAC's port, for example 18100, at the firewall.</p>
-      <p>This does not stop <code>pydhcpd</code> from sending option 252 to them. The client can never fetch the PAC file, and the PAC's own <code>DIRECT</code> fallback lets it proceed without a proxy.</p>
-      <p>This is a firewall-side workaround, not a <code>pydhcp</code> feature. <code>pydhcp</code> has no firewall component and neither ships nor manages that rule.</p>
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <p><strong>Workaround, externo a pydhcp.</strong> Si <code>WPAD_ENABLED=true</code> y algunas MAC nunca deben ver el PAC, bloquee su acceso al puerto del PAC, por ejemplo 18100, en el firewall.</p>
-      <p>Esto no evita que <code>pydhcpd</code> les mande la opción 252. El cliente nunca podrá descargar el archivo PAC, y el fallback <code>DIRECT</code> del propio PAC le permite seguir sin proxy.</p>
-      <p>Es un workaround del lado del firewall, no una funcionalidad de <code>pydhcp</code>. <code>pydhcp</code> no tiene componente de firewall y no provee ni gestiona esa regla.</p>
-    </td>
-  </tr>
-</table>
-
-### Improvements over isc-dhcp-server
-
-| isc-dhcp-server | pydhcp | Description | Descripción |
-|---|---|---|---|
-| ⛔ | ✅ | Per-MAC allocation rate limit: 5 allocations per minute per MAC | Límite de asignación por MAC: 5 asignaciones por minuto y por MAC |
-| ⛔ | ✅ | DISCOVER reservations: a DISCOVER earns a 30s in-memory reservation, never a full lease, so a flood cannot hold pool IPs | Reservas por DISCOVER: un DISCOVER obtiene una reserva en memoria de 30s, nunca una concesión completa, así que una inundación no puede retener IPs del pool |
-| ⛔ | ✅ | Lease cleanup at startup: malformed entries and already-expired leases are removed from the leases file, and the cleaned file is written back to disk | Limpieza de concesiones al arrancar: las entradas malformadas y las concesiones ya vencidas se eliminan del archivo, y el archivo limpio se vuelve a escribir en disco |
-| ⛔ | ✅ | ACL automation: `pyleases.sh` rebuilds `pydhcpd.conf` from MAC lists | Automatización de ACL: `pyleases.sh` reconstruye `pydhcpd.conf` desde listas de MAC |
+```
+/etc/pydhcp/core/pydhcpd.leases                  # Active leases database
+/run/pydhcp/pydhcpd.pid                          # PID file, written by the daemon
+                                                 # (systemd creates the directory)
+/etc/bak/pydhcp/pybk_<TIMESTAMP>.zip             # Full project backup written by tools/pybk.sh, up to 3 kept
+/etc/pydhcp/core/pydhcpd.conf.webmin.bak         # Rollback copy written by the Webmin module (pywebmin.sh) on each save, 1 kept
+/etc/webmin/pydhcp/.csrf_token                   # CSRF secret for the Webmin module (pywebmin.sh), mode 0600
+```
 
 ## ORIGINAL PROJECT
 
 ---
 
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      <p>Part of <strong>PyDHCP</strong> reimplements functions from ISC DHCP. This open-source server no longer receives support or updates (EOL/EOS).</p>
-      <p>We extend our special thanks to the developers who created this remarkable tool and devoted their time to building it. Without this foundation, the development of PyDHCP would not have been possible.</p>
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      <p>Una parte de <strong>PyDHCP</strong> reimplementa funciones de ISC DHCP. Este servidor de código abierto ya no recibe soporte ni actualizaciones (EOL/EOS).</p>
-      <p>Agradecemos especialmente a los programadores que crearon esta magnífica herramienta y dedicaron su tiempo a desarrollarla. Sin esta base, el desarrollo de PyDHCP no habría sido posible.</p>
-    </td>
-  </tr>
-</table>
+| Description | Descripción |
+|---|---|
+| Part of **PyDHCP** reimplements functions from ISC DHCP. This open-source server no longer receives support or updates (EOL/EOS).<br><br>We extend our special thanks to the developers who created this remarkable tool and devoted their time to building it. Without this foundation, the development of PyDHCP would not have been possible. | Una parte de **PyDHCP** reimplementa funciones de ISC DHCP. Este servidor de código abierto ya no recibe soporte ni actualizaciones (EOL/EOS).<br><br>Agradecemos especialmente a los programadores que crearon esta magnífica herramienta y dedicaron su tiempo a desarrollarla. Sin esta base, el desarrollo de PyDHCP no habría sido posible. |
 
 | Project | Version | EOL Date |
 | :-----: | :-----: | :------: |
