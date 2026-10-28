@@ -153,7 +153,7 @@ module_conf_dir="/etc/webmin/$module_name"
 # ------------------------------------------------------------------------------
 
 install_module() {
-    log "pywebmin start..."
+    log "EVENT: pywebmin start..."
     log "INFO: installing PyDHCP Webmin module"
 
     log "INFO: creating PyDHCP module structure"
@@ -819,7 +819,7 @@ ICONEOF
 }
 
 uninstall_module() {
-    log "pywebmin start..."
+    log "EVENT: pywebmin start..."
     log "INFO: uninstalling PyDHCP Webmin module"
 
     if [ ! -d "$module_dir" ]; then
@@ -878,12 +878,12 @@ main() {
         case "$1" in
             --install)
                 install_module
-                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
+                log "EVENT: pywebmin done"
                 exit 0
                 ;;
             --uninstall)
                 uninstall_module
-                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
+                log "EVENT: pywebmin done"
                 exit 0
                 ;;
             *)
@@ -903,16 +903,16 @@ main() {
         case $menu_option in
             1)
                 install_module
-                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
+                log "EVENT: pywebmin done"
                 exit 0
                 ;;
             2)
                 uninstall_module
-                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
+                log "EVENT: pywebmin done"
                 exit 0
                 ;;
             3)
-                log "pywebmin done at: $(date '+%Y-%m-%d %H:%M:%S')"
+                log "EVENT: pywebmin done"
                 exit 0
                 ;;
             *)

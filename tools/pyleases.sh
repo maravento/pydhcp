@@ -68,7 +68,7 @@ script_lock="/var/lock/$(basename "$0" .sh).lock"
 exec 200>"$script_lock"
 if ! flock -w 10 200; then
     log "INFO: another run in progress -skip"
-    log "pyleases done at: $(date '+%Y-%m-%d %H:%M:%S')"
+    log "EVENT: pyleases done"
     exit 0
 fi
 
@@ -176,7 +176,7 @@ acl_prepare() {
         # Checked before the redirection: noclobber only protects regular
         # files, and opening a FIFO for writing blocks until a reader shows up.
         if [ -L "$acl_file" ] || { [ -e "$acl_file" ] && [ ! -f "$acl_file" ]; }; then
-            log "ERROR: $acl_file is not a regular file -abort"
+            log "ERROR: $(basename "$acl_file") is not a regular file -abort"
             exit 1
         fi
         # noclobber makes the redirection fail when the file already exists,
@@ -191,7 +191,7 @@ acl_prepare() {
         elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
             acl_fix_perms "$acl_file" "$file_mode"
         else
-            log "ERROR: $acl_file is not a regular file -abort"
+            log "ERROR: $(basename "$acl_file") is not a regular file -abort"
             exit 1
         fi
     done
@@ -207,7 +207,7 @@ acl_fix_perms() {
     [[ "$cur_mode" == "$want_mode" && "$cur_owner" == "root:root" ]] && return 0
     if ! { chmod "$want_mode" -- "$acl_path" \
         && chown root:root -- "$acl_path"; }; then
-        log "ERROR: cannot fix $acl_path perms -abort"
+        log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
     log "INFO: $acl_path perms fixed -fixed"
@@ -597,7 +597,7 @@ fi
 # MAIN
 # ------------------------------------------------------------------------------
 
-log "pyleases start..."
+log "EVENT: pyleases start..."
 
 verify_dhcp_service
 verify_dhcp_files
@@ -925,4 +925,4 @@ log "INFO: unlimited=$(count_active "$ACL_MAC_UNLIMITED")"
 # END
 # ------------------------------------------------------------------------------
 
-log "pyleases done at: $(date '+%Y-%m-%d %H:%M:%S')"
+log "EVENT: pyleases done"

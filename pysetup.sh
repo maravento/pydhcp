@@ -74,8 +74,8 @@ done
 # ------------------------------------------------------------------------------
 
 # validation -- one variable per thing validated; use directly with =~
-UH_OCT='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
-UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
+UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
+UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
 
@@ -110,6 +110,363 @@ abort() { err "$*"; exit 1; }
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
+# UPDATE CHECKS
+update_error() {
+    if declare -F err >/dev/null; then
+        err "$* -abort"
+    else
+        log "ERROR: $* -abort"
+    fi
+    exit 1
+}
+
+update_reset() {
+    update_cron_file="$1"
+    update_files=()
+    update_jobs=()
+    update_services=()
+    update_stopped_services=()
+    update_daemons=()
+    update_copying=0
+    update_cron_paused=0
+    update_cron_existed=0
+    update_cron_already_paused=0
+}
+
+update_file() {
+    update_files+=("$1" "$2" "$3" "$4")
+    case "$2" in *.sh|*.py|*.pl) update_jobs+=("$2") ;; esac
+}
+
+update_target() {
+    update_files+=("" "$1" "${2:-644}" "${3:-root:root}")
+}
+
+update_preflight() {
+    command -v python3 >/dev/null 2>&1 || update_error "python3 is required for update checks"
+    local check_message
+    if check_message=$(python3 - "${update_files[@]}" <<'UPDATE_PY'
+import array, errno, fcntl, os, stat, sys, tempfile
+items = [sys.argv[i:i + 4] for i in range(1, len(sys.argv), 4)]
+space, probes = {}, set()
+def fail(message):
+    print(message)
+    raise SystemExit(1)
+def flags(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        try:
+            value = array.array('L', [0])
+            try:
+                fcntl.ioctl(fd, 0x80086601, value, True)
+            except OSError as exc:
+                if exc.errno not in (errno.ENOTTY, errno.EOPNOTSUPP, errno.EINVAL):
+                    raise
+            else:
+                if value[0] & 0x30:
+                    protection = []
+                    if value[0] & 0x10:
+                        protection.append('immutable')
+                    if value[0] & 0x20:
+                        protection.append('append-only')
+                    fail(os.path.basename(path) + ' is ' + ' and '.join(protection))
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        fail(exc.strerror.lower() + ': ' + os.path.basename(path))
+for source, target, mode, owner in items:
+    if source:
+        try:
+            st = os.lstat(source)
+            if not stat.S_ISREG(st.st_mode):
+                fail('source is not a file: ' + os.path.basename(source))
+            with open(source, 'rb') as stream:
+                stream.read(1)
+        except OSError as exc:
+            fail('cannot read source: ' + os.path.basename(source))
+for source, target, mode, owner in items:
+    target = os.path.abspath(target)
+    directory = mode.startswith('d')
+    try:
+        parent = target if directory else os.path.dirname(target)
+        if os.path.lexists(target):
+            st = os.lstat(target)
+            if (directory and not stat.S_ISDIR(st.st_mode)) or (not directory and not stat.S_ISREG(st.st_mode)):
+                fail(('dst is not a folder: ' if directory else 'dst is not a file: ') + os.path.basename(target))
+            flags(target)
+            if not directory:
+                fd = os.open(target, os.O_WRONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(fd)
+        while not os.path.exists(parent):
+            if os.path.lexists(parent):
+                fail('folder is a symbolic link: ' + parent)
+            parent = os.path.dirname(parent)
+        if not os.path.isdir(parent):
+            fail('not a folder: ' + parent)
+        current = parent
+        while current != '/':
+            if os.path.islink(current):
+                fail('folder is a symbolic link: ' + current)
+            flags(current)
+            current = os.path.dirname(current)
+        fs = os.statvfs(parent)
+        if fs.f_flag & os.ST_RDONLY:
+            fail('filesystem is read-only: ' + parent)
+        if parent not in probes:
+            fd, probe = tempfile.mkstemp(prefix='update-check-', dir=parent)
+            try:
+                os.write(fd, b'update check\n')
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+                os.unlink(probe)
+            probes.add(parent)
+        device = os.stat(parent).st_dev
+        required = os.stat(source).st_size if source else 4096
+        needed, available, label = space.get(device, (0, fs.f_bavail * fs.f_frsize, parent))
+        space[device] = (needed + required + 4096, available, label)
+        if fs.f_favail == 0:
+            fail('no free inodes for dst: ' + os.path.basename(target))
+    except OSError as exc:
+        fail('cannot write dst: ' + os.path.basename(target))
+for needed, available, label in space.values():
+    if available < needed:
+        fail('not enough space to update: ' + label)
+UPDATE_PY
+    ); then
+        :
+    else
+        update_error "$check_message"
+    fi
+}
+
+update_backup() {
+    [ -f "$1" ] && [ -r "$1" ] || update_error "backup script not readable: $(basename "$1")"
+    bash "$1" || update_error "backup failed: $(basename "$1")"
+}
+
+update_begin() {
+    export UPDATE_CRON_OWNER="$$"
+    trap 'update_cleanup "$?"' EXIT
+    local disabled="${update_cron_file}.update-disabled"
+    [ ! -L "${update_cron_file}.lock" ] || update_error "invalid cron lock: $update_cron_file"
+    (umask 077; : >> "${update_cron_file}.lock") || update_error "cannot open cron lock: $update_cron_file"
+    exec 203>"${update_cron_file}.lock" || update_error "cannot open cron lock: $update_cron_file"
+    flock -n 203 || update_error "cron file is being changed: $(basename "$update_cron_file")"
+    if [ -e "$disabled" ] || [ -L "$disabled" ]; then
+        [ -f "$disabled" ] && [ ! -L "$disabled" ] || update_error "invalid paused cron: $(basename "$disabled")"
+        [ ! -e "$update_cron_file" ] || update_error "both active and paused cron exist: $(basename "$update_cron_file")"
+        update_cron_already_paused=1
+        update_cron_paused=1
+    elif [ -e "$update_cron_file" ]; then
+        mv -T -- "$update_cron_file" "$disabled" || update_error "cannot pause cron: $update_cron_file"
+        update_cron_existed=1
+        update_cron_paused=1
+    else
+        (umask 077; set -C; : > "$disabled") || update_error "cannot pause cron: $update_cron_file"
+        update_cron_paused=1
+    fi
+    exec 203>&-
+}
+
+update_pids() {
+    python3 - "$1" <<'UPDATE_PIDS'
+import os, sys
+wanted = os.path.realpath(sys.argv[1])
+for entry in os.scandir('/proc'):
+    if not entry.name.isdigit() or int(entry.name) == os.getpid():
+        continue
+    try:
+        with open(entry.path + '/cmdline', 'rb') as stream:
+            args = [os.fsdecode(value) for value in stream.read().split(b'\0') if value]
+        if args and any(os.path.realpath(value) == wanted for value in args if value.startswith('/')):
+            print(entry.name)
+    except (OSError, ValueError):
+        continue
+UPDATE_PIDS
+}
+
+update_wait() {
+    local script="$1" pids attempt
+    for attempt in {1..30}; do
+        pids=$(update_pids "$script") || update_error "cannot inspect processes: $(basename "$script")"
+        [ -z "$pids" ] && return 0
+        sleep 1
+    done
+    update_error "process still running: $(basename "$script")"
+}
+
+update_stop_daemon() {
+    local script="$1" pids
+    pids=$(update_pids "$script") || update_error "cannot inspect processes: $script"
+    if [ -n "$pids" ]; then
+        update_daemons+=("$script")
+        bash "$script" --stop || update_error "cannot stop daemon: $script"
+        update_wait "$script"
+    fi
+}
+
+update_stop_service() {
+    local unit="$1" state load_state
+    load_state=$(systemctl show -p LoadState --value "$unit") || update_error "cannot inspect service: $unit"
+    [ "$load_state" != not-found ] || return 0
+    state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect service: $unit"
+    case "$state" in
+        active|reloading|activating|deactivating) update_services+=("$unit") ;;
+        inactive|failed) ;;
+        *) update_error "unexpected service state: $unit ($state)" ;;
+    esac
+    update_stopped_services+=("$unit")
+    systemctl stop "$unit" || update_error "cannot stop service: $unit"
+    state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect stopped: $unit"
+    [ "$state" = inactive ] || {
+        log "ERROR: $unit state: $state"
+        update_error "$unit did not stop"
+    }
+}
+
+update_wait_jobs() {
+    local script unit state
+    for script in "${update_jobs[@]}"; do
+        update_wait "$script"
+    done
+    for unit in "${update_stopped_services[@]}"; do
+        state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect stopped: $unit"
+        [ "$state" = inactive ] || update_error "service restarted in update: $unit"
+    done
+}
+
+update_apply() {
+    update_preflight
+    update_copying=1
+    local i source target mode owner
+    for ((i=0; i<${#update_files[@]}; i+=4)); do
+        source="${update_files[i]}"
+        target="${update_files[i+1]}"
+        mode="${update_files[i+2]}"
+        owner="${update_files[i+3]}"
+        if [[ "$mode" == d* ]]; then
+            install -d -m "${mode#d}" -o "${owner%:*}" -g "${owner#*:}" -- "$target" \
+                || update_error "cannot prepare directory: $target"
+            continue
+        fi
+        if [ -z "$source" ]; then
+            if [ ! -d "$(dirname "$target")" ]; then
+                install -d -m 755 -o root -g root -- "$(dirname "$target")" \
+                    || update_error "cannot prepare destination parent: $(basename "$target")"
+            fi
+            continue
+        fi
+        install -D -m "$mode" -o "${owner%:*}" -g "${owner#*:}" -- "$source" "$target" \
+            || update_error "cannot replace file: $(basename "$target")"
+        cmp -s -- "$source" "$target" || {
+            local compared_file
+            compared_file=$(basename "$target")
+            if (( ${#compared_file} <= 19 )); then
+                update_error "src and dst do not match: $compared_file"
+            fi
+            log "ERROR: src and dst: $compared_file"
+            update_error "src and dst do not match"
+        }
+        info "updated $(basename "$target")"
+    done
+}
+
+update_resume() {
+    local unit script state
+    for unit in "${update_services[@]}"; do
+        systemctl start "$unit" || update_error "cannot start service: $unit"
+        state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect started: $unit"
+        [ "$state" = active ] || {
+            log "ERROR: $unit state: $state"
+            update_error "$unit did not start"
+        }
+    done
+    for script in "${update_daemons[@]}"; do
+        bash "$script" --start || update_error "cannot start daemon: $script"
+        [ -n "$(update_pids "$script")" ] || update_error "daemon did not start: $script"
+    done
+}
+
+update_finish() {
+    update_resume
+    rm -f -- "${update_cron_file}.update-disabled" || update_error "cannot finish cron update: $(basename "$update_cron_file")"
+    trap - EXIT
+    unset UPDATE_CRON_OWNER
+}
+
+update_cleanup() {
+    local status="$1" unit script
+    trap - EXIT
+    if (( update_copying == 0 )); then
+        for unit in "${update_services[@]}"; do
+            systemctl start "$unit" || warn "cannot resume $unit -alert"
+        done
+        for script in "${update_daemons[@]}"; do
+            bash "$script" --start || warn "cannot resume $(basename "$script") -alert"
+        done
+        if (( update_cron_paused && ! update_cron_already_paused )); then
+            if (( update_cron_existed )); then
+                mv -T -- "${update_cron_file}.update-disabled" "$update_cron_file" \
+                    || warn "cannot restore paused cron -alert"
+            else
+                rm -f -- "${update_cron_file}.update-disabled" || warn "cannot clear paused cron -alert"
+            fi
+        fi
+    else
+        if rm -f -- "$update_cron_file"; then
+            warn "update failed; cron remains disabled -alert"
+        else
+            warn "cannot keep project cron paused -alert"
+        fi
+        for unit in "${update_services[@]}"; do
+            systemctl stop "$unit" || warn "cannot keep $unit stopped -alert"
+        done
+        for script in "${update_daemons[@]}"; do
+            bash "$script" --stop || warn "cannot keep $(basename "$script") stopped -alert"
+        done
+    fi
+    (( status != 0 )) || status=1
+    exit "$status"
+}
+
+# CRON FILE
+# Publish the complete project schedule after preparing it successfully.
+cron_d_write() (
+    local cron_file="/etc/cron.d/pydhcp"
+    local cron_tmp
+
+    [ "$#" -gt 0 ] || return 1
+    [ ! -L "${cron_file}.lock" ] || return 1
+    (umask 077; : >> "${cron_file}.lock") || return 1
+    exec 201>"${cron_file}.lock" || return 1
+    flock -x 201 || return 1
+    if [ -e "${cron_file}.update-disabled" ] && [ "${UPDATE_CRON_OWNER:-}" != "$$" ]; then
+        return 1
+    fi
+    [ ! -L "$cron_file" ] || return 1
+    [ ! -e "$cron_file" ] || [ -f "$cron_file" ] || return 1
+
+    cron_tmp=$(mktemp "${cron_file}.XXXXXX") || return 1
+    trap 'rm -f -- "$cron_tmp"' EXIT
+    {
+        printf '%s\n' '# Managed by the project installer; manual changes are replaced.'
+        printf '%s\n' 'SHELL=/bin/bash' 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+        printf '%s\n' "$@"
+    } > "$cron_tmp" || return 1
+    chmod 644 "$cron_tmp" && chown root:root "$cron_tmp" || return 1
+    mv -fT -- "$cron_tmp" "$cron_file" || return 1
+)
+
+# PROJECT SCHEDULE
+# Publish all tasks defined by this project
+register_project_cron() {
+    cron_d_write "@monthly root $install_dir/tools/pybk.sh"
+}
+
 # ACL PREPARATION
 # Canonical block -- copied byte for byte into every script that creates a
 # directory or a list under /etc/acl. Prepare /etc/acl first, then only the
@@ -138,7 +495,7 @@ acl_prepare() {
         # Checked before the redirection: noclobber only protects regular
         # files, and opening a FIFO for writing blocks until a reader shows up.
         if [ -L "$acl_file" ] || { [ -e "$acl_file" ] && [ ! -f "$acl_file" ]; }; then
-            log "ERROR: $acl_file is not a regular file -abort"
+            log "ERROR: $(basename "$acl_file") is not a regular file -abort"
             exit 1
         fi
         # noclobber makes the redirection fail when the file already exists,
@@ -153,7 +510,7 @@ acl_prepare() {
         elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
             acl_fix_perms "$acl_file" "$file_mode"
         else
-            log "ERROR: $acl_file is not a regular file -abort"
+            log "ERROR: $(basename "$acl_file") is not a regular file -abort"
             exit 1
         fi
     done
@@ -169,7 +526,7 @@ acl_fix_perms() {
     [[ "$cur_mode" == "$want_mode" && "$cur_owner" == "root:root" ]] && return 0
     if ! { chmod "$want_mode" -- "$acl_path" \
         && chown root:root -- "$acl_path"; }; then
-        log "ERROR: cannot fix $acl_path perms -abort"
+        log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
     log "INFO: $acl_path perms fixed -fixed"
@@ -198,37 +555,6 @@ list_interfaces() {
         iface_state=$(ip -br link show "${iface_list[$iface_index]}" | awk '{print $2}')
         iface_ip=$(ip -4 -o addr show dev "${iface_list[$iface_index]}" 2>/dev/null | awk '{print $4}' | paste -sd' ')
         printf " [%d] %s (%s, %s)\n" "$((iface_index+1))" "${iface_list[$iface_index]}" "$iface_state" "${iface_ip:-no IPv4}"
-    done
-}
-
-ask_netmask() {
-    local prompt_text="$1" default_value="$2" target_var="$3" user_answer
-    while true; do
-        read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
-        user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_NETMASK ]]; then
-            printf -v "$target_var" '%s' "$user_answer"
-            break
-        fi
-        info "'$user_answer' is not a valid netmask -retry"
-    done
-}
-
-# ref_start (optional): rejects an octet <= this value, for pool-end prompts.
-ask_octet() {
-    local prompt_text="$1" default_value="$2" target_var="$3" ref_start="${4:-}" user_answer
-    while true; do
-        read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
-        user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_OCT ]] && (( user_answer >= 1 && user_answer <= 254 )); then
-            if [[ -n "$ref_start" ]] && (( user_answer <= ref_start )); then
-                info "Pool end must be greater than pool start (${ref_start}) -retry"
-                continue
-            fi
-            printf -v "$target_var" '%s' "$user_answer"
-            break
-        fi
-        info "Invalid value, enter a number between 1 and 254 -retry"
     done
 }
 
@@ -324,6 +650,102 @@ check_port() {
     fi
 }
 
+# LAN SELECTION
+# Select an existing interface and one of its configured IPv4 addresses
+choose_lan_interface() {
+    local preset_iface="${1:-}" excluded_iface="${2:-}"
+    local iface_name iface_choice iface_index iface_addrs
+    local -a lan_candidates=()
+    if [ -n "$preset_iface" ]; then
+        ip link show dev "$preset_iface" >/dev/null 2>&1 || {
+            log "ERROR: LAN interface '$preset_iface' not found -abort"
+            exit 1
+        }
+        [ "$preset_iface" != "$excluded_iface" ] || {
+            log "ERROR: LAN and WAN must differ -abort"
+            exit 1
+        }
+        lan_iface_answer="$preset_iface"
+        return 0
+    fi
+    while IFS= read -r iface_name; do
+        [ "$iface_name" = "$excluded_iface" ] && continue
+        lan_candidates+=("$iface_name")
+    done < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
+    (( ${#lan_candidates[@]} > 0 )) || {
+        log "ERROR: no LAN interface available -abort"
+        exit 1
+    }
+    if (( ${#lan_candidates[@]} == 1 )); then
+        lan_iface_answer="${lan_candidates[0]}"
+        return 0
+    fi
+    echo "Available LAN interfaces:"
+    for iface_index in "${!lan_candidates[@]}"; do
+        iface_name="${lan_candidates[$iface_index]}"
+        iface_addrs=$(ip -4 -o addr show dev "$iface_name" scope global | awk '{print $4}' | paste -sd' ')
+        printf ' [%d] %s (%s)\n' "$((iface_index + 1))" "$iface_name" "${iface_addrs:-no IPv4}"
+    done
+    while true; do
+        read -r -p "Select LAN interface number: " iface_choice || {
+            log "ERROR: cannot read LAN interface selection -abort"
+            exit 1
+        }
+        if [[ "$iface_choice" =~ $UH_UINT ]] && [ "${#iface_choice}" -le 5 ] \
+           && [ "$iface_choice" -ge 1 ] && [ "$iface_choice" -le "${#lan_candidates[@]}" ]; then
+            lan_iface_answer="${lan_candidates[$((iface_choice - 1))]}"
+            return 0
+        fi
+        log "INFO: invalid LAN interface selection -retry"
+    done
+}
+
+read_lan_ipv4() {
+    local selected_iface="$1" preset_ip="${2:-}" ipv4_choice ipv4_index candidate_cidr
+    local -a lan_addresses=()
+    mapfile -t lan_addresses < <(ip -4 -o addr show dev "$selected_iface" scope global | awk '{print $4}')
+    (( ${#lan_addresses[@]} > 0 )) || {
+        log "ERROR: LAN '$selected_iface' has no IPv4 address -abort"
+        exit 1
+    }
+    for candidate_cidr in "${lan_addresses[@]}"; do
+        [[ "$candidate_cidr" =~ $UH_CIDR ]] || {
+            log "ERROR: LAN '$selected_iface' has invalid IPv4/prefix -abort"
+            exit 1
+        }
+    done
+    if [ -n "$preset_ip" ]; then
+        for candidate_cidr in "${lan_addresses[@]}"; do
+            if [ "${candidate_cidr%/*}" = "$preset_ip" ]; then
+                lan_cidr_answer="$candidate_cidr"
+                return 0
+            fi
+        done
+        log "ERROR: requested IPv4 is not configured on LAN -abort"
+        exit 1
+    fi
+    if (( ${#lan_addresses[@]} == 1 )); then
+        lan_cidr_answer="${lan_addresses[0]}"
+        return 0
+    fi
+    echo "IPv4 addresses on LAN '$selected_iface':"
+    for ipv4_index in "${!lan_addresses[@]}"; do
+        printf ' [%d] %s\n' "$((ipv4_index + 1))" "${lan_addresses[$ipv4_index]}"
+    done
+    while true; do
+        read -r -p "Select LAN IPv4 number: " ipv4_choice || {
+            log "ERROR: cannot read LAN IPv4 selection -abort"
+            exit 1
+        }
+        if [[ "$ipv4_choice" =~ $UH_UINT ]] && [ "${#ipv4_choice}" -le 5 ] \
+           && [ "$ipv4_choice" -ge 1 ] && [ "$ipv4_choice" -le "${#lan_addresses[@]}" ]; then
+            lan_cidr_answer="${lan_addresses[$((ipv4_choice - 1))]}"
+            return 0
+        fi
+        log "INFO: invalid LAN IPv4 selection -retry"
+    done
+}
+
 # ------------------------------------------------------------------------------
 # REMOVE
 # ------------------------------------------------------------------------------
@@ -339,7 +761,7 @@ do_uninstall() {
     confirm "Proceed with uninstall? This cannot be undone." "n" \
         || {
             info "Aborted by user"
-            log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
+            log "EVENT: pysetup done"
             exit 0
         }
 
@@ -350,7 +772,7 @@ do_uninstall() {
     read -rp " > " confirm_answer
     if [[ "$confirm_answer" != "YES" ]]; then
         info "Aborted by user"
-        log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
+        log "EVENT: pysetup done"
         exit 0
     fi
     echo ""
@@ -365,11 +787,11 @@ do_uninstall() {
         abort "pybk.sh: missing or not executable -abort"
     fi
 
-    log "Stopping and disabling pydhcpd service..."
+    log "EVENT: Stopping and disabling pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
     systemctl disable pydhcpd 2>/dev/null || true
 
-    log "Removing system files..."
+    log "EVENT: Removing system files..."
     rm -f "$service_file"
     rm -f "$init_file"
     rm -f /etc/logrotate.d/pydhcp && info "Removed /etc/logrotate.d/pydhcp"
@@ -377,12 +799,13 @@ do_uninstall() {
     rm -f /etc/logrotate.d/pydhcpd && info "Removed /etc/logrotate.d/pydhcpd"
     rm -f /var/log/pydhcpd.log
 
+    rm -f /etc/cron.d/pydhcp /etc/cron.d/pydhcp.update-disabled
     if [ -x "$install_dir/tools/pybk.sh" ]; then
         "$install_dir/tools/pybk.sh" --uninstall || true
     fi
 
     if [ -x "$install_dir/tools/pywebmin.sh" ]; then
-        log "Removing Webmin module ..."
+        log "EVENT: Removing Webmin module ..."
         "$install_dir/tools/pywebmin.sh" --uninstall || true
     fi
 
@@ -392,10 +815,10 @@ do_uninstall() {
     # means removing the project. The ACL lists are not here: they live under
     # /etc/acl, which no installer ever removes. tools/pybk.sh is the way to
     # keep a copy of the config, and it writes to /etc/bak.
-    log "Removing $install_dir ..."
+    log "EVENT: Removing $install_dir ..."
     rm -rf "$install_dir"
 
-    log "Removing system user and group $daemon_owner ..."
+    log "EVENT: Removing system user and group $daemon_owner ..."
     userdel "$daemon_owner" 2>/dev/null || warn "cannot remove user $daemon_owner -alert"
     groupdel "$daemon_owner" 2>/dev/null || true
 
@@ -410,86 +833,37 @@ do_uninstall() {
 # ------------------------------------------------------------------------------
 
 do_update() {
-    if [ ! -d "$install_dir" ]; then
-        { err "no installation found in $install_dir"; abort "use --install to install first -abort"; }
-    fi
-    if [ ! -f "$install_dir/pydhcp.env" ]; then
-        err "pydhcp.env not found, pre-dates config persistence"
-        abort "run 'pysetup.sh --uninstall' then reinstall -abort"
-    fi
-    if [ ! -d "$install_dir/tools" ]; then
-        err "$install_dir/tools not found (unexpected state)"
-        abort "run 'pysetup.sh --uninstall' then reinstall -abort"
-    fi
-
-    if [ -x "$install_dir/tools/pybk.sh" ]; then
-        if "$install_dir/tools/pybk.sh"; then
-            info "backup taken with pybk.sh"
-        else
-            abort "pybk.sh: backup failed -abort"
-        fi
-    else
-        abort "pybk.sh: missing or not executable -abort"
-    fi
-
-    systemctl stop pydhcpd 2>/dev/null || true
-    info "pydhcpd stopped for update"
-
-    verify_source "$script_dir/core/pydhcpd.py"
-    cp "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py"
-    chown root:root "$core_dir/pydhcpd.py"
-    chmod 755 "$core_dir/pydhcpd.py"
-    info "updated core/pydhcpd.py"
-
-    verify_source "$script_dir/service/pydhcpd.service"
-    cp "$script_dir/service/pydhcpd.service" "$service_file"
-    chown root:root "$service_file"
-    chmod 644 "$service_file"
-    info "updated pydhcpd.service"
-
-    verify_source "$script_dir/init.d/pydhcpd"
-    cp "$script_dir/init.d/pydhcpd" "$init_file"
-    chown root:root "$init_file"
-    chmod 755 "$init_file"
-    info "updated init.d/pydhcpd"
-
-    verify_source "$script_dir/tools/pydhcpenv.sh"
-    install -m 644 -o root -g root "$script_dir/tools/pydhcpenv.sh" "$install_dir/tools/pydhcpenv.sh"
-    info "updated tools/pydhcpenv.sh"
-
-    if [ -f "$script_dir/tools/pyleases.sh" ]; then
-        verify_source "$script_dir/tools/pyleases.sh"
-        cp "$script_dir/tools/pyleases.sh" "$install_dir/tools/pyleases.sh"
-        chown root:root "$install_dir/tools/pyleases.sh"
-        chmod 755 "$install_dir/tools/pyleases.sh"
-        info "updated tools/pyleases.sh"
-    fi
-
-    if [ -f "$script_dir/tools/pybk.sh" ]; then
-        verify_source "$script_dir/tools/pybk.sh"
-        cp "$script_dir/tools/pybk.sh" "$install_dir/tools/pybk.sh"
-        chown root:root "$install_dir/tools/pybk.sh"
-        chmod 755 "$install_dir/tools/pybk.sh"
-        info "updated tools/pybk.sh"
-    fi
-
-    if [ -f "$script_dir/tools/pywebmin.sh" ]; then
-        verify_source "$script_dir/tools/pywebmin.sh"
-        cp "$script_dir/tools/pywebmin.sh" "$install_dir/tools/pywebmin.sh"
-        chown root:root "$install_dir/tools/pywebmin.sh"
-        chmod 755 "$install_dir/tools/pywebmin.sh"
-        info "updated tools/pywebmin.sh"
-    fi
-
+    [ -d "$install_dir" ] && [ -f "$install_dir/pydhcp.env" ] \
+        || abort "pydhcp is not installed -abort"
+    update_reset /etc/cron.d/pydhcp
+    local file
+    for file in core/pydhcpd.py service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh tools/pyleases.sh tools/pybk.sh tools/pywebmin.sh; do
+        verify_source "$script_dir/$file"
+    done
+    update_file "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py" 755 root:root
+    update_file "$script_dir/service/pydhcpd.service" "$service_file" 644 root:root
+    update_file "$script_dir/init.d/pydhcpd" "$init_file" 755 root:root
+    for file in pydhcpenv.sh pyleases.sh pybk.sh pywebmin.sh; do
+        local mode=755
+        [ "$file" != pydhcpenv.sh ] || mode=644
+        update_file "$script_dir/tools/$file" "$install_dir/tools/$file" "$mode" root:root
+    done
+    update_target /etc/logrotate.d/pydhcp
+    update_target "$pydhcp_log_file" 640
+    update_target "$update_cron_file"
+    update_target "${update_cron_file}.lock" 600
+    update_preflight
+    update_backup "$install_dir/tools/pybk.sh"
+    update_begin
+    update_stop_service pydhcpd
+    update_wait_jobs
+    update_apply
     if [ -f /var/log/pydhcpd.log ]; then
-        cat /var/log/pydhcpd.log >> "$pydhcp_log_file"
-        rm -f /var/log/pydhcpd.log
+        cat /var/log/pydhcpd.log >> "$pydhcp_log_file" || update_error "cannot consolidate pydhcp log"
+        rm -f /var/log/pydhcpd.log || update_error "cannot remove old pydhcp log"
     fi
-    rm -f /etc/logrotate.d/pydhcpd
-    [ -f "$pydhcp_log_file" ] || touch "$pydhcp_log_file"
-    chown "$daemon_owner":"$daemon_owner" "$pydhcp_log_file"
-    chmod 640 "$pydhcp_log_file"
-    cat > /etc/logrotate.d/pydhcp << 'EOF'
+    install -d -m 755 -o root -g root /etc/logrotate.d || update_error "cannot prepare logrotate directory"
+    if ! cat > /etc/logrotate.d/pydhcp <<'PY_ROTATE'
 /var/log/pydhcp.log {
     daily
     rotate 7
@@ -502,21 +876,18 @@ do_update() {
         systemctl reload pydhcpd > /dev/null 2>&1 || true
     endscript
 }
-EOF
-    chmod 644 /etc/logrotate.d/pydhcp
-    chown root:root /etc/logrotate.d/pydhcp
-    info "updated /etc/logrotate.d/pydhcp"
-    info "logs consolidated into $pydhcp_log_file"
-
-    systemctl daemon-reload
-    if ! systemctl start pydhcpd; then
-        { err "pydhcpd failed to start after update"; abort "check it with: journalctl -u pydhcpd -n 50 -abort"; }
+PY_ROTATE
+    then
+        update_error "cannot write pydhcp logrotate"
     fi
-
-    info "pydhcpd updated. Backups in /etc/bak"
-    info "$core_dir/pydhcpd.conf unchanged"
-    info "$install_dir/pydhcp.env unchanged"
-    info "$core_dir/pydhcpd.leases unchanged"
+    chown root:root /etc/logrotate.d/pydhcp && chmod 644 /etc/logrotate.d/pydhcp \
+        || update_error "cannot set pydhcp logrotate permissions"
+    touch "$pydhcp_log_file" && chown "$daemon_owner:$daemon_owner" "$pydhcp_log_file" && chmod 640 "$pydhcp_log_file" \
+        || update_error "cannot set pydhcp log permissions"
+    systemctl daemon-reload || update_error "cannot reload systemd configuration"
+    register_project_cron || update_error "cannot regenerate pydhcp cron"
+    update_finish
+    info "pydhcpd updated"
 }
 
 # ------------------------------------------------------------------------------
@@ -541,98 +912,76 @@ do_install() {
         abort "no network interfaces found -abort"
     fi
 
-    # LAN interface -- a wrapper installer that already resolved it (e.g. uhm)
-    # can supply it directly, so pydhcp does not ask again for the same value.
-    if [ -n "${PYDHCP_LAN_IFACE:-}" ]; then
-        ip link show "$PYDHCP_LAN_IFACE" &>/dev/null \
-            || abort "PYDHCP_LAN_IFACE='$PYDHCP_LAN_IFACE' not found -abort"
-        iface_selected="$PYDHCP_LAN_IFACE"
-        info "Using interface: $iface_selected (from caller)"
-    else
-        list_interfaces
-        echo ""
-        ask_interface_number "Select LAN interface number" "1" iface_choice "${#iface_list[@]}"
-        iface_selected="${iface_list[$((iface_choice-1))]}"
-        info "Using interface: $iface_selected"
-    fi
+    choose_lan_interface "${PYDHCP_LAN_IFACE:-}"
+    iface_selected="$lan_iface_answer"
+    read_lan_ipv4 "$iface_selected" "${PYDHCP_SERVER_IP:-}"
+    server_ip_answer="${lan_cidr_answer%/*}"
+    mapfile -t network_values < <(python3 -c '
+import ipaddress, sys
+net = ipaddress.IPv4Interface(sys.argv[1]).network
+print(net.netmask)
+print(net.network_address)
+print(net.broadcast_address)
+' "$lan_cidr_answer")
+    [ "${#network_values[@]}" -eq 3 ] || abort "cannot calculate LAN network -abort"
+    netmask_answer="${network_values[0]}"
+    local_subnet="${network_values[1]}"
+    local_broadcast="${network_values[2]}"
+    info "LAN IPv4: $lan_cidr_answer"
 
-    # DHCP server IP -- derived directly from the interface already chosen
-    # above (it was listed with its IP in "Available network interfaces"),
-    # so there's no need to ask for it again.
-    echo ""
-    mapfile -t iface_ips < <(ip -4 -o addr show dev "$iface_selected" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
-    case "${#iface_ips[@]}" in
-        0)
-            abort "interface has no IPv4 address -abort"
-            ;;
-        1)
-            server_ip_answer="${iface_ips[0]}"
-            info "Server IP: $server_ip_answer (from $iface_selected)"
-            ;;
-        *)
-            echo " Interface '$iface_selected' has multiple IPv4 addresses:"
-            select server_ip_answer in "${iface_ips[@]}"; do
-                [ -n "$server_ip_answer" ] && break
-            done
-            info "Server IP: $server_ip_answer"
-            ;;
-    esac
-
-    # Netmask
-    echo ""
-    ask_netmask "Enter netmask" "255.255.255.0" netmask_answer
-    info "Netmask: $netmask_answer"
-
-    # Calculate network values from server_ip_answer and netmask_answer using python3
-    local_subnet=$(python3 -c "
-    import ipaddress, sys
-    local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
-    print(local_network.network_address)
-    " "$server_ip_answer" "$netmask_answer")
-    local_broadcast=$(python3 -c "
-    import ipaddress, sys
-    local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
-    print(local_network.broadcast_address)
-    " "$server_ip_answer" "$netmask_answer")
-    local_net_base=$(echo "$local_subnet" | cut -d. -f1-3)
-    info "Subnet: $local_subnet"
-    info "Network base: $local_net_base"
-    info "Broadcast: $local_broadcast"
-
-    # Pool range
-    echo ""
+    # POOL
+    # Use full addresses and preserve the daemon's pool size and network guards
+    mapfile -t pool_defaults < <(python3 -c '
+import ipaddress, sys
+iface = ipaddress.IPv4Interface(sys.argv[1])
+net = iface.network
+base = int(net.network_address)
+last = int(net.broadcast_address) - 1
+server = int(iface.ip)
+first = base + 1
+if last < first or net.prefixlen >= 31:
+    sys.exit(1)
+start = min(base + 220, last)
+end = min(base + 235, last)
+if start <= server <= end:
+    if server > first:
+        end = server - 1
+        start = max(first, end - 15)
+    else:
+        start = server + 1
+        end = min(last, start + 15)
+if start > end:
+    sys.exit(1)
+print(ipaddress.IPv4Address(start))
+print(ipaddress.IPv4Address(end))
+' "$lan_cidr_answer")
+    [ "${#pool_defaults[@]}" -eq 2 ] || abort "LAN has no usable DHCP pool -abort"
     while true; do
-        ask_octet "Enter pool start (last octet)" "220" pool_start_answer
-        ask_octet "Enter pool end (last octet)" "235" pool_end_answer "$pool_start_answer"
-        if python3 -c "
-    import ipaddress, sys
-    local_network = ipaddress.IPv4Network(f'{sys.argv[1]}/{sys.argv[2]}', strict=False)
-    pool_start = ipaddress.IPv4Address(f'{sys.argv[3]}.{sys.argv[4]}')
-    pool_end = ipaddress.IPv4Address(f'{sys.argv[3]}.{sys.argv[5]}')
-    sys.exit(0 if pool_start in local_network and pool_end in local_network else 1)
-    " "$local_subnet" "$netmask_answer" "$local_net_base" "$pool_start_answer" "$pool_end_answer"; then
+        read -r -p "Enter pool start [${pool_defaults[0]}]: " pool_start_answer \
+            || abort "cannot read pool start -abort"
+        pool_start_answer="${pool_start_answer:-${pool_defaults[0]}}"
+        read -r -p "Enter pool end [${pool_defaults[1]}]: " pool_end_answer \
+            || abort "cannot read pool end -abort"
+        pool_end_answer="${pool_end_answer:-${pool_defaults[1]}}"
+        if ! [[ "$pool_start_answer" =~ $UH_IPV4 ]] || ! [[ "$pool_end_answer" =~ $UH_IPV4 ]]; then
+            info "invalid pool IPv4 address -retry"
+            continue
+        fi
+        if python3 -c '
+import ipaddress, sys
+net = ipaddress.IPv4Interface(sys.argv[1]).network
+server = ipaddress.IPv4Interface(sys.argv[1]).ip
+start, end = map(ipaddress.IPv4Address, sys.argv[2:])
+valid = start in net and end in net and start <= end
+valid = valid and net.network_address < start and end < net.broadcast_address
+valid = valid and not start <= server <= end and int(end) - int(start) < 65536
+sys.exit(0 if valid else 1)
+' "$lan_cidr_answer" "$pool_start_answer" "$pool_end_answer"; then
             break
         fi
-        info "DHCP pool ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"
-        info "DHCP pool is outside the selected subnet -retry"
+        info "invalid pool: subnet, server, order or size -retry"
     done
-    info "Pool range: ${local_net_base}.${pool_start_answer} -> ${local_net_base}.${pool_end_answer}"
-
-    # Guard: server_ip_answer must never fall inside its own pool range -- pydhcpd.py
-    # rejects this at config load, but that only surfaces after this script has
-    # already created the user, directories, and systemd unit. Catching it here,
-    # before any of that, avoids leaving the system half-configured over a
-    # config mistake that could have been caught up front.
-    if python3 -c "
-    import ipaddress, sys
-    server_ip = ipaddress.IPv4Address(sys.argv[1])
-    pool_start = ipaddress.IPv4Address(sys.argv[2])
-    pool_end = ipaddress.IPv4Address(sys.argv[3])
-    print('1' if pool_start <= server_ip <= pool_end else '0')
-    " "$server_ip_answer" "${local_net_base}.${pool_start_answer}" "${local_net_base}.${pool_end_answer}" 2>/dev/null | grep -q '^1$'; then
-        err "DHCP pool ${local_net_base}.${pool_start_answer}-${local_net_base}.${pool_end_answer}"
-        abort "Invalid DHCP pool: SERVER_IP is inside -abort"
-    fi
+    info "Pool range: $pool_start_answer -> $pool_end_answer"
 
     # DNS servers
     echo ""
@@ -750,7 +1099,7 @@ do_install() {
         info "pydhcp.env already exists, not overwritten -skip"
         info "interface not changed, keeping value in pydhcp.env"
     else
-        log "Creating pydhcp.env ..."
+        log "EVENT: Creating pydhcp.env ..."
         cat > "$install_dir/pydhcp.env" <<ENVEOF
 # =============================================================================
 # PYDHCP
@@ -771,8 +1120,8 @@ SERVER_IP=$server_ip_answer
 SERV_SUBNET=$local_subnet
 SERV_BROADCAST=$local_broadcast
 SERV_MASK=$netmask_answer
-SERV_INI_RANGE_BLOCK=${local_net_base}.${pool_start_answer}
-SERV_END_RANGE_BLOCK=${local_net_base}.${pool_end_answer}
+SERV_INI_RANGE_BLOCK=$pool_start_answer
+SERV_END_RANGE_BLOCK=$pool_end_answer
 SERV_DNS=$dns_answer
 
 # ACL
@@ -825,7 +1174,7 @@ ENVEOF
     sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${local_subnet} netmask ${netmask_answer}|" "$conf_tmp"
     sed -i "s|option routers .*;|option routers ${server_ip_answer};|" "$conf_tmp"
     sed -i "s|option broadcast-address .*;|option broadcast-address ${local_broadcast};|" "$conf_tmp"
-    sed -i "s|range [0-9.]* [0-9.]*;|range ${local_net_base}.${pool_start_answer} ${local_net_base}.${pool_end_answer};|" "$conf_tmp"
+    sed -i "s|range [0-9.]* [0-9.]*;|range $pool_start_answer $pool_end_answer;|" "$conf_tmp"
     sed -i "s|option domain-name-servers .*;|option domain-name-servers ${dns_answer};|" "$conf_tmp"
     sed -i "s|^cleanup-interval .*|cleanup-interval ${cleanup_answer};|" "$conf_tmp"
     sed -i "/pool {/,/}/ s|min-lease-time .*;|min-lease-time ${cleanup_answer};|" "$conf_tmp"
@@ -846,7 +1195,7 @@ ENVEOF
 
     # Initialize empty leases file if not present
     if [ ! -f "$core_dir/pydhcpd.leases" ]; then
-        log "Creating empty pydhcpd.leases ..."
+        log "EVENT: Creating empty pydhcpd.leases ..."
         touch "$core_dir/pydhcpd.leases"
         chown "$daemon_owner":"$daemon_owner" "$core_dir/pydhcpd.leases"
         chmod 640 "$core_dir/pydhcpd.leases"
@@ -871,9 +1220,7 @@ ENVEOF
         fi
     done
 
-    if [ -x "$install_dir/tools/pybk.sh" ]; then
-        "$install_dir/tools/pybk.sh" --install || warn "pybk.sh: monthly backup setup failed -alert"
-    fi
+    register_project_cron || abort "cannot write pydhcp cron -abort"
 
     # Deploy systemd service
     verify_source "$script_dir/service/pydhcpd.service"
@@ -915,7 +1262,7 @@ EOF
 
     # Enable and start service
     info "updated /etc/logrotate.d/pydhcp"
-    log "Enabling and starting pydhcpd ..."
+    log "EVENT: Enabling and starting pydhcpd ..."
     systemctl daemon-reload
     systemctl enable --force pydhcpd
     if ! systemctl start pydhcpd; then
@@ -1022,7 +1369,7 @@ USAGE_END
 # ------------------------------------------------------------------------------
 
 # Run the action given on the command line, or fall back to the menu
-log "pysetup start..."
+log "EVENT: pysetup start..."
 
 case "${1:-}" in
     --install) do_install ;;
@@ -1032,10 +1379,10 @@ case "${1:-}" in
     "") show_menu ;;
     -h|--help) usage ;;
     *)
-        err "unknown option $1 -abort"
+        err "invalid option -abort"
         usage
         exit 1
         ;;
 esac
 
-log "pysetup done at: $(date '+%Y-%m-%d %H:%M:%S')"
+log "EVENT: pysetup done"
