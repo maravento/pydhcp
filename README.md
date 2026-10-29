@@ -34,6 +34,8 @@ FILE: README.md
 
 ---
 
+### Compatibility
+
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
@@ -44,6 +46,8 @@ FILE: README.md
     </td>
   </tr>
 </table>
+
+### Software
 
 - Python 3.8+
 - systemd
@@ -381,10 +385,10 @@ sudo tail -f /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      During installation, select LAN from the listed interfaces when several exist. The installer reads its configured IPv4 address and prefix; installation aborts with <code>ERROR: ... -abort</code> if no IPv4 exists. Select an address when several exist. The mask, subnet and broadcast are calculated from that prefix, without asking for a separate mask. Enter the pool as two complete IPv4 addresses. DNS servers, lease cleanup interval and WAN interface are still requested. WAN remains a shared key in <code>pydhcp.env</code> for other projects; the daemon does not consume it. A caller can supply <code>PYDHCP_LAN_IFACE</code>, <code>PYDHCP_WAN_IFACE</code> and <code>PYDHCP_SERVER_IP</code>; the address must exist on the selected LAN. Afterward, <code>pydhcpd.conf</code> can be edited to add static host reservations or other directives. The service must be restarted to apply those changes.
+      Only interfaces with an UP link and global IPv4 are candidates. Installation aborts with none, selects LAN automatically with one, and asks for LAN with several, omitting the others. The installer reads its configured IPv4 address and prefix; installation aborts with <code>ERROR: ... -abort</code> if no IPv4 exists. Select an address when several exist. The mask, subnet and broadcast are calculated from that prefix, without asking for a separate mask. Enter the pool as two complete IPv4 addresses. DNS servers and lease cleanup interval are still requested. The installer only selects LAN; it does not request or store WAN. A caller can supply <code>PYDHCP_LAN_IFACE</code> and <code>PYDHCP_SERVER_IP</code>; the interface must be eligible and the address must exist on that LAN. Afterward, <code>pydhcpd.conf</code> can be edited to add static host reservations or other directives. The service must be restarted to apply those changes.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Durante la instalación, selecciona LAN desde la lista cuando existan varias interfaces. El instalador obtiene su IPv4 y prefijo configurados. Aborta con <code>ERROR: ... -abort</code> si no tiene IPv4. Selecciona una dirección cuando existan varias. Calcula máscara, subred y difusión desde el prefijo, sin preguntar otra máscara. Introduce el pool mediante dos IPv4 completas. Conserva las preguntas de DNS, intervalo de limpieza e interfaz WAN. WAN permanece como clave compartida en <code>pydhcp.env</code> para otros proyectos; el demonio no la consume. Otro instalador puede enviar <code>PYDHCP_LAN_IFACE</code>, <code>PYDHCP_WAN_IFACE</code> y <code>PYDHCP_SERVER_IP</code>. La dirección debe existir en LAN. Después, <code>pydhcpd.conf</code> puede editarse para añadir reservas estáticas u otras directivas. Para aplicar esos cambios, se reinicia el servicio.
+      Solo son candidatas las interfaces con enlace UP e IPv4 global. La instalación aborta sin candidatas, selecciona LAN automáticamente con una y pregunta LAN con varias, omitiendo las demás. El instalador obtiene su IPv4 y prefijo configurados. Aborta con <code>ERROR: ... -abort</code> si no tiene IPv4. Selecciona una dirección cuando existan varias. Calcula máscara, subred y difusión desde el prefijo, sin preguntar otra máscara. Introduce el pool mediante dos IPv4 completas. Conserva las preguntas de DNS e intervalo de limpieza. El instalador solo selecciona LAN; no solicita ni guarda WAN. Otro instalador puede enviar <code>PYDHCP_LAN_IFACE</code> y <code>PYDHCP_SERVER_IP</code>. La interfaz debe ser candidata válida y la dirección debe existir en esa LAN. Después, <code>pydhcpd.conf</code> puede editarse para añadir reservas estáticas u otras directivas. Para aplicar esos cambios, se reinicia el servicio.
     </td>
   </tr>
 </table>
@@ -483,23 +487,18 @@ sudo tail -f /var/log/pydhcp.log
 
 > Todas las claves de esta tabla las verifica `pyleases.sh` antes de reescribir `pydhcpd.conf`. `SERVER_IP`, `SERV_SUBNET`, `SERV_BROADCAST`, `SERV_INI_RANGE_BLOCK` y `SERV_END_RANGE_BLOCK` deben ser direcciones IPv4 válidas, `SERV_MASK` una máscara y `SERV_DNS` una lista de IPv4. Ver «Key check».
 
-#### pydhcp.env — shared settings
+#### ACL base directory
 
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      A fourth group in <code>pydhcp.env</code> contains settings shared with other projects, avoiding repeated questions and hardcoded values. <code>pysetup.sh</code> creates the two keys below during installation. A project that needs another shared key adds it on its first run; subsequent projects reuse the existing value instead of asking again.
+      <code>ACL_PATH</code> is the parent directory containing <code>ACL_MAC_PATH</code> and <code>ACL_DHCP_PATH</code>. The installer writes it in <code>pydhcp.env</code>. <code>pyleases.sh</code> reads it and prepares it as root:root, mode 755. Projects integrating with pydhcp can read this path.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Un cuarto grupo de <code>pydhcp.env</code> contiene valores compartidos con otros proyectos, evitando preguntas repetidas y valores fijos en el código. <code>pysetup.sh</code> crea las dos claves de abajo durante la instalación. El proyecto que necesite otra clave compartida la añade en su primera ejecución; los proyectos posteriores reutilizan el valor existente sin volver a solicitarlo.
+      <code>ACL_PATH</code> es el directorio padre que contiene <code>ACL_MAC_PATH</code> y <code>ACL_DHCP_PATH</code>. El instalador lo escribe en <code>pydhcp.env</code>. <code>pyleases.sh</code> lo lee y prepara como root:root, modo 755. Los proyectos integrados con pydhcp pueden leer esta ruta.
     </td>
   </tr>
 </table>
-
-| Variable | Description | Descripción |
-|----------|--------------|-------------|
-| `ACL_PATH` | Parent directory of the ACL tree, containing `ACL_MAC_PATH` and `ACL_DHCP_PATH`. `pyleases.sh` reads it and prepares it as `root:root`, mode `755`; other projects can reuse the base path | Directorio padre del árbol de ACL, que contiene `ACL_MAC_PATH` y `ACL_DHCP_PATH`. `pyleases.sh` lo lee y prepara como `root:root`, modo `755`; otros proyectos pueden reutilizar la ruta base |
-| `WAN_IFACE` | Name of the host's WAN network interface. Not used by pydhcp; added to the `.env` to share it with other projects that also use pydhcp | Nombre de la interfaz de red WAN del host. No es utilizada por pydhcp; se agrega al entorno `.env` para compartirla con otros proyectos que utilizan pydhcp |
 
 #### Fixed values (not configurable anywhere)
 
@@ -742,10 +741,10 @@ sudo bash tools/pywebmin.sh --uninstall
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Add the following rules to allow DHCP traffic on both interfaces. The WAN rules cover the case where the server itself acts as a DHCP client toward an upstream router. The LAN rules allow the server to assign IP addresses to local clients.
+      PyDHCP requires only LAN. The LAN rules below allow it to assign addresses to clients. The optional WAN rules apply only when the host also obtains its own address from an upstream DHCP server. Replace <code>$lan</code> and, if applicable, <code>$wan</code> before running these manual examples; they are not keys created by pydhcp.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Añade estas reglas para permitir el tráfico DHCP en las dos interfaces. Las reglas de WAN permiten que el servidor obtenga una dirección de un servidor DHCP ascendente. Las de LAN permiten que asigne direcciones a los clientes locales.
+      PyDHCP solo requiere LAN. Las reglas LAN siguientes permiten asignar direcciones a los clientes. Las reglas WAN opcionales aplican únicamente cuando el equipo también obtiene su dirección de un servidor DHCP ascendente. Sustituye <code>$lan</code> y, si corresponde, <code>$wan</code> antes de ejecutar estos ejemplos manuales; no son claves creadas por pydhcp.
     </td>
   </tr>
 </table>

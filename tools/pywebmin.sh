@@ -83,7 +83,7 @@ fi
 
 # dependencies
 for dep_pkg in coreutils util-linux systemd grep sed ncurses-bin perl; do
-    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+    if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log_error "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
@@ -91,7 +91,7 @@ done
 
 # dependencies (external repo)
 for dep_pkg in webmin; do
-    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+    if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log_error "ERROR: 'webmin' is not installed -abort"
         exit 1
     fi

@@ -63,7 +63,7 @@ log() {
 # components need at runtime, not just the ones it invokes itself -- e.g.
 # iputils-ping is used by pydhcpd.py when it cannot open a raw ICMP socket.
 for dep_pkg in python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate; do
-    if ! dpkg -s "$dep_pkg" &>/dev/null; then
+    if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log "ERROR: dependency '$dep_pkg' is not installed -abort"
         exit 1
     fi
@@ -78,6 +78,11 @@ UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]
 UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
+
+# validation - signed integer only; use directly with =~
+UH_SINT='^(0|-?[1-9][0-9]*)$'
+UH_MAX=9223372036854775807
+UH_MIN=-9223372036854775808
 
 install_dir="/etc/pydhcp"
 core_dir="${install_dir}/core"
@@ -126,7 +131,6 @@ update_reset() {
     update_jobs=()
     update_services=()
     update_stopped_services=()
-    update_daemons=()
     update_copying=0
     update_cron_paused=0
     update_cron_existed=0
@@ -299,16 +303,6 @@ update_wait() {
     update_error "process still running: $(basename "$script")"
 }
 
-update_stop_daemon() {
-    local script="$1" pids
-    pids=$(update_pids "$script") || update_error "cannot inspect processes: $script"
-    if [ -n "$pids" ]; then
-        update_daemons+=("$script")
-        bash "$script" --stop || update_error "cannot stop daemon: $script"
-        update_wait "$script"
-    fi
-}
-
 update_stop_service() {
     local unit="$1" state load_state
     load_state=$(systemctl show -p LoadState --value "$unit") || update_error "cannot inspect service: $unit"
@@ -376,7 +370,7 @@ update_apply() {
 }
 
 update_resume() {
-    local unit script state
+    local unit state
     for unit in "${update_services[@]}"; do
         systemctl start "$unit" || update_error "cannot start service: $unit"
         state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect started: $unit"
@@ -384,10 +378,6 @@ update_resume() {
             log "ERROR: $unit state: $state"
             update_error "$unit did not start"
         }
-    done
-    for script in "${update_daemons[@]}"; do
-        bash "$script" --start || update_error "cannot start daemon: $script"
-        [ -n "$(update_pids "$script")" ] || update_error "daemon did not start: $script"
     done
 }
 
@@ -399,14 +389,11 @@ update_finish() {
 }
 
 update_cleanup() {
-    local status="$1" unit script
+    local status="$1" unit
     trap - EXIT
     if (( update_copying == 0 )); then
         for unit in "${update_services[@]}"; do
             systemctl start "$unit" || warn "cannot resume $unit -alert"
-        done
-        for script in "${update_daemons[@]}"; do
-            bash "$script" --start || warn "cannot resume $(basename "$script") -alert"
         done
         if (( update_cron_paused && ! update_cron_already_paused )); then
             if (( update_cron_existed )); then
@@ -424,9 +411,6 @@ update_cleanup() {
         fi
         for unit in "${update_services[@]}"; do
             systemctl stop "$unit" || warn "cannot keep $unit stopped -alert"
-        done
-        for script in "${update_daemons[@]}"; do
-            bash "$script" --stop || warn "cannot keep $(basename "$script") stopped -alert"
         done
     fi
     (( status != 0 )) || status=1
@@ -534,30 +518,6 @@ acl_fix_perms() {
 
 # INTERACTIVE PROMPTS
 # Each one asks for a value, validates it and repeats until it is correct
-ask_interface_number() {
-    local prompt_text="$1" default_value="$2" target_var="$3" max_value="$4" user_answer
-    while true; do
-        read -rp " ${prompt_text} [1-${max_value}] [Default: ${default_value}]: " user_answer
-        user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_UINT ]] \
-           && [ "${#user_answer}" -le "${#max_value}" ] \
-           && [ "$user_answer" -ge 1 ] && [ "$user_answer" -le "$max_value" ]; then
-            printf -v "$target_var" '%s' "$user_answer"
-            break
-        fi
-        info "Invalid selection, try again -retry"
-    done
-}
-
-list_interfaces() {
-    local iface_index iface_state iface_ip
-    for iface_index in "${!iface_list[@]}"; do
-        iface_state=$(ip -br link show "${iface_list[$iface_index]}" | awk '{print $2}')
-        iface_ip=$(ip -4 -o addr show dev "${iface_list[$iface_index]}" 2>/dev/null | awk '{print $4}' | paste -sd' ')
-        printf " [%d] %s (%s, %s)\n" "$((iface_index+1))" "${iface_list[$iface_index]}" "$iface_state" "${iface_ip:-no IPv4}"
-    done
-}
-
 ask_dns() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
@@ -571,12 +531,28 @@ ask_dns() {
     done
 }
 
+# validation - integer is representable as a signed 64-bit value
+uh_fits() {
+    local value="${1-}" limit
+    [[ "$value" =~ $UH_SINT ]] || return 1
+    if [[ "${value:0:1}" == - ]]; then
+        limit="${UH_MIN#-}"
+        value="${value#-}"
+    else
+        limit="$UH_MAX"
+    fi
+    (( ${#value} < ${#limit} )) && return 0
+    (( ${#value} > ${#limit} )) && return 1
+    [[ "$value" > "$limit" ]] && return 1
+    return 0
+}
+
 ask_number() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
         read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_UINT ]] && (( user_answer >= 1 )); then
+        if [[ "$user_answer" =~ $UH_UINT ]] && uh_fits "$user_answer" && (( user_answer >= 1 )); then
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
@@ -650,28 +626,44 @@ check_port() {
     fi
 }
 
+# IFACES
+# List network interfaces other than loopback
+list_ifaces() {
+    ip -br link show 2>/dev/null | awk '$1 != "lo" {sub(/@.*/, "", $1); printf "%s %s\n", $1, ($2 == "UP") ? "UP" : "DOWN"}'
+}
+
+# IPV4 INTERFACES
+# Offer only interfaces with an active link and configured global IPv4
+list_ipv4_ifaces() {
+    local iface state
+    while read -r iface state; do
+        [ "$state" = UP ] || continue
+        if ip -4 -o addr show dev "$iface" scope global 2>/dev/null \
+            | awk '$4 != "" {found=1} END {exit !found}'; then
+            printf '%s\n' "$iface"
+        fi
+    done < <(list_ifaces)
+}
+
 # LAN SELECTION
 # Select an existing interface and one of its configured IPv4 addresses
 choose_lan_interface() {
-    local preset_iface="${1:-}" excluded_iface="${2:-}"
-    local iface_name iface_choice iface_index iface_addrs
+    local preset_iface="${1:-}"
+    local iface_name iface_choice iface_index iface_addrs iface_state
     local -a lan_candidates=()
-    if [ -n "$preset_iface" ]; then
-        ip link show dev "$preset_iface" >/dev/null 2>&1 || {
-            log "ERROR: LAN interface '$preset_iface' not found -abort"
-            exit 1
-        }
-        [ "$preset_iface" != "$excluded_iface" ] || {
-            log "ERROR: LAN and WAN must differ -abort"
-            exit 1
-        }
-        lan_iface_answer="$preset_iface"
-        return 0
-    fi
     while IFS= read -r iface_name; do
-        [ "$iface_name" = "$excluded_iface" ] && continue
         lan_candidates+=("$iface_name")
-    done < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
+    done < <(list_ipv4_ifaces)
+    if [ -n "$preset_iface" ]; then
+        for iface_name in "${lan_candidates[@]}"; do
+            if [ "$preset_iface" = "$iface_name" ]; then
+                lan_iface_answer="$preset_iface"
+                return 0
+            fi
+        done
+        log "ERROR: LAN must be an active interface with IPv4 -abort"
+        exit 1
+    fi
     (( ${#lan_candidates[@]} > 0 )) || {
         log "ERROR: no LAN interface available -abort"
         exit 1
@@ -683,11 +675,12 @@ choose_lan_interface() {
     echo "Available LAN interfaces:"
     for iface_index in "${!lan_candidates[@]}"; do
         iface_name="${lan_candidates[$iface_index]}"
+        iface_state=$(ip -br link show "$iface_name" | awk '{print $2}')
         iface_addrs=$(ip -4 -o addr show dev "$iface_name" scope global | awk '{print $4}' | paste -sd' ')
-        printf ' [%d] %s (%s)\n' "$((iface_index + 1))" "$iface_name" "${iface_addrs:-no IPv4}"
+        printf ' [%d] %s (%s, %s)\n' "$((iface_index + 1))" "$iface_name" "$iface_state" "${iface_addrs:-no IPv4}"
     done
     while true; do
-        read -r -p "Select LAN interface number: " iface_choice || {
+        read -r -p "Select LAN Interface [1-${#lan_candidates[@]}]: " iface_choice || {
             log "ERROR: cannot read LAN interface selection -abort"
             exit 1
         }
@@ -905,13 +898,6 @@ do_install() {
     warn_overlap "dhcp" dnsmasq
 
     # Detect and select network interface
-    echo ""
-    info "Available network interfaces:"
-    mapfile -t iface_list < <(ip -br link show | awk '$1 != "lo" {sub(/@.*/, "", $1); print $1}')
-    if [[ ${#iface_list[@]} -eq 0 ]]; then
-        abort "no network interfaces found -abort"
-    fi
-
     choose_lan_interface "${PYDHCP_LAN_IFACE:-}"
     iface_selected="$lan_iface_answer"
     read_lan_ipv4 "$iface_selected" "${PYDHCP_SERVER_IP:-}"
@@ -1008,33 +994,6 @@ sys.exit(0 if valid else 1)
     # disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
     # pydhcp.env afterward if your environment has strict ICMP firewall rules.
     ping_check_value="true"
-
-    # WAN interface -- asked last and in its own block, so a wrapper installer can
-    # supply it without shifting the questions above. pydhcp does not use this
-    # value: it is recorded in pydhcp.env for the projects that do.
-    echo ""
-    if [ -n "${PYDHCP_WAN_IFACE:-}" ]; then
-        ip link show "$PYDHCP_WAN_IFACE" &>/dev/null \
-            || abort "PYDHCP_WAN_IFACE='$PYDHCP_WAN_IFACE' not found -abort"
-        wan_iface_answer="$PYDHCP_WAN_IFACE"
-        info "WAN interface: $wan_iface_answer (from caller)"
-    else
-        info "WAN interface (one facing internet):"
-        list_interfaces
-        echo ""
-        wan_default=1
-        wan_detected=$(ip route show default 2>/dev/null | awk '{print $5}' | head -1)
-        for iface_index in "${!iface_list[@]}"; do
-            if [[ "${iface_list[$iface_index]}" == "$wan_detected" ]]; then
-                wan_default=$((iface_index+1))
-                break
-            fi
-        done
-        unset iface_index
-        ask_interface_number "Select WAN interface number" "$wan_default" wan_choice "${#iface_list[@]}"
-        wan_iface_answer="${iface_list[$((wan_choice-1))]}"
-        info "WAN interface: $wan_iface_answer"
-    fi
 
     # Verify source files exist
     for source_file in core/pydhcpd.py core/pydhcpd.conf service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh; do
@@ -1156,11 +1115,6 @@ RESERVATION_TTL_SECONDS=30
 BACKUP_DIR=/etc/bak/pydhcp
 # =============================================================================
 
-# =============================================================================
-# WAN
-# =============================================================================
-WAN_IFACE=$wan_iface_answer
-# =============================================================================
 ENVEOF
         info "Network, ACL and daemon defaults set in pydhcp.env"
     fi
@@ -1304,7 +1258,6 @@ do_status() {
     echo "=== Config ==="
     if [[ -f "$install_dir/pydhcp.env" ]]; then
         echo "Interface : $(grep '^INTERFACESv4=' "$install_dir/pydhcp.env" | cut -d= -f2-)"
-        echo "WAN iface : $(grep '^WAN_IFACE=' "$install_dir/pydhcp.env" | cut -d= -f2-)"
     else
         echo "$install_dir/pydhcp.env not found"
     fi
