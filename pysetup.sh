@@ -90,6 +90,12 @@ service_file="/etc/systemd/system/pydhcpd.service"
 init_file="/etc/init.d/pydhcpd"
 daemon_owner="pydhcpd"
 
+wpad_port_value="18800"
+wpad_root="/var/www/wpad"
+wpad_vhost_dest="/etc/apache2/sites-available/wpad.conf"
+wpad_vhost_enabled="/etc/apache2/sites-enabled/wpad.conf"
+apache_ports="/etc/apache2/ports.conf"
+
 # ACL layout. Two groups, by who owns the list, both under acl_base_dir:
 # - acl_mac_dir holds the administrator's own lists (mac-*.txt), edited by hand.
 # - acl_dhcp_dir holds pydhcp's own list (blockdhcp.txt), written by
@@ -521,7 +527,7 @@ acl_fix_perms() {
 ask_dns() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
-        read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
+        read -rp "${prompt_text} [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
         if [[ "$user_answer" =~ $UH_DNS ]]; then
             printf -v "$target_var" '%s' "$user_answer"
@@ -550,7 +556,7 @@ uh_fits() {
 ask_number() {
     local prompt_text="$1" default_value="$2" target_var="$3" user_answer
     while true; do
-        read -rp " ${prompt_text} [Default: ${default_value}]: " user_answer
+        read -rp "${prompt_text} [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
         if [[ "$user_answer" =~ $UH_UINT ]] && uh_fits "$user_answer" && (( user_answer >= 1 )); then
             printf -v "$target_var" '%s' "$user_answer"
@@ -564,7 +570,7 @@ confirm() {
     # confirm "prompt" [default y|n] -- returns 0 on yes, 1 on no
     local prompt_text="$1" default_value="${2:-n}" user_answer hint_text
     [[ "$default_value" == "y" ]] && hint_text="[Y/n]" || hint_text="[y/N]"
-    read -rp " ${prompt_text} ${hint_text}: " user_answer
+    read -rp "${prompt_text} ${hint_text}: " user_answer
     user_answer="${user_answer:-$default_value}"
     [[ "${user_answer,,}" =~ ^y(es)?$ ]]
 }
@@ -619,10 +625,234 @@ warn_overlap() {
 
 # port in use
 check_port() {
-    local proto="$1" port="$2" role="$3"
-    if [ -n "$(ss -lnH "-${proto,,}" "sport = :$port" 2>/dev/null)" ]; then
+    local proto="$1" port="$2" role="$3" port_listeners
+    if ! port_listeners=$(python3 - "${proto,,}" "$port" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["ss", "-lnH", f"--{sys.argv[1]}", f"sport = :{sys.argv[2]}"],
+        capture_output=True,
+        text=True,
+    )
+except OSError:
+    sys.exit(1)
+if result.returncode != 0 or result.stderr.strip():
+    sys.exit(1)
+sys.stdout.write(result.stdout)
+PY
+    ); then
+        err "cannot check ${proto^^} port $port"
+        abort "fix the ss query before installing -abort"
+    fi
+    if [ -n "$port_listeners" ]; then
         err "${proto^^} port $port in use by another $role"
         abort "stop that service before installing -abort"
+    fi
+}
+
+# WPAD
+# Removes the Apache virtualhost, the PAC file and the Listen line of the port
+remove_wpad() {
+    local port="$1"
+    a2dissite -q wpad.conf &>/dev/null || true
+    rm -f "$wpad_vhost_enabled" "$wpad_vhost_dest"
+    rm -rf "$wpad_root"
+    if [ -f "$apache_ports" ]; then
+        sed -i -E "/^Listen [^[:space:]]*:${port}\$/d; /^Listen ${port}\$/d" "$apache_ports"
+    fi
+    if dpkg-query -W -f='${Status}' apache2 2>/dev/null | grep -q "ok installed" \
+       && apache2ctl configtest &>/dev/null; then
+        systemctl reload apache2 &>/dev/null || true
+    fi
+}
+
+wpad_failed() {
+    if ! remove_wpad "$wpad_port_value"; then
+        warn "cannot remove incomplete WPAD deployment -alert"
+    fi
+    abort "$1 -abort"
+}
+
+# Squid detection for the PAC. Three conditions, all required:
+#   1. squid is installed (dpkg status "ok installed")
+#   2. squid is running (systemd unit active)
+#   3. a port is detected and squid listens on it, on all addresses or on the
+#      LAN address, so that clients can reach it
+# Prints the port and returns 0 when all three hold. Returns 1 when Squid is
+# not installed, 2 when it is installed but not running or not reachable on
+# the LAN address, and 3 when PYDHCP_SQUID_PORT is not a valid port.
+# PYDHCP_SQUID_PORT only replaces the port read from squid.conf (condition 3);
+# conditions 1 and 2 are still checked.
+# Usage: detect_squid_port <server_ip>
+detect_squid_port() {
+    local server_ip="$1" pkg installed=0 port="${PYDHCP_SQUID_PORT:-}" addr
+    for pkg in squid squid-openssl squid3; do
+        if [[ "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null)" == *"ok installed"* ]]; then
+            installed=1
+        fi
+    done
+    (( installed )) || return 1
+    if [ -n "$port" ]; then
+        { [[ "$port" =~ $UH_UINT ]] && uh_fits "$port" \
+            && (( port >= 1 && port <= 65535 )); } || return 3
+    fi
+    systemctl is-active --quiet squid 2>/dev/null || return 2
+    if [ -z "$port" ]; then
+        # first explicit proxy port; intercept/tproxy ports do not serve a PAC client
+        port=$(awk '$1=="http_port" && $0 !~ /intercept|tproxy/ {print $2; exit}' \
+            /etc/squid/squid.conf 2>/dev/null) || port=""
+        port="${port##*:}"
+        port="${port:-3128}"
+        { [[ "$port" =~ $UH_UINT ]] && uh_fits "$port" \
+            && (( port >= 1 && port <= 65535 )); } || return 2
+    fi
+    while read -r addr; do
+        case "$addr" in
+            "*:${port}"|"0.0.0.0:${port}"|"[::]:${port}"|"${server_ip}:${port}")
+                printf '%s\n' "$port"
+                return 0
+                ;;
+        esac
+    done < <(ss -lntH "sport = :$port" 2>/dev/null | awk '{print $4}')
+    return 2
+}
+
+# Writes wpad.pac from what is installed: PROXY server_ip:port when Squid is
+# listening, a plain DIRECT otherwise. Used by install and update.
+# Usage: write_pac <server_ip> <lan_subnet> <lan_mask>
+write_pac() {
+    local server_ip="$1" lan_subnet="$2" lan_mask="$3" squid_port rc=0
+    local pac_file="${wpad_root}/wpad.pac"
+    squid_port=$(detect_squid_port "$server_ip") || rc=$?
+    case "$rc" in
+        0)
+            info "squid on port $squid_port, PAC uses PROXY ${server_ip}:${squid_port}"
+            cat > "$pac_file" <<EOF || return 1
+function FindProxyForURL(url, host) {
+    if (isPlainHostName(host) || shExpMatch(host, "127.*"))
+        return "DIRECT";
+    if (isInNet(host, "${lan_subnet}", "${lan_mask}"))
+        return "DIRECT";
+    return "PROXY ${server_ip}:${squid_port}; DIRECT";
+}
+EOF
+            ;;
+        1|2|3)
+            if [ "$rc" = 3 ]; then
+                abort "PYDHCP_SQUID_PORT is not a valid port -abort"
+            elif [ "$rc" = 2 ]; then
+                warn "squid not running or not reachable on ${server_ip}, PAC returns DIRECT -alert"
+            else
+                info "squid not found, PAC returns DIRECT"
+            fi
+            cat > "$pac_file" <<EOF || return 1
+function FindProxyForURL(url, host) {
+    return "DIRECT";
+}
+EOF
+            ;;
+    esac
+    chown www-data:www-data "$pac_file" && chmod 644 "$pac_file"
+}
+
+# Deploys the WPAD/PAC server: Apache virtualhost, PAC file and Listen line.
+# Sets wpad_enabled_value to true only when the PAC answers.
+deploy_wpad() {
+    local server_ip="$1" lan_subnet="$2" lan_mask="$3"
+
+    wpad_enabled_value="false"
+    check_conflicts "web server" nginx lighttpd caddy
+    verify_source "$script_dir/conf/wpad.conf"
+    check_port tcp "$wpad_port_value" "WPAD server"
+
+    local apache_pkg missing_apache_packages=()
+    for apache_pkg in apache2 apache2-utils; do
+        if ! dpkg-query -W -f='${Status}' "$apache_pkg" 2>/dev/null | grep -q "ok installed"; then
+            missing_apache_packages+=("$apache_pkg")
+        fi
+    done
+    if (( ${#missing_apache_packages[@]} > 0 )); then
+        command -v apt-get >/dev/null 2>&1 || abort "apt-get is required to install Apache -abort"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_apache_packages[@]}" \
+            || abort "cannot install Apache packages -abort"
+    fi
+    for apache_pkg in apache2 apache2-utils; do
+        dpkg-query -W -f='${Status}' "$apache_pkg" 2>/dev/null | grep -q "ok installed" \
+            || abort "$apache_pkg is not installed -abort"
+    done
+    if dpkg-query -W -f='${Status}' apache2-doc 2>/dev/null | grep -q "ok installed"; then
+        command -v apt >/dev/null 2>&1 || abort "apt is required to reinstall apache2-doc -abort"
+        DEBIAN_FRONTEND=noninteractive apt -qq install -y --reinstall apache2-doc \
+            || abort "cannot reinstall apache2-doc -abort"
+    fi
+
+    a2enmod -q alias mime || abort "cannot enable Apache WPAD modules -abort"
+    systemctl enable apache2 || abort "cannot enable apache2 -abort"
+
+    install -d -m 755 -o www-data -g www-data "$wpad_root" \
+        || wpad_failed "cannot create $wpad_root"
+    write_pac "$server_ip" "$lan_subnet" "$lan_mask" \
+        || wpad_failed "cannot write wpad.pac"
+    chown -R www-data:www-data "$wpad_root" \
+        && chmod -R 755 "$wpad_root" \
+        || wpad_failed "cannot set wpad.pac permissions"
+
+    install -m 644 -o root -g root "$script_dir/conf/wpad.conf" "$wpad_vhost_dest" \
+        || wpad_failed "cannot install wpad.conf"
+    sed -i -E "s|^<VirtualHost \*:[0-9]+>|<VirtualHost *:${wpad_port_value}>|" "$wpad_vhost_dest" \
+        || wpad_failed "cannot set the wpad.conf port"
+
+    [ -f "${apache_ports}.bak" ] || cp -f "$apache_ports" "${apache_ports}.bak" &>/dev/null || true
+    { grep -qxF "Listen ${server_ip}:${wpad_port_value}" "$apache_ports" \
+        || grep -qxF "Listen ${wpad_port_value}" "$apache_ports" \
+        || echo "Listen ${server_ip}:${wpad_port_value}" >> "$apache_ports"; } \
+        || wpad_failed "cannot write Apache ports.conf"
+
+    a2ensite -q wpad.conf &>/dev/null \
+        || wpad_failed "cannot enable the wpad.conf site"
+    apache2ctl configtest &>/dev/null \
+        || wpad_failed "apache2 configtest failed"
+    if systemctl is-active --quiet apache2; then
+        systemctl reload apache2 || wpad_failed "cannot reload apache2"
+    else
+        systemctl start apache2 || wpad_failed "cannot start apache2"
+    fi
+
+    if ! curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://${server_ip}:${wpad_port_value}/wpad.pac"; then
+        wpad_failed "wpad.pac is not served"
+    fi
+
+    wpad_enabled_value="true"
+    info "WPAD/PAC deployed at http://${server_ip}:${wpad_port_value}/wpad.pac"
+}
+
+# Warns before the WPAD question when its port is not free. Never aborts.
+warn_wpad_port() {
+    local port_listeners
+    if ! port_listeners=$(python3 - tcp "$wpad_port_value" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["ss", "-lnH", f"--{sys.argv[1]}", f"sport = :{sys.argv[2]}"],
+        capture_output=True,
+        text=True,
+    )
+except OSError:
+    sys.exit(1)
+if result.returncode != 0 or result.stderr.strip():
+    sys.exit(1)
+sys.stdout.write(result.stdout)
+PY
+    ); then
+        warn "cannot check TCP port $wpad_port_value for WPAD -alert"
+        return 0
+    fi
+    if [ -n "$port_listeners" ]; then
+        warn "TCP port $wpad_port_value is in use; WPAD needs it free -alert"
     fi
 }
 
@@ -744,13 +974,12 @@ read_lan_ipv4() {
 # ------------------------------------------------------------------------------
 
 do_uninstall() {
-    echo ""
     echo "This removes pydhcp completely from $install_dir"
     echo "The service, init.d wrapper, log and Webmin module are also removed"
+    echo "Existing WPAD/PAC files and its Listen line are removed regardless of WPAD_ENABLED"
     echo "A backup is taken with tools/pybk.sh before anything is removed"
     echo "/etc/bak is NOT touched"
     echo "Package dependencies are NOT removed"
-    echo ""
     confirm "Proceed with uninstall? This cannot be undone." "n" \
         || {
             info "Aborted by user"
@@ -758,17 +987,13 @@ do_uninstall() {
             exit 0
         }
 
-    echo ""
     echo "Final confirmation required"
-    echo "Type word YES (uppercase) to remove pydhcp:"
-    echo ""
-    read -rp " > " confirm_answer
+    read -rp "Type word YES (uppercase) to remove pydhcp: " confirm_answer
     if [[ "$confirm_answer" != "YES" ]]; then
         info "Aborted by user"
         log "EVENT: pysetup done"
         exit 0
     fi
-    echo ""
 
     if [ -x "$install_dir/tools/pybk.sh" ]; then
         if "$install_dir/tools/pybk.sh"; then
@@ -789,8 +1014,6 @@ do_uninstall() {
     rm -f "$init_file"
     rm -f /etc/logrotate.d/pydhcp && info "Removed /etc/logrotate.d/pydhcp"
     rm -f /var/log/pydhcp.log
-    rm -f /etc/logrotate.d/pydhcpd && info "Removed /etc/logrotate.d/pydhcpd"
-    rm -f /var/log/pydhcpd.log
 
     rm -f /etc/cron.d/pydhcp /etc/cron.d/pydhcp.update-disabled
     if [ -x "$install_dir/tools/pybk.sh" ]; then
@@ -801,6 +1024,8 @@ do_uninstall() {
         log "EVENT: Removing Webmin module ..."
         "$install_dir/tools/pywebmin.sh" --uninstall || true
     fi
+
+    remove_wpad "$wpad_port_value"
 
     [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -abort"
 
@@ -846,15 +1071,11 @@ do_update() {
     update_target "$update_cron_file"
     update_target "${update_cron_file}.lock" 600
     update_preflight
-    update_backup "$install_dir/tools/pybk.sh"
+    update_backup "$script_dir/tools/pybk.sh"
     update_begin
     update_stop_service pydhcpd
     update_wait_jobs
     update_apply
-    if [ -f /var/log/pydhcpd.log ]; then
-        cat /var/log/pydhcpd.log >> "$pydhcp_log_file" || update_error "cannot consolidate pydhcp log"
-        rm -f /var/log/pydhcpd.log || update_error "cannot remove old pydhcp log"
-    fi
     install -d -m 755 -o root -g root /etc/logrotate.d || update_error "cannot prepare logrotate directory"
     if ! cat > /etc/logrotate.d/pydhcp <<'PY_ROTATE'
 /var/log/pydhcp.log {
@@ -896,6 +1117,7 @@ do_install() {
     check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
     check_port udp 67 "DHCP server"
     warn_overlap "dhcp" dnsmasq
+    warn_wpad_port
 
     # Detect and select network interface
     choose_lan_interface "${PYDHCP_LAN_IFACE:-}"
@@ -970,25 +1192,16 @@ sys.exit(0 if valid else 1)
     info "Pool range: $pool_start_answer -> $pool_end_answer"
 
     # DNS servers
-    echo ""
-    ask_dns "Enter DNS server(s), comma-separated" "8.8.8.8,1.1.1.1" dns_answer
+    ask_dns "Enter DNS server(s)" "8.8.8.8,1.1.1.1" dns_answer
     info "DNS servers: $dns_answer"
 
     # Pool lease cleanup interval
     ask_number "DHCP pool lease cleanup interval in seconds" "60" cleanup_answer
 
     # Optional features
-    wpad_port_value="18100"
-    # Same check pyleases.sh repeats on every reload -- but this is the only time
-    # it ever runs for an admin who manages pydhcpd.conf by hand and never
-    # invokes pyleases.sh afterward. No need to ask: if something is already
-    # serving wpad.pac on the default port, WPAD is enabled; otherwise it isn't.
-    if curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://${server_ip_answer}:${wpad_port_value}/wpad.pac"; then
-        wpad_detected="true"
-        info "wpad.pac detected on port $wpad_port_value -- WPAD enabled"
-    else
-        wpad_detected="false"
-        info "wpad.pac not detected on port $wpad_port_value -- WPAD not enabled"
+    wpad_enabled_value="false"
+    if confirm "Deploy WPAD/PAC on port $wpad_port_value (DHCP option 252)?" "y"; then
+        deploy_wpad "$server_ip_answer" "$local_subnet" "$netmask_answer"
     fi
     # ping-check matches isc-dhcp-server's own default (on unless explicitly
     # disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
@@ -1099,7 +1312,7 @@ AUTHORIZED_LEASE_TIME=2592000
 QUARANTINE_DURATION=60
 
 # Features
-WPAD_ENABLED=$wpad_detected
+WPAD_ENABLED=$wpad_enabled_value
 WPAD_PORT=$wpad_port_value
 PING_CHECK_ENABLED=$ping_check_value
 PING_TIMEOUT_SECONDS=1
@@ -1134,11 +1347,11 @@ ENVEOF
     sed -i "/pool {/,/}/ s|min-lease-time .*;|min-lease-time ${cleanup_answer};|" "$conf_tmp"
     sed -i "/pool {/,/}/ s|default-lease-time .*;|default-lease-time ${cleanup_answer};|" "$conf_tmp"
     sed -i "/pool {/,/}/ s|max-lease-time .*;|max-lease-time ${cleanup_answer};|" "$conf_tmp"
-    if [[ "$wpad_detected" == "true" ]]; then
+    if [[ "$wpad_enabled_value" == "true" ]]; then
         sed -i "s|# option wpad code 252 = text;|option wpad code 252 = text;|" "$conf_tmp"
-        sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
+        sed -i "s|# option wpad \"http://SERVER_IP:[0-9]*/wpad.pac\";|option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
     else
-        sed -i "s|# option wpad \"http://SERVER_IP:18100/wpad.pac\";|# option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
+        sed -i "s|# option wpad \"http://SERVER_IP:[0-9]*/wpad.pac\";|# option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
     fi
     mv -f "$conf_tmp" "$core_dir/pydhcpd.conf"
     info "Network parameters set in pydhcpd.conf"
@@ -1196,7 +1409,6 @@ ENVEOF
     chmod 640 "$pydhcp_log_file"
 
     # Deploy logrotate config
-    rm -f /etc/logrotate.d/pydhcpd
     cat > /etc/logrotate.d/pydhcp << 'EOF'
 /var/log/pydhcp.log {
     daily
@@ -1227,8 +1439,6 @@ EOF
     info "Configuration : $core_dir/pydhcpd.conf"
     info "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"
     info "Leases : $core_dir/pydhcpd.leases"
-    info "Logs : journalctl -u pydhcpd -f"
-    info "To remove : sudo bash pysetup.sh --uninstall"
 }
 
 # ------------------------------------------------------------------------------
@@ -1248,7 +1458,26 @@ do_status() {
 
     echo ""
     echo "=== DHCP Port ==="
-    if ss -uln 2>/dev/null | grep -qE ":67[[:space:]]"; then
+    local port_listeners
+    if ! port_listeners=$(python3 - udp 67 <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["ss", "-lnH", f"--{sys.argv[1]}", f"sport = :{sys.argv[2]}"],
+        capture_output=True,
+        text=True,
+    )
+except OSError:
+    sys.exit(1)
+if result.returncode != 0 or result.stderr.strip():
+    sys.exit(1)
+sys.stdout.write(result.stdout)
+PY
+    ); then
+        echo ":67/udp UNKNOWN"
+    elif [ -n "$port_listeners" ]; then
         echo ":67/udp OPEN"
     else
         echo ":67/udp CLOSED"

@@ -239,9 +239,13 @@ for backup_item in \
     /etc/logrotate.d/pydhcp \
     /etc/cron.d/pydhcp \
     /etc/webmin/pydhcp \
-    /usr/share/webmin/pydhcp
+    /usr/share/webmin/pydhcp \
+    /var/www/wpad \
+    /etc/apache2/sites-available/wpad.conf \
+    /etc/apache2/sites-enabled/wpad.conf \
+    /etc/apache2/ports.conf
 do
-    if [ -e "$backup_item" ]; then
+    if [ -e "$backup_item" ] || [ -L "$backup_item" ]; then
         backup_list+=("$backup_item")
     else
         log "INFO: $backup_item not present -skip"
