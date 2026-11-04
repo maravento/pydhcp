@@ -1739,15 +1739,19 @@ class DHCPServer:
             config_ping_timeout = config_snapshot.ping_timeout
 
         if config_deny_duplicates and not config_snapshot.static_hosts.get(mac):
-            existing = self.leases.get_by_mac(mac)
-            if existing and not self.leases.is_blocked(mac):
-                offered_ip  = existing.ip
-                lease_time = self.leases.pool_lease_for(mac)
-                alloc_reason = None
-            else:
-                offered_ip, lease_time, alloc_reason = self.leases.allocate(
-                    mac, hostname, hint_ip=pkt.get("requested_ip"),
-                    persist=False, provisional=True)
+            with self.leases.lock:
+                existing = self.leases.get_by_mac(mac)
+                eligible_addrs = next(
+                    (addrs for entry, addrs in self.leases.pool_list
+                     if self.leases._pool_admits(entry, mac)), ())
+                if existing and existing.ip in eligible_addrs:
+                    offered_ip  = existing.ip
+                    lease_time = self.leases.pool_lease_for(mac)
+                    alloc_reason = None
+                else:
+                    offered_ip, lease_time, alloc_reason = self.leases.allocate(
+                        mac, hostname, hint_ip=pkt.get("requested_ip"),
+                        persist=False, provisional=True)
         else:
             offered_ip, lease_time, alloc_reason = self.leases.allocate(
                 mac, hostname, hint_ip=pkt.get("requested_ip"),

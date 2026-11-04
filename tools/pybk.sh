@@ -234,6 +234,7 @@ backup_list=()
 for backup_item in \
     /etc/pydhcp \
     /etc/acl/mac \
+    /etc/acl/dhcp \
     /etc/systemd/system/pydhcpd.service \
     /etc/init.d/pydhcpd \
     /etc/logrotate.d/pydhcp \

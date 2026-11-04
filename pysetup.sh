@@ -558,11 +558,11 @@ ask_number() {
     while true; do
         read -rp "${prompt_text} [Default: ${default_value}]: " user_answer
         user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_UINT ]] && uh_fits "$user_answer" && (( user_answer >= 1 )); then
+        if [[ "$user_answer" =~ $UH_UINT ]] && uh_fits "$user_answer" && (( user_answer >= 1 && user_answer < 4294967296 )); then
             printf -v "$target_var" '%s' "$user_answer"
             break
         fi
-        info "Invalid value, enter a positive integer -retry"
+        info "Invalid value, enter 1 to 4294967295 -retry"
     done
 }
 
@@ -743,7 +743,7 @@ EOF
             if [ "$rc" = 3 ]; then
                 abort "PYDHCP_SQUID_PORT is not a valid port -abort"
             elif [ "$rc" = 2 ]; then
-                warn "squid not running or not reachable on ${server_ip}, PAC returns DIRECT -alert"
+                warn "squid unreachable, PAC returns DIRECT -alert"
             else
                 info "squid not found, PAC returns DIRECT"
             fi
@@ -763,6 +763,11 @@ deploy_wpad() {
     local server_ip="$1" lan_subnet="$2" lan_mask="$3"
 
     wpad_enabled_value="false"
+    if [ -n "${PYDHCP_SQUID_PORT:-}" ]; then
+        local squid_status=0
+        detect_squid_port "$server_ip" >/dev/null || squid_status=$?
+        [ "$squid_status" -ne 3 ] || abort "PYDHCP_SQUID_PORT is not a valid port -abort"
+    fi
     check_conflicts "web server" nginx lighttpd caddy
     verify_source "$script_dir/conf/wpad.conf"
     check_port tcp "$wpad_port_value" "WPAD server"
@@ -820,7 +825,8 @@ deploy_wpad() {
         systemctl start apache2 || wpad_failed "cannot start apache2"
     fi
 
-    if ! curl -fsS --noproxy '*' --max-time 5 -o /dev/null "http://${server_ip}:${wpad_port_value}/wpad.pac"; then
+    if ! wpad_http_code=$(curl -fsS --noproxy '*' --max-time 5 -o /dev/null --write-out '%{http_code}' "http://${server_ip}:${wpad_port_value}/wpad.pac") \
+       || [ "$wpad_http_code" != 200 ]; then
         wpad_failed "wpad.pac is not served"
     fi
 
