@@ -12,7 +12,7 @@
 # sudo bash pysetup.sh --uninstall    Uninstall
 # sudo bash pysetup.sh --status       Report service, port, config and log
 # sudo bash pysetup.sh                Interactive menu
-# sudo bash pysetup.sh -h             Show usage
+# sudo bash pysetup.sh -h, --help     Show usage
 #
 # LOG: pysetup.log, in the directory containing this script
 #
@@ -519,7 +519,7 @@ acl_fix_perms() {
         log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
-    log "INFO: $acl_path perms fixed -fixed"
+    log "INFO: $(basename "$acl_path") perms fixed -fixed"
 }
 
 # INTERACTIVE PROMPTS
@@ -1330,7 +1330,6 @@ RATE_LIMIT_MAX=5
 RESERVATION_TTL_SECONDS=30
 
 # Backup
-# Changing these defaults is not recommended
 BACKUP_DIR=/etc/bak/pydhcp
 # =============================================================================
 
@@ -1359,7 +1358,10 @@ ENVEOF
     else
         sed -i "s|# option wpad \"http://SERVER_IP:[0-9]*/wpad.pac\";|# option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
     fi
-    mv -f "$conf_tmp" "$core_dir/pydhcpd.conf"
+    if ! mv -fT -- "$conf_tmp" "$core_dir/pydhcpd.conf"; then
+        rm -f -- "$conf_tmp"
+        abort "cannot replace pydhcpd.conf -abort"
+    fi
     info "Network parameters set in pydhcpd.conf"
 
     # Re-apply permissions after sed edits

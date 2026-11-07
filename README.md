@@ -676,7 +676,7 @@ sudo cat /var/www/wpad/wpad.pac
 | Administrator lists | Reads every `mac-*.txt` in `ACL_MAC_PATH`. Entry format: `a;MAC;IP;HOSTNAME;`. Comment the entire line as `#a;MAC;IP;HOSTNAME;` to disable it | Lee todos los archivos `mac-*.txt` de `ACL_MAC_PATH`. Formato: `a;MAC;IP;HOSTNAME;`. Para desactivar una entrada, comente la línea completa: `#a;MAC;IP;HOSTNAME;` |
 | Blocked list | `ACL_BLOCK_FILE`, normally `/etc/acl/dhcp/blockdhcp.txt`. It accepts active entries only; comments are discarded as malformed | `ACL_BLOCK_FILE`, normalmente `/etc/acl/dhcp/blockdhcp.txt`. Solo admite entradas activas. Los comentarios se descartan por tener un formato inválido |
 | Validation | Checks line format, duplicate values and active reservation addresses before stopping the daemon. Commented entries still count in duplicate detection | Comprueba el formato, los valores duplicados y las direcciones de reservas activas antes de detener el demonio. Las entradas comentadas también cuentan al buscar duplicados |
-| Overlapping runs | Uses `/var/lock/pyleases.lock`. Waits up to ten seconds, then skips with exit status zero if another run still holds the lock | Utiliza `/var/lock/pyleases.lock`. Espera hasta diez segundos. Si otra ejecución conserva el bloqueo, omite el trabajo y termina con código cero |
+| Overlapping runs | Uses `/var/lock/pyleases.lock`. Waits up to ten seconds. If another run still holds the lock, it skips the work and exits with status 75 | Utiliza `/var/lock/pyleases.lock`. Espera hasta diez segundos. Si otra ejecución conserva el bloqueo, omite el trabajo y termina con código 75 |
 
 ```bash
 sudo bash tools/pyleases.sh
@@ -724,10 +724,10 @@ sudo bash tools/pyleases.sh
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Creates <code>pybk_&lt;TIMESTAMP&gt;.zip</code> in <code>BACKUP_DIR</code>, normally <code>/etc/bak/pydhcp</code>. It includes the installation tree, administrator MAC lists, pydhcp's blocked-MAC list, systemd unit, init.d script, logrotate configuration, cron file and Webmin module. It also includes existing WPAD files and Apache’s <code>ports.conf</code>. Missing paths are skipped. The archive uses paths relative to <code>/</code>. It reads <code>BACKUP_DIR</code> from <code>pydhcp.env</code>. The key is required and must contain a nonempty absolute path. The script deletes entries there whose names do not match <code>pybk_*.zip</code>.
+      Creates <code>pybk_&lt;TIMESTAMP&gt;.zip</code> in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>. It includes the installation tree, administrator MAC lists, pydhcp's blocked-MAC list, systemd unit, init.d script, logrotate configuration, cron file and Webmin module. It also includes existing WPAD files and Apache’s <code>ports.conf</code>. Missing paths are skipped. The archive uses paths relative to <code>/</code>. It reads <code>BACKUP_DIR</code> from <code>pydhcp.env</code>. Any other value aborts before anything is created, written or deleted. The directory is exclusive to <code>pybk.sh</code>. After publishing the archive, the script deletes entries whose names do not match <code>pybk_*.zip</code> and keeps the three most recent archives.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Crea <code>pybk_&lt;TIMESTAMP&gt;.zip</code> en <code>BACKUP_DIR</code>, normalmente <code>/etc/bak/pydhcp</code>. Incluye la instalación, las listas MAC del administrador, la lista de MAC bloqueadas de pydhcp, la unidad systemd, el script init.d, logrotate, cron y el módulo Webmin. También incluye los archivos WPAD existentes y <code>ports.conf</code> de Apache. Omite las rutas ausentes. El comprimido utiliza rutas relativas a <code>/</code>. Lee <code>BACKUP_DIR</code> de <code>pydhcp.env</code>. La clave es obligatoria y su valor debe ser una ruta absoluta. El script elimina las entradas cuyo nombre no coincida con <code>pybk_*.zip</code>.
+      Crea <code>pybk_&lt;TIMESTAMP&gt;.zip</code> en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la instalación, las listas MAC del administrador, la lista de MAC bloqueadas de pydhcp, la unidad systemd, el script init.d, logrotate, cron y el módulo Webmin. También incluye los archivos WPAD existentes y <code>ports.conf</code> de Apache. Omite las rutas ausentes. El comprimido utiliza rutas relativas a <code>/</code>. Lee <code>BACKUP_DIR</code> de <code>pydhcp.env</code>. Cualquier otro valor aborta antes de crear, escribir o borrar nada. El directorio es exclusivo de <code>pybk.sh</code>. Tras publicar el comprimido, el script elimina las entradas cuyo nombre no coincida con <code>pybk_*.zip</code> y conserva los tres comprimidos más recientes.
     </td>
   </tr>
 </table>
@@ -738,9 +738,9 @@ sudo bash tools/pyleases.sh
 | `sudo bash tools/pybk.sh --install` | Register the `@monthly` cron entry | Registrar la entrada mensual en cron |
 | `sudo bash tools/pybk.sh --uninstall` | Remove the cron entry, keeping the archives | Quitar la entrada de cron, conservando los comprimidos |
 
-> Keep the default `BACKUP_DIR` and use it exclusively for PyDHCP. Inspect the archive before restoring it manually.
+> `BACKUP_DIR` must be `/etc/bak/pydhcp`. Do not store other files there, because `pybk.sh` deletes them. Inspect the archive before restoring it manually.
 >
-> Conserve el valor predeterminado de `BACKUP_DIR` y utilice ese directorio exclusivamente para PyDHCP. Revise el comprimido antes de restaurarlo manualmente.
+> `BACKUP_DIR` debe ser `/etc/bak/pydhcp`. No guarde otros archivos ahí, porque `pybk.sh` los elimina. Revise el comprimido antes de restaurarlo manualmente.
 
 ##### Backup Contents
 
@@ -757,7 +757,7 @@ sudo bash tools/pyleases.sh
 
 | Description | Descripción |
 |---|---|
-| <b>Project backup</b>. It is a copy of the installation paths listed by <code>pybk.sh</code>, intended for the administrator. It is stored in <code>BACKUP_DIR</code>, normally <code>/etc/bak/pydhcp</code>; its name carries a timestamp and up to 3 copies are kept. Only <code>pybk.sh</code> creates one. When present, it also includes <code>/var/www/wpad</code>, the available and enabled <code>wpad.conf</code> site paths, and Apache's <code>ports.conf</code>. Symbolic links are stored as links. The archive includes <code>/etc/acl/mac</code> and <code>/etc/acl/dhcp</code>. | <b>Copia de seguridad del proyecto</b>. Es una copia de las rutas de instalación que enumera <code>pybk.sh</code>, destinada al administrador. Se guarda en <code>BACKUP_DIR</code>, normalmente <code>/etc/bak/pydhcp</code>. Incluye la fecha y hora en el nombre y conserva hasta tres archivos. Solo <code>pybk.sh</code> crea esta copia. También incluye, cuando existen, <code>/var/www/wpad</code>, las rutas de <code>wpad.conf</code> en sitios disponibles y habilitados, y <code>ports.conf</code> de Apache. Los enlaces simbólicos se guardan como enlaces. El comprimido incluye <code>/etc/acl/mac</code> y <code>/etc/acl/dhcp</code>. |
+| <b>Project backup</b>. It is a copy of the installation paths listed by <code>pybk.sh</code>, intended for the administrator. It is stored in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>; its name carries a timestamp and up to 3 copies are kept. Only <code>pybk.sh</code> creates one. When present, it also includes <code>/var/www/wpad</code>, the available and enabled <code>wpad.conf</code> site paths, and Apache's <code>ports.conf</code>. Symbolic links are stored as links. The archive includes <code>/etc/acl/mac</code> and <code>/etc/acl/dhcp</code>. | <b>Copia de seguridad del proyecto</b>. Es una copia de las rutas de instalación que enumera <code>pybk.sh</code>, destinada al administrador. Se guarda en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la fecha y hora en el nombre y conserva hasta tres archivos. Solo <code>pybk.sh</code> crea esta copia. También incluye, cuando existen, <code>/var/www/wpad</code>, las rutas de <code>wpad.conf</code> en sitios disponibles y habilitados, y <code>ports.conf</code> de Apache. Los enlaces simbólicos se guardan como enlaces. El comprimido incluye <code>/etc/acl/mac</code> y <code>/etc/acl/dhcp</code>. |
 | <b>Routine-operation backup</b>. It is the copy a script takes of one specific file right before modifying it, so the change can be undone. It is stored next to the original file, as <code>&lt;file&gt;.bak</code>, and only one copy is kept, overwritten on every run. | <b>Copia previa a una modificación</b>. Antes de modificar un archivo, algunos scripts guardan una copia junto al original, con la extensión <code>.bak</code>. Se conserva una sola copia y cada ejecución reemplaza la anterior. |
 
 #### pywebmin
@@ -858,7 +858,6 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | `INFO:` | Service activity, lease operations, skipped packets and automatic repairs | Actividad del servicio, operaciones de concesiones, paquetes descartados y reparaciones automáticas |
 | `EVENT:` | Execution markers used by administrative scripts | Marcas de ejecución utilizadas por los scripts administrativos |
 | Timestamp only | The daemon writes selected shutdown and reload messages with a timestamp only. A viewer may identify these records as `STATUS`; the viewer assigns that label | El demonio escribe determinados mensajes de parada y recarga solo con fecha y hora. Un visor puede identificar estos registros como `STATUS`. El visor asigna esa etiqueta |
-| Flags | Message suffixes: `-abort`, `-alert`, `-fallback`, `-skip`, `-retry` and `-fixed` | Banderas al final del mensaje: `-abort`, `-alert`, `-fallback`, `-skip`, `-retry` y `-fixed` |
 
 #### Key check
 
@@ -879,15 +878,15 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 2026-11-01 10:00:00 ERROR: 2 key(s) invalid in pydhcp.env -abort
 ```
 
-#### Log line width
+#### Client name limits
 
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The daemon limits displayed client hostnames to 15 characters; <code>pyleases.sh</code> uses 20 in its blocked-client message. Lease records store a sanitized name of at most 64 characters; ACL generation accepts at most 63. Each message formats or shortens its own values.
+      Lease records store a sanitized name of at most 64 characters; ACL generation accepts at most 63.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El demonio limita a 15 caracteres los nombres de cliente mostrados en sus mensajes. <code>pyleases.sh</code> utiliza 20 en el mensaje de cliente bloqueado. Las concesiones guardan un nombre depurado de hasta 64 caracteres. El generador ACL admite hasta 63. Cada mensaje aplica su propio formato.
+      Las concesiones guardan un nombre depurado de hasta 64 caracteres. El generador ACL admite hasta 63.
     </td>
   </tr>
 </table>
@@ -956,6 +955,25 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
         <li>No acepta Pull Requests. Los cambios deben proponerse mediante Issues.</li>
         <li>Este proyecto no soporta retrocompatibilidad. Las nuevas versiones pueden requerir cambios de configuración o una reinstalación.</li>
         <li>No se recomienda programar tareas propias en el cron del proyecto, ya que se reescribe en cada instalación o actualización.</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+## LIMITATIONS
+
+---
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <ul>
+        <li>Follows a non-standard workflow. Published commits may be rewritten or removed without notice as part of the debugging and improvement process.</li>
+      </ul>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <ul>
+        <li>Utiliza un flujo de trabajo no convencional. Los commits publicados pueden ser reescritos o eliminados sin previo aviso como parte del proceso de depuración y mejora.</li>
       </ul>
     </td>
   </tr>

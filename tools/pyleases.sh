@@ -56,21 +56,24 @@ esac
 unset log_stat
 
 # prevent overlapping runs
-# Waits instead of failing: this script is registered in cron and restarts
-# pydhcpd, so a run overlapping the previous one is expected, not a fault.
-# The run already in progress does the work; this one steps aside with exit
-# 0 so cron does not report a failure for a healthy condition.
+# Waits up to 10 seconds for a run in progress. If the lock stays busy, this
+# run did no work: it returns 75 without reporting done.
 script_lock="/var/lock/$(basename "$0" .sh).lock"
-(umask 077; : >> "$script_lock") || {
+if ! (umask 077; : >> "$script_lock") 2>/dev/null ||
+   ! { exec 200>"$script_lock"; } 2>/dev/null; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: cannot open $(basename "$script_lock") -abort" >&2
     exit 1
-}
-exec 200>"$script_lock"
-if ! flock -w 10 200; then
-    log "INFO: another run in progress -skip"
-    log "EVENT: pyleases done"
-    exit 0
 fi
+script_lock_rc=0
+flock -w 10 -E 75 200 || script_lock_rc=$?
+if (( script_lock_rc == 75 )); then
+    log "INFO: another pyleases execution is in progress -skip"
+    exit 75
+elif (( script_lock_rc != 0 )); then
+    log "ERROR: cannot acquire pyleases lock -abort"
+    exit 1
+fi
+unset script_lock_rc
 
 # dependencies
 for dep_pkg in python3 coreutils util-linux curl grep sed systemd; do
@@ -140,12 +143,12 @@ verify_dhcp_files() {
 }
 
 verify_dhcp_config() {
-    if [ ! -f "${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}" ]; then
+    if [ ! -f "$DHCPDv4_CONF" ]; then
         log "ERROR: config file not found -abort"
         exit 1
     fi
-    chmod 640 "${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
-    chown root:"${DAEMON_GROUP:-pydhcpd}" "${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
+    chmod 640 "$DHCPDv4_CONF"
+    chown root:"${DAEMON_GROUP:-pydhcpd}" "$DHCPDv4_CONF"
 }
 
 # ACL PREPARATION
@@ -210,7 +213,7 @@ acl_fix_perms() {
         log "ERROR: cannot fix $(basename "$acl_path") perms -abort"
         exit 1
     fi
-    log "INFO: $acl_path perms fixed -fixed"
+    log "INFO: $(basename "$acl_path") perms fixed -fixed"
 }
 
 initialize_empty_files() {
@@ -263,10 +266,10 @@ dedup_mac_vs() {
         }
     ' "$acl_file"
     if [[ -s "$dropped_count" ]]; then
-        if mv "$tmp_file" "$acl_file"; then
+        if mv -fT -- "$tmp_file" "$acl_file"; then
             chmod 600 "$acl_file"
             while IFS= read -r mac_addr; do
-                log "INFO: dup MAC $mac_addr removed ($acl_label)"
+                log "INFO: dup MAC '$mac_addr' removed from $acl_label"
             done < "$dropped_count"
         else
             while IFS= read -r mac_addr; do
@@ -395,7 +398,10 @@ normalize_acl_file() {
             dropped_count=$((dropped_count + 1))
         done < "$acl_file"
         if (( dropped_count > 0 )); then
-            mv -f "$tmp_file" "$acl_file"
+            if ! mv -fT -- "$tmp_file" "$acl_file"; then
+                log "ERROR: cannot replace $(basename "$acl_file") -abort"
+                exit 1
+            fi
             chmod 600 "$acl_file"
             chown root:root "$acl_file"
         else
@@ -462,7 +468,8 @@ unset env_specs env_spec env_path env_owner_want env_perms_want
 unset env_owner env_perms
 
 # LOAD_CONF
-# so a tampered or maliciously replaced env file cannot execute code.
+# Reads keys as data instead of sourcing the file, so a tampered or
+# maliciously replaced env file cannot execute code.
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh"
 env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 
@@ -607,7 +614,6 @@ initialize_empty_files
 normalize_acl_lists
 check_duplicate
 check_mac_ip_ranges
-log "INFO: verification OK, pydhcpd active and paths valid"
 
 is_pydhcp() {
     leases_file="$PYDHCPD_LEASES"
@@ -664,7 +670,6 @@ is_pydhcp() {
                         acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
                         shopt -u nullglob
                         if [ ${#acl_mac_files[@]} -gt 0 ] && grep -qi "^a;${mac_address};" "${acl_mac_files[@]}" 2>/dev/null; then
-                            log "INFO: $mac_address authoritative (ip=$ip_address)"
                             echo "$lease_content" >> "$temp_leases"
                         elif [ ${#acl_mac_files[@]} -gt 0 ] && grep -qi "^#a;${mac_address};" "${acl_mac_files[@]}" 2>/dev/null; then
                             log "INFO: $mac_address deactivated (lease discarded)"
@@ -686,7 +691,10 @@ is_pydhcp() {
         log "INFO: done (leases_kept=$leases_kept)"
 
         if [[ -s "$temp_leases" ]]; then
-            mv -f "$temp_leases" "$leases_file"
+            if ! mv -fT -- "$temp_leases" "$leases_file"; then
+                log "ERROR: cannot replace $(basename "$leases_file") -abort"
+                exit 1
+            fi
             chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$leases_file"
             chmod 640 "$leases_file"
         elif (( parsed_line > 0 )); then
@@ -796,7 +804,10 @@ class "blockdhcp" {
 
         # Keep a backup of the previous config in case the new one is faulty.
         [ -f "$dhcp_conf" ] && cp -f "$dhcp_conf" "${dhcp_conf}.bak"
-        mv -f "$dhcp_conf_temp" "$dhcp_conf"
+        if ! mv -fT -- "$dhcp_conf_temp" "$dhcp_conf"; then
+            log "ERROR: cannot replace $(basename "$dhcp_conf") -abort"
+            exit 1
+        fi
         chown root:"${DAEMON_GROUP:-pydhcpd}" "$dhcp_conf"
         chmod 640 "$dhcp_conf"
     }
@@ -841,7 +852,10 @@ class "blockdhcp" {
                 rm -f "$block_tmp"
             else
                 chmod 600 "$block_tmp"
-                mv "$block_tmp" "$ACL_BLOCK_FILE"
+                if ! mv -fT -- "$block_tmp" "$ACL_BLOCK_FILE"; then
+                    log "ERROR: cannot replace $(basename "$ACL_BLOCK_FILE") -abort"
+                    exit 1
+                fi
             fi
         fi
         rm -f "$file_temp" "$line_patterns"
@@ -881,7 +895,6 @@ class "blockdhcp" {
         log "ERROR: pydhcpd still active, stop failed -abort"
         exit 1
     fi
-    log "INFO: stopping pydhcpd: done"
     pydhcpd_needs_restart=1
     log "INFO: processing leases"
     read_leases
@@ -908,7 +921,6 @@ class "blockdhcp" {
             exit 1
         fi
     fi
-    log "INFO: starting pydhcpd: done"
     pydhcpd_needs_restart=0
 }
 
@@ -918,9 +930,7 @@ check_duplicate
 check_mac_ip_ranges
 
 count_active() { local active_count=0; active_count=$(grep -c '^a;' "$1" 2>/dev/null) || active_count=0; echo "$active_count"; }
-log "INFO: blockdhcp=$(count_active "$ACL_BLOCK_FILE")"
-log "INFO: limited=$(count_active "$ACL_MAC_LIMITED")"
-log "INFO: unlimited=$(count_active "$ACL_MAC_UNLIMITED")"
+log "INFO: blockdhcp=$(count_active "$ACL_BLOCK_FILE")|limited=$(count_active "$ACL_MAC_LIMITED")|unlimited=$(count_active "$ACL_MAC_UNLIMITED")"
 
 # ------------------------------------------------------------------------------
 # END

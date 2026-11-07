@@ -23,8 +23,8 @@ show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  install      Install PyDHCP Webmin module"
-    echo "  uninstall    Uninstall PyDHCP Webmin module"
+    echo "  --install    Install PyDHCP Webmin module"
+    echo "  --uninstall  Uninstall PyDHCP Webmin module"
     echo "  -h, --help   Show this help message"
     echo ""
     echo "If no option is provided, interactive menu will be shown"
@@ -61,6 +61,7 @@ log() {
     echo "$msg" >> "$log_file" 2>/dev/null || true
     if [[ "$1" == ERROR:* ]]; then echo "$msg" >&2; else echo "$msg"; fi
 }
+info() { log "INFO: $*"; }
 
 log_error() {
     log "$*" >&2
@@ -916,9 +917,7 @@ main() {
                 exit 0
                 ;;
             *)
-                echo ""
-                echo "Invalid option. Please select 1, 2, or 3"
-                echo ""
+                info "invalid option -retry"
                 sleep 2
                 ;;
         esac
