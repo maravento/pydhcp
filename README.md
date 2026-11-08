@@ -355,10 +355,10 @@ sudo bash pysetup.sh --help   # or -h
 | `/var/log/pydhcp.log` (shared by the daemon and `tools/pyleases.sh`; `pysetup.sh` only creates it) | ⛔ preserved | ✅ removed |
 | `/etc/logrotate.d/pydhcp` | ✅ policy refreshed | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
-| `/etc/acl/dhcp/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ⛔ preserved |
+| `/etc/pydhcp/acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ⛔ preserved |
 | `core/pydhcpd.conf.bak`, `core/pydhcpd.conf.webmin.bak` (rollback copies) | ⛔ preserved | ✅ removed |
 | `/etc/bak/` (project backups written by `tools/pybk.sh`) | ⛔ preserved | ⛔ preserved |
-| `/etc/acl/mac/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
+| `/etc/acl/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
 | `/var/www/wpad/wpad.pac` | ⛔ preserved | ✅ removed |
 | `wpad.conf` (Apache site) and its Listen line in `ports.conf` | ⛔ preserved | ✅ removed |
 
@@ -366,9 +366,9 @@ sudo bash pysetup.sh --help   # or -h
 >
 > `/etc/acl` permanece intacto al ejecutar `--uninstall`. Allí se guardan las listas `mac-*.txt` del administrador. `pydhcp` solo las utiliza si se ejecuta la herramienta opcional `tools/pyleases.sh`. Como `pysetup.sh` crea ese directorio, la desinstalación no elimina esos datos.
 
-> `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is stored under `/etc/acl/dhcp/`, next to the administrator's lists in `/etc/acl/mac/`. No installer ever removes `/etc/acl`, because access control lists outlive the project that reads them, so `--uninstall` leaves it in place.
+> `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is stored under `/etc/pydhcp/acl/`, separate from the administrator's lists in `/etc/acl/`. No installer ever removes `/etc/acl`, because access control lists outlive the project that reads them, so `--uninstall` leaves it in place.
 >
-> `blockdhcp.txt` es un caso distinto: es la lista propia de `pydhcp`, escrita solo por `pyleases.sh` y no se edita manualmente. Se guarda en `/etc/acl/dhcp/`, junto a las listas del administrador en `/etc/acl/mac/`. Ningún instalador elimina `/etc/acl`, porque las listas de control de acceso sobreviven al proyecto que las lee, así que `--uninstall` la conserva.
+> `blockdhcp.txt` es un caso distinto: es la lista propia de `pydhcp`, escrita solo por `pyleases.sh` y no se edita manualmente. Se guarda en `/etc/pydhcp/acl/`, separada de las listas del administrador en `/etc/acl/`. Ningún instalador elimina `/etc/acl`, porque las listas de control de acceso sobreviven al proyecto que las lee, así que `--uninstall` la conserva.
 
 ### Daily operation
 
@@ -513,10 +513,10 @@ sudo tail -f /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>ACL_PATH</code> is the parent directory containing <code>ACL_MAC_PATH</code> and <code>ACL_DHCP_PATH</code>. The installer writes it in <code>pydhcp.env</code>. <code>pyleases.sh</code> reads it and prepares it as root:root, mode 755. Projects integrating with pydhcp can read this path.
+      <code>ACL_PATH</code> points to <code>/etc/acl</code>. <code>ACL_MAC_PATH</code> points to the same directory, and <code>ACL_DHCP_PATH</code> points to <code>/etc/pydhcp/acl</code>. The installer writes these paths in <code>pydhcp.env</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>ACL_PATH</code> es el directorio padre que contiene <code>ACL_MAC_PATH</code> y <code>ACL_DHCP_PATH</code>. El instalador lo escribe en <code>pydhcp.env</code>. <code>pyleases.sh</code> lo lee y prepara como root:root, modo 755. Los proyectos integrados con pydhcp pueden leer esta ruta.
+      <code>ACL_PATH</code> apunta a <code>/etc/acl</code>. <code>ACL_MAC_PATH</code> apunta al mismo directorio y <code>ACL_DHCP_PATH</code> apunta a <code>/etc/pydhcp/acl</code>. El instalador escribe estas rutas en <code>pydhcp.env</code>.
     </td>
   </tr>
 </table>
@@ -565,7 +565,7 @@ sudo tail -f /var/log/pydhcp.log
 | `/run/pydhcp` | `pydhcpd:pydhcpd` | `755` | Runtime directory created by systemd, separate from the installation directory; contains the PID file | Directorio de ejecución creado por systemd, separado del directorio de instalación. Contiene el archivo PID |
 | `/etc/systemd/system/pydhcpd.service`, `/etc/logrotate.d/pydhcp` | `root:root` | `644` | Service and log rotation configuration | Configuración del servicio y de rotación de registros |
 | `/etc/init.d/pydhcpd` | `root:root` | `755` | Service compatibility script | Script de compatibilidad del servicio |
-| `/etc/acl/mac`, `/etc/acl/dhcp` | `root:root` | `700` | ACL directories; their files use mode 600 | Directorios de listas ACL. Sus archivos tienen modo 600 |
+| `/etc/acl`, `/etc/pydhcp/acl` | `root:root` | `700` | ACL directories; their files use mode 600 | Directorios de listas ACL. Sus archivos tienen modo 600 |
 
 ```bash
 sudo ls -ld /etc/pydhcp /etc/pydhcp/core /etc/pydhcp/tools /run/pydhcp
@@ -650,10 +650,10 @@ sudo cat /var/www/wpad/wpad.pac
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code>, with owner root:root and mode 644. Administrative tools load it with <code>source</code>. It reads <code>pydhcp.env</code> as literal key-value data. Write full paths such as <code>ACL_MAC_PATH=/etc/acl/mac</code>. Load it from a consumer script.
+      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code>, with owner root:root and mode 644. Administrative tools load it with <code>source</code>. It reads <code>pydhcp.env</code> as literal key-value data. Write full paths such as <code>ACL_MAC_PATH=/etc/acl</code>. Load it from a consumer script.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code>, con propietario root:root y modo 644. Las herramientas administrativas lo cargan mediante <code>source</code>. Lee <code>pydhcp.env</code> como datos literales. Escriba rutas completas, como <code>ACL_MAC_PATH=/etc/acl/mac</code>. Cárguelo desde un script consumidor.
+      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code>, con propietario root:root y modo 644. Las herramientas administrativas lo cargan mediante <code>source</code>. Lee <code>pydhcp.env</code> como datos literales. Escriba rutas completas, como <code>ACL_MAC_PATH=/etc/acl</code>. Cárguelo desde un script consumidor.
     </td>
   </tr>
 </table>
@@ -674,7 +674,7 @@ sudo cat /var/www/wpad/wpad.pac
 | Input | Description | Descripción |
 |---|---|---|
 | Administrator lists | Reads every `mac-*.txt` in `ACL_MAC_PATH`. Entry format: `a;MAC;IP;HOSTNAME;`. Comment the entire line as `#a;MAC;IP;HOSTNAME;` to disable it | Lee todos los archivos `mac-*.txt` de `ACL_MAC_PATH`. Formato: `a;MAC;IP;HOSTNAME;`. Para desactivar una entrada, comente la línea completa: `#a;MAC;IP;HOSTNAME;` |
-| Blocked list | `ACL_BLOCK_FILE`, normally `/etc/acl/dhcp/blockdhcp.txt`. It accepts active entries only; comments are discarded as malformed | `ACL_BLOCK_FILE`, normalmente `/etc/acl/dhcp/blockdhcp.txt`. Solo admite entradas activas. Los comentarios se descartan por tener un formato inválido |
+| Blocked list | `ACL_BLOCK_FILE`, normally `/etc/pydhcp/acl/blockdhcp.txt`. It accepts active entries only; comments are discarded as malformed | `ACL_BLOCK_FILE`, normalmente `/etc/pydhcp/acl/blockdhcp.txt`. Solo admite entradas activas. Los comentarios se descartan por tener un formato inválido |
 | Validation | Checks line format, duplicate values and active reservation addresses before stopping the daemon. Commented entries still count in duplicate detection | Comprueba el formato, los valores duplicados y las direcciones de reservas activas antes de detener el demonio. Las entradas comentadas también cuentan al buscar duplicados |
 | Overlapping runs | Uses `/var/lock/pyleases.lock`. Waits up to ten seconds. If another run still holds the lock, it skips the work and exits with status 75 | Utiliza `/var/lock/pyleases.lock`. Espera hasta diez segundos. Si otra ejecución conserva el bloqueo, omite el trabajo y termina con código 75 |
 
@@ -757,7 +757,7 @@ sudo bash tools/pyleases.sh
 
 | Description | Descripción |
 |---|---|
-| <b>Project backup</b>. It is a copy of the installation paths listed by <code>pybk.sh</code>, intended for the administrator. It is stored in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>; its name carries a timestamp and up to 3 copies are kept. Only <code>pybk.sh</code> creates one. When present, it also includes <code>/var/www/wpad</code>, the available and enabled <code>wpad.conf</code> site paths, and Apache's <code>ports.conf</code>. Symbolic links are stored as links. The archive includes <code>/etc/acl/mac</code> and <code>/etc/acl/dhcp</code>. | <b>Copia de seguridad del proyecto</b>. Es una copia de las rutas de instalación que enumera <code>pybk.sh</code>, destinada al administrador. Se guarda en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la fecha y hora en el nombre y conserva hasta tres archivos. Solo <code>pybk.sh</code> crea esta copia. También incluye, cuando existen, <code>/var/www/wpad</code>, las rutas de <code>wpad.conf</code> en sitios disponibles y habilitados, y <code>ports.conf</code> de Apache. Los enlaces simbólicos se guardan como enlaces. El comprimido incluye <code>/etc/acl/mac</code> y <code>/etc/acl/dhcp</code>. |
+| <b>Project backup</b>. It is a copy of the installation paths listed by <code>pybk.sh</code>, intended for the administrator. It is stored in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>; its name carries a timestamp and up to 3 copies are kept. Only <code>pybk.sh</code> creates one. When present, it also includes <code>/var/www/wpad</code>, the available and enabled <code>wpad.conf</code> site paths, and Apache's <code>ports.conf</code>. Symbolic links are stored as links. The archive includes <code>/etc/acl/mac-*.txt</code> and <code>/etc/pydhcp/acl</code>. | <b>Copia de seguridad del proyecto</b>. Es una copia de las rutas de instalación que enumera <code>pybk.sh</code>, destinada al administrador. Se guarda en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la fecha y hora en el nombre y conserva hasta tres archivos. Solo <code>pybk.sh</code> crea esta copia. También incluye, cuando existen, <code>/var/www/wpad</code>, las rutas de <code>wpad.conf</code> en sitios disponibles y habilitados, y <code>ports.conf</code> de Apache. Los enlaces simbólicos se guardan como enlaces. El comprimido incluye <code>/etc/acl/mac-*.txt</code> y <code>/etc/pydhcp/acl</code>. |
 | <b>Routine-operation backup</b>. It is the copy a script takes of one specific file right before modifying it, so the change can be undone. It is stored next to the original file, as <code>&lt;file&gt;.bak</code>, and only one copy is kept, overwritten on every run. | <b>Copia previa a una modificación</b>. Antes de modificar un archivo, algunos scripts guardan una copia junto al original, con la extensión <code>.bak</code>. Se conserva una sola copia y cada ejecución reemplaza la anterior. |
 
 #### pywebmin

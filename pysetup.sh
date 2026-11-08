@@ -96,18 +96,17 @@ wpad_vhost_dest="/etc/apache2/sites-available/wpad.conf"
 wpad_vhost_enabled="/etc/apache2/sites-enabled/wpad.conf"
 apache_ports="/etc/apache2/ports.conf"
 
-# ACL layout. Two groups, by who owns the list, both under acl_base_dir:
+# ACL layout. Two groups, by who owns the list:
 # - acl_mac_dir holds the administrator's own lists (mac-*.txt), edited by hand.
 # - acl_dhcp_dir holds pydhcp's own list (blockdhcp.txt), written by
 #   pyleases.sh alone.
-# acl_base_dir stays outside install_dir because access control lists are never
-# removed by any installer: --uninstall leaves /etc/acl untouched.
+# Uninstall preserves both ACL locations.
 # pydhcp.env itself is written with these already resolved -- it is parsed
 # key=value (never sourced), so a "$VAR" inside it would be stored as that
 # literal string, not as a path.
 acl_base_dir="/etc/acl"
-acl_mac_dir="${acl_base_dir}/mac"
-acl_dhcp_dir="${acl_base_dir}/dhcp"
+acl_mac_dir="$acl_base_dir"
+acl_dhcp_dir="$install_dir/acl"
 acl_limited_file="${acl_mac_dir}/mac-limited.txt"
 acl_unlimited_file="${acl_mac_dir}/mac-unlimited.txt"
 acl_block_file="${acl_dhcp_dir}/blockdhcp.txt"
@@ -1035,12 +1034,9 @@ do_uninstall() {
 
     [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -abort"
 
-    # Everything under install_dir goes, including the config: uninstalling
-    # means removing the project. The ACL lists are not here: they live under
-    # /etc/acl, which no installer ever removes. tools/pybk.sh is the way to
-    # keep a copy of the config, and it writes to /etc/bak.
+    # Remove the project and keep its ACL directory.
     log "EVENT: Removing $install_dir ..."
-    rm -rf "$install_dir"
+    find "$install_dir" -mindepth 1 -maxdepth 1 ! -path "$acl_dhcp_dir" -exec rm -rf -- {} +
 
     log "EVENT: Removing system user and group $daemon_owner ..."
     userdel "$daemon_owner" 2>/dev/null || warn "cannot remove user $daemon_owner -alert"
@@ -1264,10 +1260,9 @@ sys.exit(0 if valid else 1)
     # overwritten). These lists are only consumed by the optional pyleases.sh
     # tool, but are created here unconditionally so their paths can be recorded
     # in pydhcp.env from the start -- not deferred until pyleases.sh first runs.
-    acl_prepare "$acl_base_dir" 755 644
     acl_prepare "$acl_mac_dir" 700 600 "$acl_limited_file" "$acl_unlimited_file"
     acl_prepare "$acl_dhcp_dir" 700 600 "$acl_block_file"
-    info "ACL directories/files present in $acl_base_dir"
+    info "ACL files present in $acl_mac_dir and $acl_dhcp_dir"
 
     # Create pydhcp.env (preserved on update -- never overwritten). Single source
     # of truth for network, ACL-path and daemon-defaults values: pyleases.sh and
