@@ -61,27 +61,52 @@ FILE: README.md
 ---
 
 ```
-pydhcp/
+pydhcp/                           # deployed to: /etc/pydhcp [0770 root:pydhcpd]
+├── pydhcp.env                    # generated configuration [0640 root:pydhcpd]
+├── acl/                          # PyDHCP-managed ACLs [0700 root:root]
+│   └── blockdhcp.txt             # blocked MAC addresses [0600 root:root]
 ├── conf/
-│   └── wpad.conf           # Apache VirtualHost of the WPAD/PAC server, deployed by pysetup.sh
-│
-├── core/
-│   ├── pydhcpd.py          # DHCP daemon: handles DISCOVER/OFFER/REQUEST/ACK
-│   └── pydhcpd.conf        # Daemon config: hosts, pools, lease timers
-│
+│   └── wpad.conf                 # deployed to: /etc/apache2/sites-available/wpad.conf [0644 root:root]
+├── core/                         # DHCP daemon and state [0770 root:pydhcpd]
+│   ├── pydhcpd.py                # IPv4 DHCP daemon [0755 root:root]
+│   ├── pydhcpd.conf              # daemon configuration [0640 root:pydhcpd]
+│   └── pydhcpd.leases            # generated DHCP leases [0640 pydhcpd:pydhcpd]
 ├── init.d/
-│   └── pydhcpd             # init.d-style start/stop/status wrapper around the systemd service
-│
+│   └── pydhcpd                   # deployed to: /etc/init.d/pydhcpd [0755 root:root]
 ├── service/
-│   └── pydhcpd.service     # systemd unit that runs the daemon
-│
-├── tools/
-│   ├── pydhcpenv.sh        # Shared Bash configuration reader (sourced, not executed)
-│   ├── pybk.sh             # Backup pydhcp configuration and data (see Tools section)
-│   ├── pyleases.sh         # Rebuilds pydhcpd.conf from ACL files and manages leases (see Tools section)
-│   └── pywebmin.sh         # Installs the Webmin module for managing pydhcpd from the browser (see Tools section)
-│
-└── pysetup.sh          # Installs, updates or removes pydhcp
+│   └── pydhcpd.service           # deployed to: /etc/systemd/system/pydhcpd.service [0644 root:root]
+├── tools/                        # administrative tools [0755 root:root]
+│   ├── pydhcpenv.sh              # shared Bash configuration reader [0644 root:root]
+│   ├── pybk.sh                   # configuration backup [0755 root:root]
+│   ├── pyleases.sh               # reconciles DHCP leases and ACLs [0755 root:root]
+│   └── pywebmin.sh               # optional Webmin installer [0755 root:root]
+└── pysetup.sh                    # installer, updater and uninstaller
+```
+
+### Additional Installed Paths
+
+```text
+etc/
+├── acl/                          # administrator-managed MAC lists [0700 root:root]
+│   ├── mac-limited.txt           # limited clients [0600 root:root]
+│   └── mac-unlimited.txt         # unlimited clients [0600 root:root]
+├── apache2/
+│   └── sites-enabled/
+│       └── wpad.conf             # link to ../sites-available/wpad.conf [0777 root:root]
+├── bak/
+│   └── pydhcp                    # configuration backups [0700 root:root]
+├── cron.d/
+│   ├── pydhcp                    # scheduled tasks [0644 root:root]
+│   └── pydhcp.lock               # cron writer lock [0600 root:root]
+└── logrotate.d/
+    └── pydhcp                    # log rotation policy [0644 root:root]
+
+var/
+├── log/
+│   └── pydhcp.log                # shared DHCP log [0640 pydhcpd:pydhcpd]
+└── www/
+    └── wpad/                     # optional WPAD document root [0755 www-data:www-data]
+        └── wpad.pac              # generated proxy configuration [0644 www-data:www-data]
 ```
 
 ## HOW TO USE
@@ -356,7 +381,7 @@ sudo bash pysetup.sh --help   # or -h
 | `/etc/logrotate.d/pydhcp` | ✅ policy refreshed | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
 | `/etc/pydhcp/acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ⛔ preserved |
-| `core/pydhcpd.conf.bak`, `core/pydhcpd.conf.webmin.bak` (rollback copies) | ⛔ preserved | ✅ removed |
+| `core/pydhcpd.conf.webmin.bak` (Webmin rollback copy) | ⛔ preserved | ✅ removed |
 | `/etc/bak/` (project backups written by `tools/pybk.sh`) | ⛔ preserved | ⛔ preserved |
 | `/etc/acl/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
 | `/var/www/wpad/wpad.pac` | ⛔ preserved | ✅ removed |
@@ -546,26 +571,17 @@ sudo tail -f /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The systemd unit runs the daemon as <code>pydhcpd</code>. It grants <code>CAP_NET_RAW</code> for raw sockets and ICMP, and <code>CAP_NET_BIND_SERVICE</code> for UDP 67. The following table describes the permissions currently assigned by the installer.
+      The systemd unit runs the daemon as <code>pydhcpd</code>. It grants <code>CAP_NET_RAW</code> for raw sockets and ICMP, and <code>CAP_NET_BIND_SERVICE</code> for UDP 67. The following table describes the runtime directory created by systemd.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      La unidad systemd ejecuta el demonio como <code>pydhcpd</code>. Le concede <code>CAP_NET_RAW</code> para sockets raw e ICMP, y <code>CAP_NET_BIND_SERVICE</code> para UDP 67. La tabla describe los permisos que asigna actualmente el instalador.
+      La unidad systemd ejecuta el demonio como <code>pydhcpd</code>. Le concede <code>CAP_NET_RAW</code> para sockets raw e ICMP, y <code>CAP_NET_BIND_SERVICE</code> para UDP 67. La tabla describe el directorio de ejecución que crea systemd.
     </td>
   </tr>
 </table>
 
 | Path | Owner | Mode | Description | Descripción |
 |---|---|---|---|---|
-| `/etc/pydhcp`, `/etc/pydhcp/core` | `root:pydhcpd` | `770` | The daemon group can create, rename and replace entries, including root-owned files. The core directory contains the leases file, replaced atomically | El grupo del demonio puede crear, renombrar y sustituir entradas, incluidos archivos de root. El directorio core contiene las concesiones, que se reemplazan de forma atómica |
-| `core/pydhcpd.py` | `root:root` | `755` | Executable daemon script | Script ejecutable del demonio |
-| `core/pydhcpd.conf`, `pydhcp.env` | `root:pydhcpd` | `640` | Configuration files read by the daemon | Archivos de configuración que lee el demonio |
-| `core/pydhcpd.leases` | `pydhcpd:pydhcpd` | `640` | Database written by the daemon and lease tools | Base de datos que escriben el demonio y las herramientas de concesiones |
-| `tools/` | `root:root` | `755` | Administrative tools; scripts are 755 and the shared reader is 644 | Herramientas administrativas. Los scripts tienen modo 755 y el lector compartido, 644 |
-| `/var/log/pydhcp.log` | `pydhcpd:pydhcpd` | `640` | Shared daemon and tool log | Registro compartido del demonio y sus herramientas |
 | `/run/pydhcp` | `pydhcpd:pydhcpd` | `755` | Runtime directory created by systemd, separate from the installation directory; contains the PID file | Directorio de ejecución creado por systemd, separado del directorio de instalación. Contiene el archivo PID |
-| `/etc/systemd/system/pydhcpd.service`, `/etc/logrotate.d/pydhcp` | `root:root` | `644` | Service and log rotation configuration | Configuración del servicio y de rotación de registros |
-| `/etc/init.d/pydhcpd` | `root:root` | `755` | Service compatibility script | Script de compatibilidad del servicio |
-| `/etc/acl`, `/etc/pydhcp/acl` | `root:root` | `700` | ACL directories; their files use mode 600 | Directorios de listas ACL. Sus archivos tienen modo 600 |
 
 ```bash
 sudo ls -ld /etc/pydhcp /etc/pydhcp/core /etc/pydhcp/tools /run/pydhcp
@@ -650,10 +666,10 @@ sudo cat /var/www/wpad/wpad.pac
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code>, with owner root:root and mode 644. Administrative tools load it with <code>source</code>. It reads <code>pydhcp.env</code> as literal key-value data. Write full paths such as <code>ACL_MAC_PATH=/etc/acl</code>. Load it from a consumer script.
+      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code>. Administrative tools load it with <code>source</code>. It reads <code>pydhcp.env</code> as literal key-value data. Write full paths such as <code>ACL_MAC_PATH=/etc/acl</code>. Load it from a consumer script.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code>, con propietario root:root y modo 644. Las herramientas administrativas lo cargan mediante <code>source</code>. Lee <code>pydhcp.env</code> como datos literales. Escriba rutas completas, como <code>ACL_MAC_PATH=/etc/acl</code>. Cárguelo desde un script consumidor.
+      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code>. Las herramientas administrativas lo cargan mediante <code>source</code>. Lee <code>pydhcp.env</code> como datos literales. Escriba rutas completas, como <code>ACL_MAC_PATH=/etc/acl</code>. Cárguelo desde un script consumidor.
     </td>
   </tr>
 </table>
@@ -663,10 +679,10 @@ sudo cat /var/www/wpad/wpad.pac
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>pyleases.sh</code> reads the leases database and ACL lists, removes unapproved leases from that database, rebuilds <code>pydhcpd.conf</code> and restarts the daemon. Run this optional tool manually to rebuild DHCP assignments.
+      <code>pyleases.sh</code> reads the leases database and ACL lists, removes unapproved leases from that database, rebuilds <code>pydhcpd.conf</code> and restarts the daemon. Immediately before replacing the configuration, it saves the previous file as <code>pydhcpd.conf.bak</code> for rollback. The updater preserves this copy and uninstall removes it. Run this optional tool manually to rebuild DHCP assignments.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>pyleases.sh</code> lee las concesiones y las listas ACL. Elimina de esa base las concesiones no autorizadas, reconstruye <code>pydhcpd.conf</code> y reinicia el demonio. Ejecute esta herramienta opcional manualmente para reconstruir las asignaciones DHCP.
+      <code>pyleases.sh</code> lee las concesiones y las listas ACL. Elimina de esa base las concesiones no autorizadas, reconstruye <code>pydhcpd.conf</code> y reinicia el demonio. Justo antes de reemplazar la configuración, guarda el archivo anterior como <code>pydhcpd.conf.bak</code> para poder restaurarlo. La actualización conserva esa copia y la desinstalación la elimina. Ejecute esta herramienta opcional manualmente para reconstruir las asignaciones DHCP.
     </td>
   </tr>
 </table>
@@ -779,7 +795,7 @@ sudo bash tools/pyleases.sh
 
 | Feature | Description | Descripción |
 |---------|--------------|-------------|
-| **Installer log** | `pywebmin.log`, beside the installer, is reset for each execution. Records the same messages shown in the terminal | `pywebmin.log`, junto al instalador, se vacía en cada ejecución. Registra los mismos mensajes mostrados en terminal |
+| **Installer messages** | The installer prints its messages to the terminal. | El instalador muestra sus mensajes en la terminal. |
 | **Service control** | Buttons to start, stop, restart or reload the `pydhcpd` service. | Botones para iniciar, detener, reiniciar o recargar el servicio `pydhcpd`. |
 | **Active leases table** | Shows each active lease's IP address, MAC address, hostname, expiry and binding state. | Muestra la IP, la dirección MAC, el nombre de host, la fecha de expiración y el estado de cada concesión activa. |
 | **Config editor** | Edits `pydhcpd.conf` in the browser and validates it with `pydhcpd.py -t -cf` before saving. Changes with syntax errors are rejected. Before replacing the file, it attempts a backup as `pydhcpd.conf.webmin.bak`. The save proceeds after the backup attempt. Reload the daemon after saving. | Permite editar `pydhcpd.conf` desde el navegador y valida la sintaxis con `pydhcpd.py -t -cf` antes de guardar. Rechaza los cambios si hay errores. Antes de reemplazar el archivo, intenta crear `pydhcpd.conf.webmin.bak`. El guardado continúa después del intento de respaldo. Recargue el demonio después de guardar. |

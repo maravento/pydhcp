@@ -11,7 +11,6 @@
 # sudo ./pywebmin.sh --uninstall    Uninstall the module
 # ./pywebmin.sh -h, --help        Show this help
 #
-# LOG: pywebmin.log, in this script's directory
 #
 ################################################################################
 
@@ -53,12 +52,9 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-# logging
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-log_file="${script_dir}/pywebmin.log"
+# Terminal messages
 log() {
     local msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
-    echo "$msg" >> "$log_file" 2>/dev/null || true
     if [[ "$1" == ERROR:* ]]; then echo "$msg" >&2; else echo "$msg"; fi
 }
 info() { log "INFO: $*"; }
@@ -78,9 +74,6 @@ if ! flock -n 200; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: script $(basename "$0") is already running -abort" >&2
     exit 1
 fi
-
-# reset the installer log
-{ > "$log_file"; } 2>/dev/null || true
 
 # dependencies
 for dep_pkg in coreutils util-linux systemd grep sed ncurses-bin perl; do
