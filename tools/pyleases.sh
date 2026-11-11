@@ -131,15 +131,42 @@ verify_dhcp_service() {
     fi
 }
 
+# Sets owner and mode on the opened file, never through a symlink: the
+# pydhcpd group can write /etc/pydhcp, so a path can be swapped for a link.
+# Usage: fix_dhcp_file <file> <owner> <group> <mode>
+fix_dhcp_file() {
+    if ! python3 -I - "$1" "$2" "$3" "$4" <<'PY'
+import grp, os, pwd, stat, sys
+path, owner, group, mode = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 8)
+try:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except OSError:
+    sys.exit(1)
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        sys.exit(1)
+    os.fchown(fd, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+    os.fchmod(fd, mode)
+finally:
+    os.close(fd)
+PY
+    then
+        log "ERROR: $(basename "$1") is not a regular file -abort"
+        exit 1
+    fi
+}
+
 verify_dhcp_files() {
     mkdir -p /etc/pydhcp
     chown root:"${DAEMON_GROUP:-pydhcpd}" /etc/pydhcp
     chmod 770 /etc/pydhcp
-    if [ ! -f "$PYDHCPD_LEASES" ]; then
-        touch "$PYDHCPD_LEASES"
+    if [ ! -f "$PYDHCPD_LEASES" ] \
+       && ! (set -C; umask 077; : > "$PYDHCPD_LEASES") 2>/dev/null; then
+        log "ERROR: cannot create $(basename "$PYDHCPD_LEASES") -abort"
+        exit 1
     fi
-    chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$PYDHCPD_LEASES"
-    chmod 640 "$PYDHCPD_LEASES"
+    fix_dhcp_file "$PYDHCPD_LEASES" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
 }
 
 verify_dhcp_config() {
@@ -147,8 +174,7 @@ verify_dhcp_config() {
         log "ERROR: config file not found -abort"
         exit 1
     fi
-    chmod 640 "$DHCPDv4_CONF"
-    chown root:"${DAEMON_GROUP:-pydhcpd}" "$DHCPDv4_CONF"
+    fix_dhcp_file "$DHCPDv4_CONF" root "${DAEMON_GROUP:-pydhcpd}" 640
 }
 
 # ACL PREPARATION
@@ -694,12 +720,13 @@ is_pydhcp() {
                 log "ERROR: cannot replace $(basename "$leases_file") -abort"
                 exit 1
             fi
-            chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$leases_file"
-            chmod 640 "$leases_file"
+            fix_dhcp_file "$leases_file" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
         elif (( parsed_line > 0 )); then
-            : > "$leases_file"
-            chown "${DAEMON_USER:-pydhcpd}":"${DAEMON_GROUP:-pydhcpd}" "$leases_file"
-            chmod 640 "$leases_file"
+            if ! mv -fT -- "$temp_leases" "$leases_file"; then
+                log "ERROR: cannot replace $(basename "$leases_file") -abort"
+                exit 1
+            fi
+            fix_dhcp_file "$leases_file" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
         elif [[ -s "$leases_file" ]]; then
             # Nothing was parsed at all: the file did not look like leases.
             # Truncating it here would throw away data over a parser failure.
@@ -802,13 +829,18 @@ class "blockdhcp" {
 }" >>"$dhcp_conf_temp"
 
         # Keep a backup of the previous config in case the new one is faulty.
-        [ -f "$dhcp_conf" ] && cp -f "$dhcp_conf" "${dhcp_conf}.bak"
+        # -P copies a symlink as a symlink, so a restore can never read its target.
+        if [ -f "$dhcp_conf" ]; then
+            local bak_temp
+            bak_temp=$(mktemp "${dhcp_conf}.bak.XXXXXX") || { log "ERROR: cannot create config backup; check /etc/pydhcp -abort"; exit 1; }
+            temp_files+=("$bak_temp")
+            { cp -fP -- "$dhcp_conf" "$bak_temp" && mv -fT -- "$bak_temp" "${dhcp_conf}.bak"; } || rm -f -- "$bak_temp"
+        fi
         if ! mv -fT -- "$dhcp_conf_temp" "$dhcp_conf"; then
             log "ERROR: cannot replace $(basename "$dhcp_conf") -abort"
             exit 1
         fi
-        chown root:"${DAEMON_GROUP:-pydhcpd}" "$dhcp_conf"
-        chmod 640 "$dhcp_conf"
+        fix_dhcp_file "$dhcp_conf" root "${DAEMON_GROUP:-pydhcpd}" 640
     }
 
     # Log lines below do not carry the function name -- they use short,
@@ -906,7 +938,11 @@ class "blockdhcp" {
     if ! systemctl is-active --quiet pydhcpd; then
         log "WARNING: pydhcpd failed to start after rebuild -fallback"
         if [ -f "${dhcp_conf}.bak" ]; then
-            cp -f "${dhcp_conf}.bak" "$dhcp_conf"
+            if ! mv -fT -- "${dhcp_conf}.bak" "$dhcp_conf"; then
+                log "ERROR: cannot restore $(basename "$dhcp_conf") -abort"
+                exit 1
+            fi
+            fix_dhcp_file "$dhcp_conf" root "${DAEMON_GROUP:-pydhcpd}" 640
             log "INFO: restored backup config, retrying start"
             systemctl start pydhcpd || true
             if ! systemctl is-active --quiet pydhcpd; then

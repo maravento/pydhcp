@@ -120,6 +120,32 @@ abort() { err "$*"; exit 1; }
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
+# OWNER AND MODE
+# Sets owner and mode on the opened file, never through a symlink: the
+# pydhcpd group can write /etc/pydhcp, so a path can be swapped for a link.
+# Usage: fix_dhcp_file <file> <owner> <group> <mode>
+fix_dhcp_file() {
+    if ! python3 -I - "$1" "$2" "$3" "$4" <<'PY'
+import grp, os, pwd, stat, sys
+path, owner, group, mode = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 8)
+try:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except OSError:
+    sys.exit(1)
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        sys.exit(1)
+    os.fchown(fd, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+    os.fchmod(fd, mode)
+finally:
+    os.close(fd)
+PY
+    then
+        abort "$(basename "$1") is not a regular file -abort"
+    fi
+}
+
 # UPDATE CHECKS
 update_error() {
     if declare -F err >/dev/null; then
@@ -1250,11 +1276,12 @@ sys.exit(0 if valid else 1)
         { info "pydhcpd.conf already exists in $install_dir"; info "static hosts and blocked MACs kept"; info "network parameters updated with your answers"; }
     else
         verify_source "$script_dir/core/pydhcpd.conf"
-        cp "$script_dir/core/pydhcpd.conf" "$core_dir/pydhcpd.conf"
+        conf_tmp=$(mktemp "$core_dir/.pydhcpd.conf.XXXXXX") || abort "cannot create temp file -abort"
+        cp "$script_dir/core/pydhcpd.conf" "$conf_tmp" && mv -fT -- "$conf_tmp" "$core_dir/pydhcpd.conf" \
+            || { rm -f -- "$conf_tmp"; abort "cannot install pydhcpd.conf -abort"; }
         info "updated pydhcpd.conf"
     fi
-    chown root:"$daemon_owner" "$core_dir/pydhcpd.conf"
-    chmod 640 "$core_dir/pydhcpd.conf"
+    fix_dhcp_file "$core_dir/pydhcpd.conf" root "$daemon_owner" 640
 
     # Create pydhcp's own ACL directories/files (preserved on update -- never
     # overwritten). These lists are only consumed by the optional pyleases.sh
@@ -1360,15 +1387,14 @@ ENVEOF
     info "Network parameters set in pydhcpd.conf"
 
     # Re-apply permissions after sed edits
-    chown root:"$daemon_owner" "$core_dir/pydhcpd.conf"
-    chmod 640 "$core_dir/pydhcpd.conf"
+    fix_dhcp_file "$core_dir/pydhcpd.conf" root "$daemon_owner" 640
 
     # Initialize empty leases file if not present
     if [ ! -f "$core_dir/pydhcpd.leases" ]; then
         log "EVENT: Creating empty pydhcpd.leases ..."
-        touch "$core_dir/pydhcpd.leases"
-        chown "$daemon_owner":"$daemon_owner" "$core_dir/pydhcpd.leases"
-        chmod 640 "$core_dir/pydhcpd.leases"
+        (set -C; umask 077; : > "$core_dir/pydhcpd.leases") 2>/dev/null \
+            || abort "cannot create pydhcpd.leases -abort"
+        fix_dhcp_file "$core_dir/pydhcpd.leases" "$daemon_owner" "$daemon_owner" 640
     fi
 
     # Deploy tools
