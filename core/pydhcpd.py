@@ -69,23 +69,6 @@ if not _TEST_MODE:
         sys.stderr.write(
             f"WARNING: cannot open {LOG_FILE} for writing ({e}), "
             "stdout only -alert\n")
-        _uhm_log = "/var/log/uhm.log"
-        if os.path.exists(_uhm_log):
-            try:
-                with open(_uhm_log, "a") as _f:
-                    _f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} "
-                             f"WARNING: pydhcpd cannot open {LOG_FILE} -alert\n")
-            except OSError:
-                pass
-
-class StatusFormatter(logging.Formatter):
-    """Keep status records dated, without a written level."""
-
-    def format(self, record):
-        if getattr(record, "status", False):
-            return f"{self.formatTime(record, self.datefmt)} {record.getMessage()}"
-        return super().format(record)
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,9 +76,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=_log_handlers,
 )
-for _handler in _log_handlers:
-    _handler.setFormatter(StatusFormatter(
-        "%(asctime)s %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
 log = logging.getLogger("pydhcpd")
 
 # =============================================================================
@@ -1489,6 +1469,7 @@ class DHCPServer:
         self._config_lock = threading.RLock()
         self._shutdown = threading.Event()
         self._cleanup_thread = None
+        self.exit_code = 0
 
     def apply_config(self, new_config):
         with self._config_lock:
@@ -1606,8 +1587,9 @@ class DHCPServer:
     def _handle_packet(self, data, src_mac, src_ip):
         try:
             self._handle(data, src_mac, src_ip)
-        except Exception:
-            log.info("Worker error from %.17s -skip", src_mac)
+        except Exception as err:
+            log.info("request from %.17s discarded -skip", src_mac)
+            log.info("request discarded: %s", _discard_reason(err))
         finally:
             self._inflight.release()
 
@@ -1632,6 +1614,15 @@ class DHCPServer:
             with self._config_lock:
                 interval = self.config.cleanup_interval
             if self._shutdown.wait(interval):
+                return
+            # Disk full, read-only or no permission: no lease can be saved,
+            # so no client gets an ACK. Stop instead of running unusable.
+            leases_error = leases_write_error(self.leases.path)
+            if leases_error:
+                log.error("%s: %s -abort",
+                          os.path.basename(self.leases.path), leases_error)
+                self.exit_code = 1
+                self.running = False
                 return
             try:
                 self.leases.cleanup_expired()
@@ -1685,8 +1676,7 @@ class DHCPServer:
                     declined_ip = pkt.get("ciaddr", "0.0.0.0")
                 if self.leases.release_owned(mac, declined_ip):
                     self.leases.quarantine_ip(declined_ip)
-                    log.info("DECLINE: IP %.15s quarantined", declined_ip)
-                    log.info("(%.17s)", mac)
+                    log.info("DECLINE %.17s %.15s quarantined", mac, declined_ip)
                 else:
                     log.info("DECLINE from %.17s not owned -skip", mac)
 
@@ -1851,8 +1841,7 @@ class DHCPServer:
             pending_ip = self._pending.get(xid_key)
         if pending_ip and target_ip and target_ip != pending_ip:
             log.info("NAK (SELECTING mismatch) → %.17s", mac)
-            log.info("(requested %.15s)", target_ip)
-            log.info("(we offered %.15s)", pending_ip)
+            log.info("NAK requested %.15s offered %.15s", target_ip, pending_ip)
             # Drop the stale offer: the client will restart with a new xid.
             with self._pending_lock:
                 self._pending.pop(xid_key, None)
@@ -1869,13 +1858,11 @@ class DHCPServer:
             if static_ip and target_ip != static_ip:
                 if config_auth:
                     log.info("NAK (authoritative) → %.17s", mac)
-                    log.info("(requested %.15s)", target_ip)
-                    log.info("(assigned %.15s)", static_ip)
+                    log.info("NAK requested %.15s assigned %.15s", target_ip, static_ip)
                     self._send_nak(pkt, mac, "Not authorized for this IP")
                 else:
                     log.info("REQUEST not authoritative, staying silent")
-                    log.info("(%.17s)", mac)
-                    log.info("requested %.15s", target_ip)
+                    log.info("REQUEST %.17s asked %.15s", mac, target_ip)
                     log.info("assigned %.15s", static_ip)
                 return
 
@@ -1901,8 +1888,7 @@ class DHCPServer:
                              broadcast=use_broadcast, giaddr=pkt.get("giaddr", "0.0.0.0"))
         if reply:
             self._send(reply, giaddr=pkt.get("giaddr", "0.0.0.0"), ciaddr=pkt.get("ciaddr", "0.0.0.0"))
-            log.info("ACK %.17s → %.15s", mac, offered_ip)
-            log.info("(lease %ds)", lease_time)
+            log.info("ACK %.17s → %.15s lease %ds", mac, offered_ip, lease_time)
 
     def _send_nak(self, pkt, mac, reason=None):
         nak = bytearray(236)
@@ -1928,7 +1914,7 @@ class DHCPServer:
                    giaddr=pkt.get("giaddr", "0.0.0.0"),
                    ciaddr="0.0.0.0")
         log.info("NAK → %.17s", mac)
-        log.info("(%.40s)", reason or "")
+        log.info("NAK reason: %.40s", reason or "")
 
     @staticmethod
     def _should_broadcast(pkt):
@@ -1949,6 +1935,33 @@ class DHCPServer:
 # =============================================================================
 # PID / SIGNAL
 # =============================================================================
+
+def _discard_reason(err):
+    """Plain-language reason for a request the daemon could not process."""
+    if isinstance(err, (KeyError, IndexError)):
+        return "missing field"
+    if isinstance(err, (ValueError, TypeError)):
+        return "invalid value"
+    if isinstance(err, struct.error):
+        return "truncated packet"
+    return "unexpected data"
+
+
+def leases_write_error(path):
+    """Return why the lease directory cannot be written, or None."""
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".",
+                                   dir=os.path.dirname(path) or ".")
+        try:
+            os.write(fd, b"\n")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+            os.unlink(tmp)
+    except OSError as err:
+        return err.strerror or str(err)
+    return None
+
 
 def write_pid(path):
     # An exclusive lock, not the PID, is what proves a live instance: a
@@ -2015,7 +2028,6 @@ def main():
     try:
         config.load(defaults["conf"])
     except ConfigError as e:
-        log.error("Configuration error")
         for _line in str(e).splitlines():
             log.error("%.46s", _line)
         log.error("cannot start with an invalid configuration -abort")
@@ -2031,6 +2043,12 @@ def main():
     # instance must be rejected before it can touch the data of the live one.
     pid_fd = write_pid(defaults["pid"])  # noqa: F841
 
+    leases_error = leases_write_error(defaults["leases"])
+    if leases_error:
+        log.error("%s: %s -abort",
+                  os.path.basename(defaults["leases"]), leases_error)
+        sys.exit(1)
+
     lease_mgr = LeaseManager(defaults["leases"], config,
                              daemon_user=defaults["user"],
                              daemon_group=defaults["group"],
@@ -2041,7 +2059,7 @@ def main():
     server    = DHCPServer(interface, config, lease_mgr)
 
     def signal_shutdown(signum, frame):
-        log.info("Signal %d received, shutting down...", signum, extra={"status": True})
+        log.info("Signal %d received, shutting down...", signum)
         server.running = False
 
     def reload_config(signum, frame):
@@ -2049,7 +2067,7 @@ def main():
             if isinstance(h, logging.FileHandler):
                 h.close()
                 h.stream = h._open()
-        log.info("SIGHUP received — reloading configuration...", extra={"status": True})
+        log.info("SIGHUP received — reloading configuration...")
         try:
             new_config = DHCPConfig()
             new_config.load(defaults["conf"])
@@ -2074,6 +2092,7 @@ def main():
         server.start()
     finally:
         server.stop()
+    sys.exit(server.exit_code)
 
 
 if __name__ == "__main__":

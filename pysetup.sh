@@ -27,6 +27,28 @@ set -euo pipefail
 # Source directory (where this script lives) -- needed by the logging block
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+usage() {
+    cat <<USAGE_END
+Usage: sudo bash $(basename "$0") [OPTION]
+
+  --install      Install pydhcp. Aborts if already installed
+  --update       Update code only, preserving the user configuration
+  --uninstall    Remove pydhcp, with two confirmations up front
+  --status       Report the service, the port, the configuration and the log
+  -h, --help     Show this message
+
+Without arguments it opens the interactive menu.
+USAGE_END
+}
+
+# help needs neither root nor the log
+case "${1:-}" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+esac
+
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
@@ -59,15 +81,11 @@ log() {
 }
 
 # dependencies
-# Project-wide list: this installer verifies every package the deployed
-# components need at runtime, not just the ones it invokes itself -- e.g.
-# iputils-ping is used by pydhcpd.py when it cannot open a raw ICMP socket.
-for dep_pkg in python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate; do
-    if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
-        log "ERROR: dependency '$dep_pkg' is not installed -abort"
-        exit 1
-    fi
-done
+# Project-wide list: every package the deployed components need at runtime,
+# not just the ones this installer invokes -- e.g. iputils-ping is used by
+# pydhcpd.py when it cannot open a raw ICMP socket. Installed by
+# install_deps in --install and --update.
+apt_deps=(python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate perl ncurses-bin)
 
 # ------------------------------------------------------------------------------
 # VARIABLES
@@ -745,7 +763,7 @@ detect_squid_port() {
 }
 
 # Writes wpad.pac from what is installed: PROXY server_ip:port when Squid is
-# listening, a plain DIRECT otherwise. Used by install and update.
+# listening, a plain DIRECT otherwise. Used by install.
 # Usage: write_pac <server_ip> <lan_subnet> <lan_mask>
 write_pac() {
     local server_ip="$1" lan_subnet="$2" lan_mask="$3" squid_port rc=0
@@ -753,7 +771,7 @@ write_pac() {
     squid_port=$(detect_squid_port "$server_ip") || rc=$?
     case "$rc" in
         0)
-            info "squid on port $squid_port, PAC uses PROXY ${server_ip}:${squid_port}"
+            info "squid on port $squid_port; PAC proxy ${server_ip}:${squid_port}"
             cat > "$pac_file" <<EOF || return 1
 function FindProxyForURL(url, host) {
     if (isPlainHostName(host) || shExpMatch(host, "127.*"))
@@ -805,6 +823,8 @@ deploy_wpad() {
     done
     if (( ${#missing_apache_packages[@]} > 0 )); then
         command -v apt-get >/dev/null 2>&1 || abort "apt-get is required to install Apache -abort"
+        check_ipv4_interfaces
+        check_internet
         DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_apache_packages[@]}" \
             || abort "cannot install Apache packages -abort"
     fi
@@ -856,7 +876,7 @@ deploy_wpad() {
     fi
 
     wpad_enabled_value="true"
-    info "WPAD/PAC deployed at http://${server_ip}:${wpad_port_value}/wpad.pac"
+    info "PAC at http://${server_ip}:${wpad_port_value}/wpad.pac"
 }
 
 # Warns before the WPAD question when its port is not free. Never aborts.
@@ -904,6 +924,59 @@ list_ipv4_ifaces() {
             printf '%s\n' "$iface"
         fi
     done < <(list_ifaces)
+}
+
+# check ipv4 interfaces
+check_ipv4_interfaces() {
+    local max_attempts=24 attempt=1
+
+    while (( attempt <= max_attempts )); do
+        if [ -n "$(list_ipv4_ifaces)" ]; then
+            return 0
+        fi
+        if (( attempt == 1 )); then
+            log "INFO: waiting for an interface with IPv4..."
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    log "ERROR: no interface with IPv4 -abort"
+    exit 1
+}
+
+# check internet
+check_internet() {
+    local max_attempts=24 attempt=1
+
+    while (( attempt <= max_attempts )); do
+        if getent hosts www.google.com >/dev/null 2>&1; then
+            return 0
+        fi
+        if (( attempt == 1 )); then
+            log "INFO: waiting for internet..."
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    log "ERROR: no internet connection -abort"
+    exit 1
+}
+
+# DEPENDENCIES
+# Install the missing packages of apt_deps
+install_deps() {
+    local dep_pkg missing_pkgs=()
+    for dep_pkg in "${apt_deps[@]}"; do
+        [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" == *"ok installed"* ]] || missing_pkgs+=("$dep_pkg")
+    done
+    (( ${#missing_pkgs[@]} == 0 )) && return 0
+    check_ipv4_interfaces
+    check_internet
+    DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
+        || { err "cannot install ${missing_pkgs[*]}"; abort "install them with apt, then re-run -abort"; }
+    info "Installed: ${missing_pkgs[*]}"
 }
 
 # LAN SELECTION
@@ -1014,7 +1087,7 @@ do_uninstall() {
     confirm "Proceed with uninstall? This cannot be undone." "n" \
         || {
             info "Aborted by user"
-            log "EVENT: pysetup done"
+            log "INFO: pysetup done"
             exit 0
         }
 
@@ -1022,7 +1095,7 @@ do_uninstall() {
     read -rp "Type word YES (uppercase) to remove pydhcp: " confirm_answer
     if [[ "$confirm_answer" != "YES" ]]; then
         info "Aborted by user"
-        log "EVENT: pysetup done"
+        log "INFO: pysetup done"
         exit 0
     fi
 
@@ -1036,15 +1109,15 @@ do_uninstall() {
         abort "pybk.sh: missing or not executable -abort"
     fi
 
-    log "EVENT: Stopping and disabling pydhcpd service..."
+    log "INFO: Stopping and disabling pydhcpd service..."
     systemctl stop pydhcpd 2>/dev/null || true
     systemctl disable pydhcpd 2>/dev/null || true
 
-    log "EVENT: Removing system files..."
+    log "INFO: Removing system files..."
     rm -f "$service_file"
     rm -f "$init_file"
     rm -f /etc/logrotate.d/pydhcp && info "Removed /etc/logrotate.d/pydhcp"
-    rm -f /var/log/pydhcp.log
+    rm -f -- "$pydhcp_log_file" "$pydhcp_log_file".*
 
     rm -f /etc/cron.d/pydhcp /etc/cron.d/pydhcp.update-disabled
     if [ -x "$install_dir/tools/pybk.sh" ]; then
@@ -1052,7 +1125,7 @@ do_uninstall() {
     fi
 
     if [ -x "$install_dir/tools/pywebmin.sh" ]; then
-        log "EVENT: Removing Webmin module ..."
+        log "INFO: Removing Webmin module ..."
         "$install_dir/tools/pywebmin.sh" --uninstall || true
     fi
 
@@ -1061,10 +1134,10 @@ do_uninstall() {
     [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -abort"
 
     # Remove the project and keep its ACL directory.
-    log "EVENT: Removing $install_dir ..."
+    log "INFO: Removing $install_dir ..."
     find "$install_dir" -mindepth 1 -maxdepth 1 ! -path "$acl_dhcp_dir" -exec rm -rf -- {} +
 
-    log "EVENT: Removing system user and group $daemon_owner ..."
+    log "INFO: Removing system user and group $daemon_owner ..."
     userdel "$daemon_owner" 2>/dev/null || warn "cannot remove user $daemon_owner -alert"
     groupdel "$daemon_owner" 2>/dev/null || true
 
@@ -1079,6 +1152,7 @@ do_uninstall() {
 # ------------------------------------------------------------------------------
 
 do_update() {
+    install_deps
     [ -d "$install_dir" ] && [ -f "$install_dir/pydhcp.env" ] \
         || abort "pydhcp is not installed -abort"
     update_reset /etc/cron.d/pydhcp
@@ -1088,9 +1162,9 @@ do_update() {
     done
     update_file "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py" 755 root:root
     update_file "$script_dir/service/pydhcpd.service" "$service_file" 644 root:root
-    update_file "$script_dir/init.d/pydhcpd" "$init_file" 755 root:root
+    update_file "$script_dir/init.d/pydhcpd" "$init_file" 750 root:root
     for file in pydhcpenv.sh pyleases.sh pybk.sh pywebmin.sh; do
-        local mode=755
+        local mode=750
         [ "$file" != pydhcpenv.sh ] || mode=644
         update_file "$script_dir/tools/$file" "$install_dir/tools/$file" "$mode" root:root
     done
@@ -1107,7 +1181,7 @@ do_update() {
     install -d -m 755 -o root -g root /etc/logrotate.d || update_error "cannot prepare logrotate directory"
     if ! cat > /etc/logrotate.d/pydhcp <<'PY_ROTATE'
 /var/log/pydhcp.log {
-    daily
+    weekly
     rotate 7
     compress
     delaycompress
@@ -1137,6 +1211,7 @@ PY_ROTATE
 # ------------------------------------------------------------------------------
 
 do_install() {
+    install_deps
     if [ -f "$core_dir/pydhcpd.py" ]; then
         err "pydhcpd is already installed at $install_dir"
         abort "use --update or --uninstall instead -abort"
@@ -1299,7 +1374,7 @@ sys.exit(0 if valid else 1)
         info "pydhcp.env already exists, not overwritten -skip"
         info "interface not changed, keeping value in pydhcp.env"
     else
-        log "EVENT: Creating pydhcp.env ..."
+        log "INFO: Creating pydhcp.env ..."
         cat > "$install_dir/pydhcp.env" <<ENVEOF
 # =============================================================================
 # PYDHCP
@@ -1391,7 +1466,7 @@ ENVEOF
 
     # Initialize empty leases file if not present
     if [ ! -f "$core_dir/pydhcpd.leases" ]; then
-        log "EVENT: Creating empty pydhcpd.leases ..."
+        log "INFO: Creating empty pydhcpd.leases ..."
         (set -C; umask 077; : > "$core_dir/pydhcpd.leases") 2>/dev/null \
             || abort "cannot create pydhcpd.leases -abort"
         fix_dhcp_file "$core_dir/pydhcpd.leases" "$daemon_owner" "$daemon_owner" 640
@@ -1412,7 +1487,7 @@ ENVEOF
             cp "$script_dir/tools/$tool_script" "$install_dir/tools/$tool_script"
             info "updated tools/$tool_script"
             chown root:root "$install_dir/tools/$tool_script"
-            chmod 755 "$install_dir/tools/$tool_script"
+            chmod 750 "$install_dir/tools/$tool_script"
         fi
     done
 
@@ -1430,7 +1505,7 @@ ENVEOF
     cp "$script_dir/init.d/pydhcpd" "$init_file"
     info "updated init.d/pydhcpd"
     chown root:root "$init_file"
-    chmod 755 "$init_file"
+    chmod 750 "$init_file"
 
     # Create log file if it does not exist, ensure correct ownership/permissions
     [ -f "$pydhcp_log_file" ] || touch "$pydhcp_log_file"
@@ -1440,7 +1515,7 @@ ENVEOF
     # Deploy logrotate config
     cat > /etc/logrotate.d/pydhcp << 'EOF'
 /var/log/pydhcp.log {
-    daily
+    weekly
     rotate 7
     compress
     delaycompress
@@ -1457,10 +1532,12 @@ EOF
 
     # Enable and start service
     info "updated /etc/logrotate.d/pydhcp"
-    log "EVENT: Enabling and starting pydhcpd ..."
+    log "INFO: Enabling and starting pydhcpd ..."
     systemctl daemon-reload
     systemctl enable --force pydhcpd
-    if ! systemctl start pydhcpd; then
+    systemctl start pydhcpd || true
+    sleep 1
+    if ! systemctl is-active --quiet pydhcpd; then
         { err "pydhcpd failed to start"; abort "check it with: journalctl -u pydhcpd -n 50 -abort"; }
     fi
 
@@ -1561,26 +1638,12 @@ show_menu() {
     done
 }
 
-usage() {
-    cat <<USAGE_END
-Usage: sudo bash $(basename "$0") [OPTION]
-
-  --install      Install pydhcp. Aborts if already installed
-  --update       Update code only, preserving the user configuration
-  --uninstall    Remove pydhcp, with two confirmations up front
-  --status       Report the service, the port, the configuration and the log
-  -h, --help     Show this message
-
-Without arguments it opens the interactive menu.
-USAGE_END
-}
-
 # ------------------------------------------------------------------------------
 # ACTIONS
 # ------------------------------------------------------------------------------
 
 # Run the action given on the command line, or fall back to the menu
-log "EVENT: pysetup start..."
+log "INFO: pysetup start..."
 
 case "${1:-}" in
     --install) do_install ;;
@@ -1596,4 +1659,4 @@ case "${1:-}" in
         ;;
 esac
 
-log "EVENT: pysetup done"
+log "INFO: pysetup done"

@@ -119,6 +119,7 @@ cleanup_temp() {
     # Lockfile is NOT removed: deleting it creates a TOCTOU race
     # where two processes could flock different inodes of the same path.
     if [ "$pydhcpd_needs_restart" = "1" ]; then
+        systemctl reset-failed pydhcpd 2>/dev/null || true
         systemctl is-active --quiet pydhcpd || systemctl start pydhcpd
     fi
 }
@@ -171,7 +172,7 @@ verify_dhcp_files() {
 
 verify_dhcp_config() {
     if [ ! -f "$DHCPDv4_CONF" ]; then
-        log "ERROR: config file not found -abort"
+        log "ERROR: pydhcpd.conf not found -abort"
         exit 1
     fi
     fix_dhcp_file "$DHCPDv4_CONF" root "${DAEMON_GROUP:-pydhcpd}" 640
@@ -294,7 +295,7 @@ dedup_mac_vs() {
         if mv -fT -- "$tmp_file" "$acl_file"; then
             chmod 600 "$acl_file"
             while IFS= read -r mac_addr; do
-                log "INFO: dup MAC '$mac_addr' removed from $acl_label"
+                log "INFO: dup MAC $mac_addr in $acl_label -fixed"
             done < "$dropped_count"
         else
             while IFS= read -r mac_addr; do
@@ -419,7 +420,7 @@ normalize_acl_file() {
                 log "ERROR: $line_error in $(basename "$acl_file") -abort"
                 exit 1
             fi
-            log "INFO: $line_error in $(basename "$acl_file") -skip"
+            log "INFO: $line_error in $(basename "$acl_file") -fixed"
             dropped_count=$((dropped_count + 1))
         done < "$acl_file"
         if (( dropped_count > 0 )); then
@@ -438,8 +439,38 @@ normalize_acl_file() {
     # command substitution strips a trailing \n from its output, so
     # a non-empty result here means the last byte was NOT a newline.
     if [ -s "$acl_file" ] && [ -n "$(tail -c1 "$acl_file" 2>/dev/null)" ]; then
-        log "INFO: adding trailing newline to $(basename "$acl_file")"
+        log "INFO: adding trailing newline to $(basename "$acl_file") -fixed"
         printf '\n' >> "$acl_file"
+    fi
+}
+
+# LIST ORDER
+# Sorts a list by its key and drops lines repeated exactly
+# Usage: order_acl_list <file> [sort options]
+order_acl_list() {
+    local acl_file="$1" tmp_file before_count after_count
+    shift
+    [ -s "$acl_file" ] || return 0
+    tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -abort"; exit 1; }
+    temp_files+=("$tmp_file")
+    if ! sort "$@" -- "$acl_file" | uniq > "$tmp_file"; then
+        log "ERROR: cannot sort $(basename "$acl_file") -abort"
+        exit 1
+    fi
+    if [[ "$(md5sum < "$tmp_file")" == "$(md5sum < "$acl_file")" ]]; then
+        rm -f -- "$tmp_file"
+        return 0
+    fi
+    before_count=$(wc -l < "$acl_file")
+    after_count=$(wc -l < "$tmp_file")
+    if ! mv -fT -- "$tmp_file" "$acl_file"; then
+        log "ERROR: cannot replace $(basename "$acl_file") -abort"
+        exit 1
+    fi
+    chmod 600 "$acl_file"
+    chown root:root "$acl_file"
+    if (( before_count > after_count )); then
+        log "INFO: $(basename "$acl_file"): $((before_count - after_count)) duplicate(s) removed -fixed"
     fi
 }
 
@@ -458,8 +489,10 @@ normalize_acl_lists() {
     shopt -u nullglob
     for check_file in "${mac_files[@]}"; do
         normalize_acl_file "$check_file" "$commentable_no_epoch_pattern"
+        order_acl_list "$check_file" -t';' -k3,3V
     done
     normalize_acl_file "$ACL_BLOCK_FILE" "$strict_no_epoch_pattern" 1 drop
+    order_acl_list "$ACL_BLOCK_FILE" -V
 }
 
 # ------------------------------------------------------------------------------
@@ -630,7 +663,7 @@ fi
 # MAIN
 # ------------------------------------------------------------------------------
 
-log "EVENT: pyleases start..."
+log "INFO: pyleases start..."
 
 verify_dhcp_service
 verify_dhcp_files
@@ -713,7 +746,7 @@ is_pydhcp() {
 
         local leases_kept=0
         [[ -s "$temp_leases" ]] && { leases_kept=$(grep -c '^lease ' "$temp_leases" 2>/dev/null) || true; }
-        log "INFO: done (leases_kept=$leases_kept)"
+        log "INFO: leases kept: $leases_kept"
 
         if [[ -s "$temp_leases" ]]; then
             if ! mv -fT -- "$temp_leases" "$leases_file"; then
@@ -891,7 +924,7 @@ class "blockdhcp" {
         fi
         rm -f "$file_temp" "$line_patterns"
         if (( removed_count > 0 )); then
-            log "INFO: done (removed=$removed_count)"
+            log "INFO: removed $removed_count MAC(s) from blockdhcp.txt"
         fi
     }
 
@@ -920,21 +953,18 @@ class "blockdhcp" {
     clean_acl
     clean_block_list
 
-    log "INFO: stopping pydhcpd"
     systemctl stop pydhcpd || true
     if systemctl is-active --quiet pydhcpd; then
         log "ERROR: pydhcpd still active, stop failed -abort"
         exit 1
     fi
     pydhcpd_needs_restart=1
-    log "INFO: processing leases"
     read_leases
-    log "INFO: sorting ACL files"
     order_files_acl
-    log "INFO: rebuilding pydhcpd.conf"
     update_dhcp_conf
-    log "INFO: starting pydhcpd"
+    systemctl reset-failed pydhcpd 2>/dev/null || true
     systemctl start pydhcpd || true
+    sleep 1
     if ! systemctl is-active --quiet pydhcpd; then
         log "WARNING: pydhcpd failed to start after rebuild -fallback"
         if [ -f "${dhcp_conf}.bak" ]; then
@@ -944,7 +974,9 @@ class "blockdhcp" {
             fi
             fix_dhcp_file "$dhcp_conf" root "${DAEMON_GROUP:-pydhcpd}" 640
             log "INFO: restored backup config, retrying start"
+            systemctl reset-failed pydhcpd 2>/dev/null || true
             systemctl start pydhcpd || true
+            sleep 1
             if ! systemctl is-active --quiet pydhcpd; then
                 log "ERROR: pydhcpd failed to start with backup config -abort"
                 exit 1
@@ -971,4 +1003,4 @@ log "INFO: blockdhcp=$(count_active "$ACL_BLOCK_FILE")|limited=$(count_active "$
 # END
 # ------------------------------------------------------------------------------
 
-log "EVENT: pyleases done"
+log "INFO: pyleases done"

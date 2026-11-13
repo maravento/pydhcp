@@ -52,7 +52,7 @@ FILE: README.md
 | Component | Requirements | Requisitos |
 |---|---|---|
 | Daemon | Python 3.8+ and systemd | Python 3.8+ y systemd |
-| Installer checks | `iproute2`, `passwd`, `util-linux`, `coreutils`, `grep`, `sed`, `iputils-ping`, `findutils`, `libc-bin`, `logrotate`, `curl`, `zip`, `cron` | El instalador comprueba que estos paquetes estén instalados |
+| Installer packages | `python3`, `systemd`, `iproute2`, `passwd`, `util-linux`, `coreutils`, `grep`, `sed`, `iputils-ping`, `findutils`, `libc-bin`, `logrotate`, `curl`, `zip`, `cron`, `perl`, `ncurses-bin`. `--install` and `--update` install the missing ones | `--install` y `--update` instalan los paquetes que falten |
 | Optional WPAD | Apache and `apache2-utils`; the installer installs missing packages | Apache y `apache2-utils`. El instalador instala los paquetes ausentes |
 | Optional Webmin module | Webmin, Perl and `ncurses-bin`, in addition to the shared command dependencies | Webmin, Perl y `ncurses-bin`, además de las dependencias de comandos compartidas |
 
@@ -235,8 +235,8 @@ sudo bash pysetup.sh --help   # or -h
 
 | isc-dhcp-server | pydhcp | Description | Descripción |
 |---|---|---|---|
-| `DHCPREQUEST for 192.168.0.50 (192.168.0.2) from aa:bb:cc:dd:ee:ff via enpXsX`<br>`DHCPACK on 192.168.0.50 to aa:bb:cc:dd:ee:ff (FOO) via enpXsX` | `REQUEST from aa:bb:cc:dd:ee:ff (FOO)`<br>`ACK aa:bb:cc:dd:ee:ff → 192.168.0.50`<br>`(lease 2592000s)` | Authorized client with static IP (renewal) | Cliente autorizado con dirección IP fija (renovación) |
-| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX`<br>`DHCPOFFER on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPREQUEST for 192.168.0.230 (192.168.0.2) from bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPACK on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`OFFER bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`REQUEST from bb:cc:dd:ee:ff:aa (BAR)`<br>`ACK bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`(lease 60s)` | Unknown client entering the block pool | Cliente desconocido ingresando al pool de bloqueo |
+| `DHCPREQUEST for 192.168.0.50 (192.168.0.2) from aa:bb:cc:dd:ee:ff via enpXsX`<br>`DHCPACK on 192.168.0.50 to aa:bb:cc:dd:ee:ff (FOO) via enpXsX` | `REQUEST from aa:bb:cc:dd:ee:ff (FOO)`<br>`ACK aa:bb:cc:dd:ee:ff → 192.168.0.50 lease 2592000s` | Authorized client with static IP (renewal) | Cliente autorizado con dirección IP fija (renovación) |
+| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX`<br>`DHCPOFFER on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPREQUEST for 192.168.0.230 (192.168.0.2) from bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPACK on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`OFFER bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`REQUEST from bb:cc:dd:ee:ff:aa (BAR)`<br>`ACK bb:cc:dd:ee:ff:aa → 192.168.0.230 lease 60s` | Unknown client entering the block pool | Cliente desconocido ingresando al pool de bloqueo |
 | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`No IP for bb:cc:dd:ee:ff:aa -skip` | Pool exhausted | Pool agotado |
 | `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`Blocked bb:cc:dd:ee:ff:aa -skip` | Blocked client — `isc-dhcp-server` reports it as a full pool | Cliente bloqueado — `isc-dhcp-server` lo reporta como pool lleno |
 
@@ -377,7 +377,7 @@ sudo bash pysetup.sh --help   # or -h
 | `pydhcpd.conf` | ⛔ preserved | ✅ removed |
 | `pydhcpd.leases` | ⛔ preserved | ✅ removed |
 | `pydhcp.env` | ⛔ preserved | ✅ removed |
-| `/var/log/pydhcp.log` (shared by the daemon and `tools/pyleases.sh`; `pysetup.sh` only creates it) | ⛔ preserved | ✅ removed |
+| `/var/log/pydhcp.log` (shared by the daemon, `tools/pyleases.sh` and `tools/pybk.sh`; `pysetup.sh` only creates it) | ⛔ preserved | ✅ removed |
 | `/etc/logrotate.d/pydhcp` | ✅ policy refreshed | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
 | `/etc/pydhcp/acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ⛔ preserved |
@@ -386,10 +386,15 @@ sudo bash pysetup.sh --help   # or -h
 | `/etc/acl/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
 | `/var/www/wpad/wpad.pac` | ⛔ preserved | ✅ removed |
 | `wpad.conf` (Apache site) and its Listen line in `ports.conf` | ⛔ preserved | ✅ removed |
+| APT packages (installer packages and Apache) | ✅ missing ones installed | ⛔ preserved |
 
 > `/etc/acl` is never touched by `--uninstall`. It holds the administrator's own `mac-*.txt` lists, edited by hand, which `pydhcp` may or may not use depending on whether the optional `tools/pyleases.sh` tool is ever run — `pysetup.sh` creates the directory regardless, so uninstalling the daemon does not assume that data is safe to discard.
 >
 > `/etc/acl` permanece intacto al ejecutar `--uninstall`. Allí se guardan las listas `mac-*.txt` del administrador. `pydhcp` solo las utiliza si se ejecuta la herramienta opcional `tools/pyleases.sh`. Como `pysetup.sh` crea ese directorio, la desinstalación no elimina esos datos.
+>
+> `--uninstall` removes the project only. It never uninstalls APT packages: other projects and the system may share them.
+>
+> `--uninstall` elimina solo el proyecto. Nunca desinstala paquetes APT, porque otros proyectos y el sistema pueden compartirlos.
 
 > `blockdhcp.txt` is a different case: it is `pydhcp`'s own list, written only by `pyleases.sh` and not edited manually. It is stored under `/etc/pydhcp/acl/`, separate from the administrator's lists in `/etc/acl/`. No installer ever removes `/etc/acl`, because access control lists outlive the project that reads them, so `--uninstall` leaves it in place.
 >
@@ -691,6 +696,7 @@ sudo cat /var/www/wpad/wpad.pac
 |---|---|---|
 | Administrator lists | Reads every `mac-*.txt` in `ACL_MAC_PATH`. Entry format: `a;MAC;IP;HOSTNAME;`. Comment the entire line as `#a;MAC;IP;HOSTNAME;` to disable it | Lee todos los archivos `mac-*.txt` de `ACL_MAC_PATH`. Formato: `a;MAC;IP;HOSTNAME;`. Para desactivar una entrada, comente la línea completa: `#a;MAC;IP;HOSTNAME;` |
 | Blocked list | `ACL_BLOCK_FILE`, normally `/etc/pydhcp/acl/blockdhcp.txt`. It accepts active entries only; comments are discarded as malformed | `ACL_BLOCK_FILE`, normalmente `/etc/pydhcp/acl/blockdhcp.txt`. Solo admite entradas activas. Los comentarios se descartan por tener un formato inválido |
+| List order | Before any processing, every `mac-*.txt` is sorted by IP and `blockdhcp.txt` by line, and lines repeated exactly are removed, logged as `INFO: <list>: N duplicate(s) removed -fixed`. A list already in order is not rewritten | Antes de cualquier procesamiento, cada `mac-*.txt` se ordena por IP y `blockdhcp.txt` por línea, y se eliminan las líneas repetidas de forma exacta, con el registro `INFO: <lista>: N duplicate(s) removed -fixed`. Una lista ya ordenada no se reescribe |
 | Validation | Checks line format, duplicate values and active reservation addresses before stopping the daemon. Commented entries still count in duplicate detection | Comprueba el formato, los valores duplicados y las direcciones de reservas activas antes de detener el demonio. Las entradas comentadas también cuentan al buscar duplicados |
 | Overlapping runs | Uses `/var/lock/pyleases.lock`. Waits up to ten seconds. If another run still holds the lock, it skips the work and exits with status 75 | Utiliza `/var/lock/pyleases.lock`. Espera hasta diez segundos. Si otra ejecución conserva el bloqueo, omite el trabajo y termina con código 75 |
 
@@ -773,7 +779,7 @@ sudo bash tools/pyleases.sh
 
 | Description | Descripción |
 |---|---|
-| <b>Project backup</b>. It is a copy of the installation paths listed by <code>pybk.sh</code>, intended for the administrator. It is stored in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>; its name carries a timestamp and up to 3 copies are kept. Only <code>pybk.sh</code> creates one. When present, it also includes <code>/var/www/wpad</code>, the available and enabled <code>wpad.conf</code> site paths, and Apache's <code>ports.conf</code>. Symbolic links are stored as links. The archive includes <code>/etc/acl/mac-*.txt</code> and <code>/etc/pydhcp/acl</code>. | <b>Copia de seguridad del proyecto</b>. Es una copia de las rutas de instalación que enumera <code>pybk.sh</code>, destinada al administrador. Se guarda en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la fecha y hora en el nombre y conserva hasta tres archivos. Solo <code>pybk.sh</code> crea esta copia. También incluye, cuando existen, <code>/var/www/wpad</code>, las rutas de <code>wpad.conf</code> en sitios disponibles y habilitados, y <code>ports.conf</code> de Apache. Los enlaces simbólicos se guardan como enlaces. El comprimido incluye <code>/etc/acl/mac-*.txt</code> y <code>/etc/pydhcp/acl</code>. |
+| <b>Project backup</b>. It is a copy of the installation paths listed by <code>pybk.sh</code>, intended for the administrator. It is stored in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>; its name carries a timestamp and up to 3 copies are kept. Only <code>pybk.sh</code> creates one. When present, it also includes <code>/var/www/wpad</code>, the available and enabled <code>wpad.conf</code> site paths, and Apache's <code>ports.conf</code>. Symbolic links are stored as links. The archive includes the <code>mac-*.txt</code> lists of <code>ACL_MAC_PATH</code> (<code>/etc/acl</code> by default) and <code>/etc/pydhcp/acl</code>. | <b>Copia de seguridad del proyecto</b>. Es una copia de las rutas de instalación que enumera <code>pybk.sh</code>, destinada al administrador. Se guarda en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la fecha y hora en el nombre y conserva hasta tres archivos. Solo <code>pybk.sh</code> crea esta copia. También incluye, cuando existen, <code>/var/www/wpad</code>, las rutas de <code>wpad.conf</code> en sitios disponibles y habilitados, y <code>ports.conf</code> de Apache. Los enlaces simbólicos se guardan como enlaces. El comprimido incluye las listas <code>mac-*.txt</code> de <code>ACL_MAC_PATH</code> (<code>/etc/acl</code> por defecto) y <code>/etc/pydhcp/acl</code>. |
 | <b>Routine-operation backup</b>. It is the copy a script takes of one specific file right before modifying it, so the change can be undone. It is stored next to the original file, as <code>&lt;file&gt;.bak</code>, and only one copy is kept, overwritten on every run. | <b>Copia previa a una modificación</b>. Antes de modificar un archivo, algunos scripts guardan una copia junto al original, con la extensión <code>.bak</code>. Se conserva una sola copia y cada ejecución reemplaza la anterior. |
 
 #### pywebmin
@@ -853,27 +859,25 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      pydhcpd writes logs directly to <code>/var/log/pydhcp.log</code>. The daemon and <code>tools/pyleases.sh</code> append to this file, under one <code>daily</code> rotation (<code>/etc/logrotate.d/pydhcp</code>). The path is fixed. The installer writes to <code>pysetup.log</code> in its own directory and clears it at startup.
+      pydhcpd writes logs directly to <code>/var/log/pydhcp.log</code>. The daemon, <code>tools/pyleases.sh</code> and <code>tools/pybk.sh</code> append to this file, under one <code>weekly</code> rotation (<code>/etc/logrotate.d/pydhcp</code>). The path is fixed. Before each start, the service recreates the file if missing and restores its owner and mode. The installer writes to <code>pysetup.log</code> in its own directory and clears it at startup.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>pydhcpd</code> escribe directamente en <code>/var/log/pydhcp.log</code>. El demonio y <code>tools/pyleases.sh</code> escriben en ese mismo archivo. <code>logrotate</code> lo rota a diario según <code>/etc/logrotate.d/pydhcp</code>. La ruta es fija. El instalador escribe en <code>pysetup.log</code>, junto al script, y lo vacía al inicio.
+      <code>pydhcpd</code> escribe directamente en <code>/var/log/pydhcp.log</code>. El demonio, <code>tools/pyleases.sh</code> y <code>tools/pybk.sh</code> escriben en ese mismo archivo. <code>logrotate</code> lo rota cada semana según <code>/etc/logrotate.d/pydhcp</code>. La ruta es fija. Antes de cada arranque, el servicio crea el archivo si falta y restaura su dueño y permisos. El instalador escribe en <code>pysetup.log</code>, junto al script, y lo vacía al inicio.
     </td>
   </tr>
 </table>
 
-> Project log: `/var/log/pydhcp.log`. Installation and update configure daily rotation in `/etc/logrotate.d/pydhcp`, keeping seven previous files plus the active log. Compression starts on the next rotation. Empty logs are not rotated; missing logs are tolerated. Squid and Apache keep their own policies.
+> Project log: `/var/log/pydhcp.log`. Installation and update configure weekly rotation in `/etc/logrotate.d/pydhcp`, keeping seven previous files plus the active log. Compression starts on the next rotation. Empty logs are not rotated; missing logs are tolerated. Squid and Apache keep their own policies.
 >
-> Log del proyecto: `/var/log/pydhcp.log`. La instalación y la actualización configuran rotación diaria en `/etc/logrotate.d/pydhcp`. Se conservan siete archivos anteriores y el activo. La compresión comienza en la siguiente rotación. Los logs vacíos no se rotan; los ausentes se toleran. Squid y Apache conservan sus propias políticas.
+> Log del proyecto: `/var/log/pydhcp.log`. La instalación y la actualización configuran rotación semanal en `/etc/logrotate.d/pydhcp`. Se conservan siete archivos anteriores y el activo. La compresión comienza en la siguiente rotación. Los logs vacíos no se rotan; los ausentes se toleran. Squid y Apache conservan sus propias políticas.
 
 #### Log format
 
 | Element | Description | Descripción |
 |---|---|---|
-| `ERROR:` | Failures that abort a script or prevent the daemon from starting | Fallos que detienen un script o impiden arrancar el demonio |
+| `ERROR:` | Failures that abort a script, prevent the daemon from starting or stop it | Fallos que detienen un script, impiden arrancar el demonio o lo detienen |
 | `WARNING:` | Conditions requiring review while an operation continues or uses a fallback | Situaciones que requieren revisión mientras una operación continúa o utiliza una alternativa |
-| `INFO:` | Service activity, lease operations, skipped packets and automatic repairs | Actividad del servicio, operaciones de concesiones, paquetes descartados y reparaciones automáticas |
-| `EVENT:` | Execution markers used by administrative scripts | Marcas de ejecución utilizadas por los scripts administrativos |
-| Timestamp only | The daemon writes selected shutdown and reload messages with a timestamp only. A viewer may identify these records as `STATUS`; the viewer assigns that label | El demonio escribe determinados mensajes de parada y recarga solo con fecha y hora. Un visor puede identificar estos registros como `STATUS`. El visor asigna esa etiqueta |
+| `INFO:` | Service activity, lease operations, skipped packets, automatic repairs and start and end markers | Actividad del servicio, operaciones de concesiones, paquetes descartados, reparaciones automáticas y marcas de inicio y cierre |
 
 #### Key check
 
@@ -892,6 +896,44 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 2026-11-01 10:00:00 WARNING: DAEMON_USER not set -alert
 2026-11-01 10:00:00 WARNING: SERVER_IP invalid IPv4 -alert
 2026-11-01 10:00:00 ERROR: 2 key(s) invalid in pydhcp.env -abort
+```
+
+#### Daemon errors
+
+| Log | Cause | Causa |
+|---|---|---|
+| `ERROR: pydhcpd already running -abort` | Another pydhcpd instance holds the PID lock | Otra instancia de pydhcpd tiene el bloqueo del PID |
+| `ERROR: No interface defined (INTERFACESv4) -abort` | `INTERFACESv4` is empty in `pydhcp.env` | `INTERFACESv4` está vacía en `pydhcp.env` |
+| `ERROR: Interface <IFACE> missing -abort` | The interface in `INTERFACESv4` does not exist on this host | La interfaz de `INTERFACESv4` no existe en este equipo |
+| `ERROR: <detail of the configuration error>`<br>`ERROR: cannot start with an invalid configuration -abort` | `pydhcpd.conf` has an invalid value. The lines before the last one say which. Check it with `pydhcpd.py -t` | `pydhcpd.conf` tiene un valor inválido. Las líneas anteriores a la última dicen cuál. Compruébelo con `pydhcpd.py -t` |
+| `ERROR: server-identifier missing in config -abort` | `pydhcpd.conf` has no `server-identifier` | `pydhcpd.conf` no tiene `server-identifier` |
+| `ERROR: pydhcpd.leases: No space left on device -abort` | Disk full. Without saving leases no client gets an IP, so the daemon stops. Checked at startup and on every cleanup cycle | Disco lleno. Sin guardar concesiones ningún cliente recibe IP, así que el demonio se detiene. Se comprueba al arrancar y en cada ciclo de limpieza |
+| `ERROR: pydhcpd.leases: Read-only file system -abort` | Disk mounted read-only. Same check and same stop | Disco montado como solo lectura. Misma comprobación y misma parada |
+| `ERROR: pydhcpd.leases: Permission denied -abort` | The daemon cannot write in `/etc/pydhcp/core`. Same check and same stop | El demonio no puede escribir en `/etc/pydhcp/core`. Misma comprobación y misma parada |
+| `ERROR: No interface configured -abort` | The server has no interface when it starts listening | El servidor no tiene interfaz al empezar a escuchar |
+| `ERROR: UDP port 67 occupied -abort` | Another DHCP server is using UDP 67 | Otro servidor DHCP está usando UDP 67 |
+| `ERROR: Cannot bind UDP port 67 -abort` | UDP 67 cannot be opened for another reason | UDP 67 no se puede abrir por otro motivo |
+| `ERROR: Raw socket failed on <IFACE> -abort` | The daemon cannot open the interface to read packets | El demonio no puede abrir la interfaz para leer paquetes |
+| `WARNING: cannot open /var/log/pydhcp.log for writing (<cause>), stdout only -alert` | The log file cannot be opened. Messages go only to the journal | No se puede abrir el log. Los mensajes van solo al journal |
+| `WARNING: pydhcp.env missing -fallback` | `pydhcp.env` does not exist. Default values are used | `pydhcp.env` no existe. Se usan los valores por defecto |
+| `WARNING: <KEY> invalid -fallback`<br>`WARNING: <KEY> low -fallback` | A numeric key in `pydhcp.env` is not a number, or is below 1. Its default is used | Una clave numérica de `pydhcp.env` no es un número, o es menor que 1. Se usa su valor por defecto |
+| `WARNING: cleanup-interval <N> < 5 -fallback` | `cleanup-interval` is below 5. It is raised to 5 | `cleanup-interval` es menor que 5. Se sube a 5 |
+| `WARNING: cleanup-interval <N> > pool min <M> -alert` | Expired leases are swept less often than the shortest pool lease lasts | Las concesiones expiradas se barren con menos frecuencia de lo que dura la concesión más corta |
+| `WARNING: netmask not configured -alert` | `pydhcpd.conf` has no netmask. No reply can be built | `pydhcpd.conf` no tiene máscara. No se puede construir ninguna respuesta |
+| `WARNING: Rate-limit hit: <MAC> -alert` | A client asked for new IPs too often | Un cliente pidió IP nuevas con demasiada frecuencia |
+| `WARNING: Worker backlog full, <N> dropped -alert` | Too many requests at once. Logged once every 100 dropped packets | Demasiadas peticiones a la vez. Se registra una vez cada 100 paquetes descartados |
+| `WARNING: Cannot save the lease cleanup -alert` | Expired leases were removed in memory but could not be saved | Las concesiones expiradas se quitaron en memoria pero no se pudieron guardar |
+| `WARNING: Spoofed chaddr from <MAC> -alert` | The MAC inside the packet differs from the sender's MAC | La MAC dentro del paquete no coincide con la MAC del emisor |
+| `WARNING: Spoofed relay from <IP> -alert` | A relayed packet does not come from a valid relay | Un paquete reenviado no viene de un relay válido |
+| `WARNING: Reload failed, no server-id -fallback`<br>`WARNING: Reload failed -fallback` | A reload found an invalid `pydhcpd.conf`. The previous configuration stays | Una recarga encontró un `pydhcpd.conf` inválido. Se mantiene la configuración anterior |
+
+> Discarded requests: a client request that the daemon cannot process is discarded. Only that client gets no answer; the other clients are not affected. The reason is one of `missing field`, `invalid value`, `truncated packet` or `unexpected data`. If the lines repeat, check that device.
+>
+> Peticiones descartadas: una petición que el demonio no puede procesar se descarta. Solo ese cliente queda sin respuesta; los demás no se ven afectados. El motivo es uno de `missing field`, `invalid value`, `truncated packet` o `unexpected data`. Si las líneas se repiten, revise ese dispositivo.
+
+```text
+2026-11-12 10:05:00 INFO: request from 11:22:33:44:55:66 discarded -skip
+2026-11-12 10:05:00 INFO: request discarded: missing field
 ```
 
 #### Client name limits

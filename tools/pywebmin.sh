@@ -147,7 +147,7 @@ module_conf_dir="/etc/webmin/$module_name"
 # ------------------------------------------------------------------------------
 
 install_module() {
-    log "EVENT: pywebmin start..."
+    log "INFO: pywebmin start..."
     log "INFO: installing PyDHCP Webmin module"
 
     log "INFO: creating PyDHCP module structure"
@@ -233,6 +233,8 @@ EOF
 
     cat > "$module_dir/index.cgi" <<'INDEXCGI'
 #!/usr/bin/perl
+# PyDHCP Webmin module — main page
+# FILE: pydhcp/index.cgi
 use strict;
 use warnings;
 use POSIX qw(setsid);
@@ -555,6 +557,8 @@ INDEXCGI
 
     cat > "$module_dir/config.cgi" <<'CONFIGCGI'
 #!/usr/bin/perl
+# PyDHCP Webmin module — configuration
+# FILE: pydhcp/config.cgi
 use strict;
 use warnings;
 use File::Copy;
@@ -813,7 +817,7 @@ ICONEOF
 }
 
 uninstall_module() {
-    log "EVENT: pywebmin start..."
+    log "INFO: pywebmin start..."
     log "INFO: uninstalling PyDHCP Webmin module"
 
     if [ ! -d "$module_dir" ]; then
@@ -872,12 +876,12 @@ main() {
         case "$1" in
             --install)
                 install_module
-                log "EVENT: pywebmin done"
+                log "INFO: pywebmin done"
                 exit 0
                 ;;
             --uninstall)
                 uninstall_module
-                log "EVENT: pywebmin done"
+                log "INFO: pywebmin done"
                 exit 0
                 ;;
             *)
@@ -897,16 +901,16 @@ main() {
         case $menu_option in
             1)
                 install_module
-                log "EVENT: pywebmin done"
+                log "INFO: pywebmin done"
                 exit 0
                 ;;
             2)
                 uninstall_module
-                log "EVENT: pywebmin done"
+                log "INFO: pywebmin done"
                 exit 0
                 ;;
             3)
-                log "EVENT: pywebmin done"
+                log "INFO: pywebmin done"
                 exit 0
                 ;;
             *)

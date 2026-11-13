@@ -124,8 +124,12 @@ register_cron() {
         fi
         install -m 644 -o root -g root "$(dirname "$script_path")/pydhcpenv.sh" "$(dirname "$installed_path")/pydhcpenv.sh" \
             || { log "ERROR: cannot deploy pydhcpenv.sh -abort"; exit 1; }
-        install -m 755 -o root -g root "$script_path" "$installed_path" \
+        cmp -s -- "$(dirname "$script_path")/pydhcpenv.sh" "$(dirname "$installed_path")/pydhcpenv.sh" \
+            || { log "ERROR: src and dst do not match: pydhcpenv.sh -abort"; exit 1; }
+        install -m 750 -o root -g root "$script_path" "$installed_path" \
             || { log "ERROR: cannot deploy $(basename "$installed_path") -abort"; exit 1; }
+        cmp -s -- "$script_path" "$installed_path" \
+            || { log "ERROR: src and dst do not match: $(basename "$installed_path") -abort"; exit 1; }
         log "INFO: deployed to $installed_path"
     fi
 
@@ -168,12 +172,32 @@ unset env_specs env_spec env_path env_owner_want env_perms_want
 unset env_owner env_perms
 
 # LOAD_CONF
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh"
-env_keys='BACKUP_DIR'
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load pydhcpenv.sh -abort"
+    exit 1
+fi
+env_keys='BACKUP_DIR ACL_MAC_PATH'
 # LOAD
 load_pydhcp_env "$pydhcp_env" "$env_keys" || { log "ERROR: cannot load pydhcp.env -abort"; exit 1; }
 
 # KEY CHECK
+key_errors=()
+for env_key in ACL_MAC_PATH; do
+    if ! grep -q "^${env_key}=" "$pydhcp_env"; then
+        key_errors+=("$env_key missing line")
+    elif [[ -z "${!env_key:-}" ]]; then
+        key_errors+=("$env_key not set")
+    fi
+done
+if (( ${#key_errors[@]} > 0 )); then
+    for key_error in "${key_errors[@]}"; do
+        log "WARNING: $key_error -alert"
+    done
+    log "ERROR: ${#key_errors[@]} key(s) invalid in $(basename "$pydhcp_env") -abort"
+    exit 1
+fi
+unset key_errors key_error env_key
+
 backup_dir="/etc/bak/pydhcp"
 if [[ "${BACKUP_DIR:-}" != "$backup_dir" ]] \
    || [[ "$(readlink -m -- "$backup_dir")" != "$backup_dir" ]]; then
@@ -185,19 +209,19 @@ backup_zip="${backup_dir}/pybk_$(date +%Y%m%d_%H%M%S).zip"
 # Start
 case "${1:-}" in
     --install)
-        log "EVENT: pybk start..."
+        log "INFO: pybk start..."
         register_cron || exit 1
-        log "EVENT: pybk done"
+        log "INFO: pybk done"
         exit 0
         ;;
     --uninstall)
-        log "EVENT: pybk start..."
+        log "INFO: pybk start..."
         deregister_cron || exit 1
-        log "EVENT: pybk done"
+        log "INFO: pybk done"
         exit 0
         ;;
     "")
-        log "EVENT: pybk start..."
+        log "INFO: pybk start..."
         ;;
     *)
         log "ERROR: invalid option -abort"
@@ -221,7 +245,7 @@ fi
 backup_list=()
 for backup_item in \
     /etc/pydhcp \
-    /etc/acl/mac-*.txt \
+    "$ACL_MAC_PATH"/mac-*.txt \
     /etc/systemd/system/pydhcpd.service \
     /etc/init.d/pydhcpd \
     /etc/logrotate.d/pydhcp \
@@ -233,10 +257,10 @@ for backup_item in \
     /etc/apache2/sites-enabled/wpad.conf \
     /etc/apache2/ports.conf
 do
-    if [ -e "$backup_item" ] || [ -L "$backup_item" ]; then
+    if [ -e "$backup_item" ]; then
         backup_list+=("$backup_item")
     else
-        log "INFO: $backup_item not present -skip"
+        log "INFO: $(basename "$backup_item") not present"
     fi
 done
 
@@ -272,7 +296,7 @@ if (
     chmod 600 "$backup_part"
     if ! mv -fT -- "$backup_part" "$backup_zip"; then
         rm -f "$backup_part"
-        log "ERROR: cannot rename $(basename "$backup_zip") -abort"
+        log "ERROR: rename $(basename "$backup_zip"). check chmod -abort"
         exit 1
     fi
     log "INFO: backup written to $(basename "$backup_zip")"
@@ -295,7 +319,7 @@ else
     zip_status=$?
     trap - INT
     rm -f "$backup_part"
-    log "ERROR: cannot write archive $(basename "$backup_zip") (zip exit $zip_status) -abort"
+    log "ERROR: zip failed ($zip_status): $(basename "$backup_zip") -abort"
     exit 1
 fi
 
@@ -303,4 +327,4 @@ fi
 # END
 # ------------------------------------------------------------------------------
 
-log "EVENT: pybk done"
+log "INFO: pybk done"
