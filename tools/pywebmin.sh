@@ -7,10 +7,10 @@
 # FILE: tools/pywebmin.sh
 #
 # USAGE:
-# sudo ./pywebmin.sh --install      Install the module
-# sudo ./pywebmin.sh --uninstall    Uninstall the module
-# ./pywebmin.sh -h, --help        Show this help
-#
+# sudo bash pywebmin.sh --install    Install the module
+# sudo bash pywebmin.sh --uninstall  Uninstall the module
+# bash pywebmin.sh -h                Show this help
+# bash pywebmin.sh --help            Show this help
 #
 ################################################################################
 
@@ -653,7 +653,7 @@ if (($in{'action'} || '') eq 'save' && defined $in{'conf_content'}) {
             open(my $saved_err, '>&', \*STDERR);
             open(STDOUT, '>', '/dev/null');
             open(STDERR, '>', '/dev/null');
-            $rc = system($DAEMON_BIN, "-t", "-cf", $tmpfile);
+            $rc = system("/usr/bin/python3", "-I", $DAEMON_BIN, "-t", "-cf", $tmpfile);
             open(STDOUT, '>&', $saved_out);
             open(STDERR, '>&', $saved_err);
             if ($rc != 0) {

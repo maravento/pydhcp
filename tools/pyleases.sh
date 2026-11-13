@@ -134,9 +134,11 @@ verify_dhcp_service() {
 
 # Sets owner and mode on the opened file, never through a symlink: the
 # pydhcpd group can write /etc/pydhcp, so a path can be swapped for a link.
-# Usage: fix_dhcp_file <file> <owner> <group> <mode>
+# With "report", a change to an existing file is logged as a repair.
+# Usage: fix_dhcp_file <file> <owner> <group> <mode> [report]
 fix_dhcp_file() {
-    if ! python3 -I - "$1" "$2" "$3" "$4" <<'PY'
+    local fix_result
+    if ! fix_result=$(python3 -I - "$1" "$2" "$3" "$4" <<'PY'
 import grp, os, pwd, stat, sys
 path, owner, group, mode = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 8)
 try:
@@ -147,27 +149,37 @@ try:
     st = os.fstat(fd)
     if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
         sys.exit(1)
-    os.fchown(fd, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+    uid, gid = pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid
+    changed = (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)) != (uid, gid, mode)
+    os.fchown(fd, uid, gid)
     os.fchmod(fd, mode)
 finally:
     os.close(fd)
+if changed:
+    print("changed")
 PY
-    then
+    ); then
         log "ERROR: $(basename "$1") is not a regular file -abort"
         exit 1
+    fi
+    if [[ "${5:-}" == report && "$fix_result" == changed ]]; then
+        log "INFO: $(basename "$1") perms fixed -fixed"
     fi
 }
 
 verify_dhcp_files() {
+    local leases_report=report
     mkdir -p /etc/pydhcp
     chown root:"${DAEMON_GROUP:-pydhcpd}" /etc/pydhcp
-    chmod 770 /etc/pydhcp
-    if [ ! -f "$PYDHCPD_LEASES" ] \
-       && ! (set -C; umask 077; : > "$PYDHCPD_LEASES") 2>/dev/null; then
-        log "ERROR: cannot create $(basename "$PYDHCPD_LEASES") -abort"
-        exit 1
+    chmod 1770 /etc/pydhcp
+    if [ ! -f "$PYDHCPD_LEASES" ]; then
+        leases_report=""
+        if ! (set -C; umask 077; : > "$PYDHCPD_LEASES") 2>/dev/null; then
+            log "ERROR: cannot create $(basename "$PYDHCPD_LEASES") -abort"
+            exit 1
+        fi
     fi
-    fix_dhcp_file "$PYDHCPD_LEASES" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
+    fix_dhcp_file "$PYDHCPD_LEASES" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640 "$leases_report"
 }
 
 verify_dhcp_config() {
@@ -175,7 +187,7 @@ verify_dhcp_config() {
         log "ERROR: pydhcpd.conf not found -abort"
         exit 1
     fi
-    fix_dhcp_file "$DHCPDv4_CONF" root "${DAEMON_GROUP:-pydhcpd}" 640
+    fix_dhcp_file "$DHCPDv4_CONF" root "${DAEMON_GROUP:-pydhcpd}" 640 report
 }
 
 # ACL PREPARATION
@@ -245,9 +257,9 @@ acl_fix_perms() {
 
 initialize_empty_files() {
     shopt -s nullglob
-    local mac_lists=("$ACL_MAC_PATH"/mac-*.txt)
+    local mac_lists=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
-    acl_prepare "$ACL_MAC_PATH" 700 600 "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" \
+    acl_prepare "$ACL_PATH" 700 600 "$ACL_MAC_LIMITED" "$ACL_MAC_UNLIMITED" \
         "${mac_lists[@]+"${mac_lists[@]}"}"
     acl_prepare "$ACL_DHCP_PATH" 700 600 "$ACL_BLOCK_FILE"
 }
@@ -309,7 +321,7 @@ dedup_mac_vs() {
 check_duplicate() {
     # mac-*.txt vs itself: fatal, admin must fix by hand
     shopt -s nullglob
-    local acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    local acl_mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     if (( ${#acl_mac_files[@]} > 0 )); then
         local field_count field_name dup_macs dup_mac has_error=0
@@ -347,7 +359,7 @@ check_duplicate() {
 # its own guard, called alongside check_duplicate but never merged into it.
 check_mac_ip_ranges() {
     shopt -s nullglob
-    local mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    local mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     [[ ${#mac_files[@]} -eq 0 ]] && return
     local pool_start_int pool_end_int client_ip_int server_ip_int netmask_int network_int broadcast_int has_error=0
@@ -420,7 +432,7 @@ normalize_acl_file() {
                 log "ERROR: $line_error in $(basename "$acl_file") -abort"
                 exit 1
             fi
-            log "INFO: $line_error in $(basename "$acl_file") -fixed"
+            log "INFO: $(basename "$acl_file"): $line_error; removed -fixed"
             dropped_count=$((dropped_count + 1))
         done < "$acl_file"
         if (( dropped_count > 0 )); then
@@ -485,7 +497,7 @@ normalize_acl_lists() {
     local strict_no_epoch_pattern="^a;${mac_re};${ip_re};${host_re};$"
 
     shopt -s nullglob
-    mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+    mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     for check_file in "${mac_files[@]}"; do
         normalize_acl_file "$check_file" "$commentable_no_epoch_pattern"
@@ -529,7 +541,7 @@ unset env_owner env_perms
 # Reads keys as data instead of sourcing the file, so a tampered or
 # maliciously replaced env file cannot execute code.
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh"
-env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
+env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS ACL_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 
 # LOAD
 # Reads pydhcp.env; a missing key is handled by the check below
@@ -538,7 +550,7 @@ load_pydhcp_env "$pydhcp_env" "$env_keys" || true
 # KEY CHECK
 # Collect every failure first, then decide -- a single abort reports them all
 key_errors=()
-for env_key in ACL_PATH ACL_MAC_PATH ACL_DHCP_PATH ACL_MAC_LIMITED \
+for env_key in ACL_PATH ACL_DHCP_PATH ACL_MAC_LIMITED \
                ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES DHCPDv4_CONF \
                DAEMON_USER DAEMON_GROUP; do
     if ! grep -q "^${env_key}=" "$pydhcp_env"; then
@@ -725,7 +737,7 @@ is_pydhcp() {
                         line_lease="a;$mac_address;$ip_address;$client_name;"
 
                         shopt -s nullglob
-                        acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+                        acl_mac_files=("$ACL_PATH"/mac-*.txt)
                         shopt -u nullglob
                         if [ ${#acl_mac_files[@]} -gt 0 ] && grep -qi "^a;${mac_address};" "${acl_mac_files[@]}" 2>/dev/null; then
                             echo "$lease_content" >> "$temp_leases"
@@ -791,7 +803,7 @@ $ping_timeout_line
 " >"$dhcp_conf_temp"
 
         shopt -s nullglob
-        acl_files=("$ACL_MAC_PATH"/mac-*.txt)
+        acl_files=("$ACL_PATH"/mac-*.txt)
         shopt -u nullglob
         if [ ${#acl_files[@]} -gt 0 ]; then
             acl_sources=$(cat "${acl_files[@]}")
@@ -834,7 +846,7 @@ class "blockdhcp" {
 
         {
             cut -d ';' -f 2 "$ACL_BLOCK_FILE" 2>/dev/null
-            grep -h '^#a;' "$ACL_MAC_PATH"/mac-*.txt 2>/dev/null | cut -d ';' -f 2 || true
+            grep -h '^#a;' "$ACL_PATH"/mac-*.txt 2>/dev/null | cut -d ';' -f 2 || true
         } | grep -E "$UH_MAC" | tr '[:upper:]' '[:lower:]' | sort -u \
           | while IFS= read -r mac_list; do
                 printf 'subclass "blockdhcp" 1:%s;\n' "$mac_list" >>"$dhcp_conf_temp"
@@ -885,7 +897,7 @@ class "blockdhcp" {
         line_patterns=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -abort"; exit 1; }
         temp_files+=("${line_patterns}")
         shopt -s nullglob
-        acl_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+        acl_mac_files=("$ACL_PATH"/mac-*.txt)
         shopt -u nullglob
         if [ ${#acl_mac_files[@]} -gt 0 ]; then
             { grep -hiE '^a;[0-9a-f:]+;' "${acl_mac_files[@]}" 2>/dev/null || true; } | cut -d ";" -f2 | tr '[:upper:]' '[:lower:]' | sort -u >"$file_temp"
@@ -942,7 +954,7 @@ class "blockdhcp" {
         # mac-*.txt: sorted by IP (field 3). Purely cosmetic -- update_dhcp_conf()
         # and the pydhcpd.py host{} parsing are both order-independent.
         shopt -s nullglob
-        local order_mac_files=("$ACL_MAC_PATH"/mac-*.txt)
+        local order_mac_files=("$ACL_PATH"/mac-*.txt)
         shopt -u nullglob
         local normalize_file
         for normalize_file in "${order_mac_files[@]}"; do

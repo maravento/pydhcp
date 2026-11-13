@@ -7,7 +7,7 @@
 # FILE: tools/pybk.sh
 #
 # USAGE:
-# sudo bash pybk.sh            Create a backup now
+# sudo bash pybk.sh              Create a backup now
 # sudo bash pybk.sh --install    Register the @monthly cron entry
 # sudo bash pybk.sh --uninstall  Remove the cron entry (keeps archives)
 #
@@ -176,13 +176,13 @@ if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh" 2>/de
     log "ERROR: cannot load pydhcpenv.sh -abort"
     exit 1
 fi
-env_keys='BACKUP_DIR ACL_MAC_PATH'
+env_keys='BACKUP_DIR ACL_PATH'
 # LOAD
 load_pydhcp_env "$pydhcp_env" "$env_keys" || { log "ERROR: cannot load pydhcp.env -abort"; exit 1; }
 
 # KEY CHECK
 key_errors=()
-for env_key in ACL_MAC_PATH; do
+for env_key in ACL_PATH; do
     if ! grep -q "^${env_key}=" "$pydhcp_env"; then
         key_errors+=("$env_key missing line")
     elif [[ -z "${!env_key:-}" ]]; then
@@ -245,7 +245,7 @@ fi
 backup_list=()
 for backup_item in \
     /etc/pydhcp \
-    "$ACL_MAC_PATH"/mac-*.txt \
+    "$ACL_PATH"/mac-*.txt \
     /etc/systemd/system/pydhcpd.service \
     /etc/init.d/pydhcpd \
     /etc/logrotate.d/pydhcp \

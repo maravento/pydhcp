@@ -280,7 +280,7 @@ class DHCPConfig:
 
     def load(self, path):
         if not os.path.isfile(path):
-            raise ConfigError(f"Config file not found: {path}")
+            raise ConfigError(f"{os.path.basename(path)} file not found")
 
         with open(path) as f:
             raw = f.read()
@@ -298,14 +298,14 @@ class DHCPConfig:
 
     def _validate(self):
         if not self.subnet or not self.netmask:
-            raise ConfigError("subnet and netmask not configured")
+            raise ConfigError("subnet/netmask not configured")
         try:
             network = ipaddress.IPv4Network(
                 f"{self.subnet}/{self.netmask}", strict=False)
             if str(network.netmask) != self.netmask:
                 raise ValueError("expected a contiguous netmask")
         except ValueError as err:
-            raise ConfigError(f"Invalid subnet or netmask: {err}") from err
+            raise ConfigError(f"invalid subnet/netmask {self.subnet}/{self.netmask}") from err
 
         for label, value in (
                 ("server-identifier", self.server_id),
@@ -316,18 +316,14 @@ class DHCPConfig:
                 try:
                     ipaddress.IPv4Address(value)
                 except ValueError as err:
-                    raise ConfigError(f"Invalid {label} address\n"
-                                      f"({value!r})\n"
-                                      f"{err}") from err
+                    raise ConfigError(f"{label} {value}\ninvalid IPv4 address") from err
 
         for h_mac, h_ip in self.static_hosts.items():
             try:
                 h_addr = ipaddress.IPv4Address(h_ip)
             except ValueError as err:
                 raise ConfigError(
-                    f"Static host has an invalid fixed-address\n"
-                    f"({h_mac} {h_ip!r})\n"
-                    f"{err}") from err
+                    f"host {h_mac}\ninvalid IP {h_ip}") from err
             if self.subnet and self.netmask:
                 try:
                     net = ipaddress.IPv4Network(f"{self.subnet}/{self.netmask}", strict=False)
@@ -335,19 +331,13 @@ class DHCPConfig:
                     net = None
                 if net is not None and h_addr not in net:
                     raise ConfigError(
-                        f"Static host IP is outside the subnet\n"
-                        f"({h_mac} {h_ip})\n"
-                        f"subnet {net}")
+                        f"host {h_mac}\nIP {h_ip} outside {net}")
                 if net is not None and h_addr in (net.network_address, net.broadcast_address):
                     raise ConfigError(
-                        f"Static host IP is network or broadcast\n"
-                        f"({h_mac} {h_ip})\n"
-                        f"subnet {net}")
+                        f"host {h_mac}\nIP {h_ip} is network/broadcast in {net}")
             if self.server_id and h_ip == self.server_id:
                 raise ConfigError(
-                    f"static host IP conflict:\n"
-                    f"({h_ip} in host {h_mac})\n"
-                    f"is the server-identifier")
+                    f"host {h_mac}\nIP {h_ip} is server-identifier")
 
         all_ranges = [r for entry in self.pools for r in entry["ranges"]]
         if not all_ranges and self.pool_range_start and self.pool_range_end:
@@ -357,28 +347,21 @@ class DHCPConfig:
                 s = ipaddress.IPv4Address(_r_start)
                 e = ipaddress.IPv4Address(_r_end)
                 if s > e:
-                    raise ConfigError(f"Pool range start is greater than end\n"
-                                      f"({s} > {e})")
+                    raise ConfigError(f"pool {s}-{e}\nrange start exceeds end")
                 if self.subnet and self.netmask:
                     net = ipaddress.IPv4Network(f"{self.subnet}/{self.netmask}", strict=False)
                     if s not in net or e not in net:
-                        raise ConfigError(f"Pool range is outside the subnet\n"
-                                          f"({s} - {e})\n"
-                                          f"subnet {net}")
+                        raise ConfigError(f"pool {s}-{e}\nrange outside subnet {net}")
                 for h_mac, h_ip in self.static_hosts.items():
                     if s <= ipaddress.IPv4Address(h_ip) <= e:
                         raise ConfigError(
-                            f"Static host IP overlaps the pool range\n"
-                            f"({h_mac} {h_ip})\n"
-                            f"pool {s} - {e}")
+                            f"host {h_mac}\nIP {h_ip} in pool {s}-{e}")
 
                 if self.server_id:
                     try:
                         if s <= ipaddress.IPv4Address(self.server_id) <= e:
                             raise ConfigError(
-                                f"server-identifier overlaps the pool range\n"
-                                f"({self.server_id})\n"
-                                f"pool {s} - {e}")
+                                f"server-identifier {self.server_id}\noverlaps pool {s}-{e}")
                     except ValueError:
                         pass
 
@@ -386,54 +369,42 @@ class DHCPConfig:
                     try:
                         if s <= ipaddress.IPv4Address(self.routers) <= e:
                             raise ConfigError(
-                                f"pool range conflict:\n"
-                                f"option routers {self.routers}\n"
-                                f"in range {s} - {e}")
+                                f"router {self.routers}\noverlaps pool {s}-{e}")
                     except ValueError:
                         pass
 
                 pool_size = int(e) - int(s) + 1
                 if pool_size > 65536:  # PyDHCP cap, see README, Fixed values
                     raise ConfigError(
-                        f"Pool range too large, max is 65536\n"
-                        f"({s} - {e} covers {pool_size})")
+                        f"pool {s}-{e}: {pool_size} IPs, max 65536")
             except ValueError as err:
-                raise ConfigError(f"Invalid pool range address: {err}") from err
+                raise ConfigError(f"pool: invalid range {_r_start}-{_r_end}") from err
 
         seen_ips = {}
         for mac, ip in self.static_hosts.items():
             if ip in seen_ips:
                 raise ConfigError(
-                    f"Duplicate static IP\n"
-                    f"({ip})\n"
-                    f"assigned to {seen_ips[ip]}\n"
-                    f"and {mac}")
+                    f"IP {ip}\nassigned to {seen_ips[ip]} and {mac}")
             seen_ips[ip] = mac
 
         if self.wpad_url and len(self.wpad_url.encode()) > 255:  # DHCP option format, see README, Fixed values
             raise ConfigError(
-                f"wpad URL too long for DHCP option 252\n"
-                f"({len(self.wpad_url.encode())} bytes, max is 255)")
+                f"WPAD URL: {len(self.wpad_url.encode())} bytes, max 255")
         if len(self.dns_servers) > 63:
             raise ConfigError(
-                f"too many DNS servers for DHCP option 6\n"
-                f"({len(self.dns_servers)} configured, max is 63)")
+                f"DNS servers: {len(self.dns_servers)} configured, max 63")
 
         for label, lo, mid, hi in (
                 ("lease-time", self.min_lease, self.default_lease, self.max_lease),
                 ("pool lease-time", self.pool_min_lease, self.pool_def_lease, self.pool_max_lease)):
             if not (0 < lo <= mid <= hi < 2**32):
                 raise ConfigError(
-                    f"Invalid {label} bounds\n"
-                    f"(min={lo} default={mid} max={hi})\n"
-                    f"must satisfy 0 < min <= default <= max")
+                    f"{label} {lo}/{mid}/{hi}\nrequire 0<min<=default<=max<2^32")
 
         for _p in self.pools:
             if not (0 < _p["min"] <= _p["def"] <= _p["max"] < 2**32):
                 raise ConfigError(
-                    "Invalid pool lease-time bounds\n"
-                    f"(min={_p['min']} default={_p['def']} max={_p['max']})\n"
-                    "must satisfy 0 < min <= default <= max")
+                    f"pool lease {_p['min']}/{_p['def']}/{_p['max']}\nrequire 0<min<=default<=max<2^32")
 
         if self.cleanup_interval > self.pool_min_lease:
             log.warning("cleanup-interval %d > pool min %d -alert",
@@ -518,9 +489,7 @@ class DHCPConfig:
                 continue
             if mac in self.static_hosts:
                 raise ConfigError(
-                    f"duplicate data detected:\n"
-                    f"({mac} in host {host_name})\n"
-                    f"already assigned to {self.static_hosts[mac]}")
+                    f"MAC {mac}\nduplicate host {host_name}, existing IP {self.static_hosts[mac]}")
             self.static_hosts[mac] = ip_m.group(1)
 
         for m in re.finditer(
@@ -540,8 +509,7 @@ class DHCPConfig:
             subnet_body = self._balanced_braces(raw, m.end())
             if subnet_body is None:
                 raise ConfigError(
-                    f"Unclosed subnet block\n"
-                    f"(subnet {m.group(1)} netmask {m.group(2)})")
+                    f"subnet {m.group(1)}/{m.group(2)}\nmissing closing brace")
             self.subnet  = m.group(1)
             self.netmask = m.group(2)
             self._parse_subnet(subnet_body)
@@ -1840,8 +1808,6 @@ class DHCPServer:
         with self._pending_lock:
             pending_ip = self._pending.get(xid_key)
         if pending_ip and target_ip and target_ip != pending_ip:
-            log.info("NAK (SELECTING mismatch) → %.17s", mac)
-            log.info("NAK requested %.15s offered %.15s", target_ip, pending_ip)
             # Drop the stale offer: the client will restart with a new xid.
             with self._pending_lock:
                 self._pending.pop(xid_key, None)
@@ -1857,13 +1823,9 @@ class DHCPServer:
             static_ip = self.leases.get_static(mac)
             if static_ip and target_ip != static_ip:
                 if config_auth:
-                    log.info("NAK (authoritative) → %.17s", mac)
-                    log.info("NAK requested %.15s assigned %.15s", target_ip, static_ip)
                     self._send_nak(pkt, mac, "Not authorized for this IP")
                 else:
-                    log.info("REQUEST not authoritative, staying silent")
-                    log.info("REQUEST %.17s asked %.15s", mac, target_ip)
-                    log.info("assigned %.15s", static_ip)
+                    log.info("REQUEST %s ignored: not authoritative", mac)
                 return
 
         offered_ip, lease_time, alloc_reason = self.leases.allocate(mac, hostname, requested_ip=target_ip)
@@ -1913,8 +1875,8 @@ class DHCPServer:
         self._send(_pad_to_min_bootp(bytes(nak) + bytes(opts)),
                    giaddr=pkt.get("giaddr", "0.0.0.0"),
                    ciaddr="0.0.0.0")
-        log.info("NAK → %.17s", mac)
-        log.info("NAK reason: %.40s", reason or "")
+        log.info("NAK %s %s", mac,
+                 (reason or "").replace("does not match", "differs from"))
 
     @staticmethod
     def _should_broadcast(pkt):
@@ -2028,9 +1990,10 @@ def main():
     try:
         config.load(defaults["conf"])
     except ConfigError as e:
-        for _line in str(e).splitlines():
-            log.error("%.46s", _line)
-        log.error("cannot start with an invalid configuration -abort")
+        error_lines = str(e).splitlines()
+        for index, error_line in enumerate(error_lines):
+            log.error("%s%s", error_line,
+                      " -abort" if index == len(error_lines) - 1 else "")
         sys.exit(1)
 
     if not config.server_id:

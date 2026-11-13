@@ -12,7 +12,8 @@
 # sudo bash pysetup.sh --uninstall    Uninstall
 # sudo bash pysetup.sh --status       Report service, port, config and log
 # sudo bash pysetup.sh                Interactive menu
-# sudo bash pysetup.sh -h, --help     Show usage
+# bash pysetup.sh -h                  Show usage
+# bash pysetup.sh --help              Show usage
 #
 # LOG: pysetup.log, in the directory containing this script
 #
@@ -1178,6 +1179,9 @@ do_update() {
     update_stop_service pydhcpd
     update_wait_jobs
     update_apply
+    # Repair the ACL directory modes set by --install; lists are never rewritten
+    acl_prepare "$acl_mac_dir" 700 600 "$acl_limited_file" "$acl_unlimited_file"
+    acl_prepare "$acl_dhcp_dir" 700 600 "$acl_block_file"
     install -d -m 755 -o root -g root /etc/logrotate.d || update_error "cannot prepare logrotate directory"
     if ! cat > /etc/logrotate.d/pydhcp <<'PY_ROTATE'
 /var/log/pydhcp.log {
@@ -1334,10 +1338,10 @@ sys.exit(0 if valid else 1)
     # Create install directory
     mkdir -p "$install_dir"
     chown root:"$daemon_owner" "$install_dir"
-    chmod 770 "$install_dir"
+    chmod 1770 "$install_dir"
     mkdir -p "$core_dir"
     chown root:"$daemon_owner" "$core_dir"
-    chmod 770 "$core_dir"
+    chmod 1770 "$core_dir"
 
     # Deploy daemon and config files
     verify_source "$script_dir/core/pydhcpd.py"
@@ -1401,7 +1405,6 @@ SERV_DNS=$dns_answer
 
 # ACL
 ACL_PATH=$acl_base_dir
-ACL_MAC_PATH=$acl_mac_dir
 ACL_MAC_LIMITED=$acl_limited_file
 ACL_MAC_UNLIMITED=$acl_unlimited_file
 

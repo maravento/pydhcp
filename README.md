@@ -61,25 +61,25 @@ FILE: README.md
 ---
 
 ```
-pydhcp/                           # deployed to: /etc/pydhcp [0770 root:pydhcpd]
+pydhcp/                           # deployed to: /etc/pydhcp [1770 root:pydhcpd]
 ├── pydhcp.env                    # generated configuration [0640 root:pydhcpd]
 ├── acl/                          # PyDHCP-managed ACLs [0700 root:root]
 │   └── blockdhcp.txt             # blocked MAC addresses [0600 root:root]
 ├── conf/
 │   └── wpad.conf                 # deployed to: /etc/apache2/sites-available/wpad.conf [0644 root:root]
-├── core/                         # DHCP daemon and state [0770 root:pydhcpd]
+├── core/                         # DHCP daemon and state [1770 root:pydhcpd]
 │   ├── pydhcpd.py                # IPv4 DHCP daemon [0755 root:root]
 │   ├── pydhcpd.conf              # daemon configuration [0640 root:pydhcpd]
 │   └── pydhcpd.leases            # generated DHCP leases [0640 pydhcpd:pydhcpd]
 ├── init.d/
-│   └── pydhcpd                   # deployed to: /etc/init.d/pydhcpd [0755 root:root]
+│   └── pydhcpd                   # deployed to: /etc/init.d/pydhcpd [0750 root:root]
 ├── service/
 │   └── pydhcpd.service           # deployed to: /etc/systemd/system/pydhcpd.service [0644 root:root]
 ├── tools/                        # administrative tools [0755 root:root]
 │   ├── pydhcpenv.sh              # shared Bash configuration reader [0644 root:root]
-│   ├── pybk.sh                   # configuration backup [0755 root:root]
-│   ├── pyleases.sh               # reconciles DHCP leases and ACLs [0755 root:root]
-│   └── pywebmin.sh               # optional Webmin installer [0755 root:root]
+│   ├── pybk.sh                   # configuration backup [0750 root:root]
+│   ├── pyleases.sh               # reconciles DHCP leases and ACLs [0750 root:root]
+│   └── pywebmin.sh               # optional Webmin installer [0750 root:root]
 └── pysetup.sh                    # installer, updater and uninstaller
 ```
 
@@ -380,10 +380,10 @@ sudo bash pysetup.sh --help   # or -h
 | `/var/log/pydhcp.log` (shared by the daemon, `tools/pyleases.sh` and `tools/pybk.sh`; `pysetup.sh` only creates it) | ⛔ preserved | ✅ removed |
 | `/etc/logrotate.d/pydhcp` | ✅ policy refreshed | ✅ removed |
 | system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
-| `/etc/pydhcp/acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved | ⛔ preserved |
+| `/etc/pydhcp/acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved; owner and mode repaired | ⛔ preserved |
 | `core/pydhcpd.conf.webmin.bak` (Webmin rollback copy) | ⛔ preserved | ✅ removed |
 | `/etc/bak/` (project backups written by `tools/pybk.sh`) | ⛔ preserved | ⛔ preserved |
-| `/etc/acl/` (administrator's own ACL lists) | ⛔ preserved | ⛔ preserved |
+| `/etc/acl/` (administrator's own ACL lists) | ⛔ preserved; owner and mode of the folder and `mac-*.txt` repaired | ⛔ preserved |
 | `/var/www/wpad/wpad.pac` | ⛔ preserved | ✅ removed |
 | `wpad.conf` (Apache site) and its Listen line in `ports.conf` | ⛔ preserved | ✅ removed |
 | APT packages (installer packages and Apache) | ✅ missing ones installed | ⛔ preserved |
@@ -531,7 +531,7 @@ sudo tail -f /var/log/pydhcp.log
 | `SERV_BROADCAST` | `option broadcast-address` | Broadcast address of the LAN subnet | Dirección de broadcast de la subred LAN |
 | `SERV_DNS` | `option domain-name-servers` | DNS servers handed to clients; accepts a comma-separated list | Servidores DNS que se entregan a los clientes; admite una lista separada por comas |
 | `SERV_INI_RANGE_BLOCK`, `SERV_END_RANGE_BLOCK` | `range` of the block pool | First and last IPv4 of the pool reserved for clients that are not on a MAC list | Primera y última IPv4 del pool reservado para los clientes que no están en una lista MAC |
-| `ACL_MAC_PATH`, `ACL_MAC_LIMITED`, `ACL_MAC_UNLIMITED` | `host` entries | Directory and files holding the administrator's MAC lists. `pyleases.sh` reads every `mac-*.txt` in that directory, not only those two files | Directorio y archivos con las listas MAC del administrador. `pyleases.sh` lee todos los `mac-*.txt` del directorio, no solo esos dos archivos |
+| `ACL_PATH`, `ACL_MAC_LIMITED`, `ACL_MAC_UNLIMITED` | `host` entries | Directory and files holding the administrator's MAC lists. `pyleases.sh` reads every `mac-*.txt` in that directory, not only those two files | Directorio y archivos con las listas MAC del administrador. `pyleases.sh` lee todos los `mac-*.txt` del directorio, no solo esos dos archivos |
 | `ACL_DHCP_PATH`, `ACL_BLOCK_FILE` | `class blockdhcp` members | Directory and file holding pydhcp's own blocked-MAC list, written by `pyleases.sh` | Directorio y archivo con la lista de MAC bloqueadas propia de pydhcp, escrita por `pyleases.sh` |
 
 > Every key in this table is verified by `pyleases.sh` before it rewrites `pydhcpd.conf`. `SERVER_IP`, `SERV_SUBNET`, `SERV_BROADCAST`, `SERV_INI_RANGE_BLOCK` and `SERV_END_RANGE_BLOCK` must parse as an IPv4 address, `SERV_MASK` as a netmask and `SERV_DNS` as an IPv4 list. See Key check.
@@ -543,10 +543,10 @@ sudo tail -f /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <code>ACL_PATH</code> points to <code>/etc/acl</code>. <code>ACL_MAC_PATH</code> points to the same directory, and <code>ACL_DHCP_PATH</code> points to <code>/etc/pydhcp/acl</code>. The installer writes these paths in <code>pydhcp.env</code>.
+      <code>ACL_PATH</code> points to <code>/etc/acl</code>, and <code>ACL_DHCP_PATH</code> points to <code>/etc/pydhcp/acl</code>. The installer writes these paths in <code>pydhcp.env</code>.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>ACL_PATH</code> apunta a <code>/etc/acl</code>. <code>ACL_MAC_PATH</code> apunta al mismo directorio y <code>ACL_DHCP_PATH</code> apunta a <code>/etc/pydhcp/acl</code>. El instalador escribe estas rutas en <code>pydhcp.env</code>.
+      <code>ACL_PATH</code> apunta a <code>/etc/acl</code> y <code>ACL_DHCP_PATH</code> apunta a <code>/etc/pydhcp/acl</code>. El instalador escribe estas rutas en <code>pydhcp.env</code>.
     </td>
   </tr>
 </table>
@@ -671,10 +671,10 @@ sudo cat /var/www/wpad/wpad.pac
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code>. Administrative tools load it with <code>source</code>. It reads <code>pydhcp.env</code> as literal key-value data. Write full paths such as <code>ACL_MAC_PATH=/etc/acl</code>. Load it from a consumer script.
+      Shared Bash reader installed at <code>/etc/pydhcp/tools/pydhcpenv.sh</code>. Administrative tools load it with <code>source</code>. It reads <code>pydhcp.env</code> as literal key-value data. Write full paths such as <code>ACL_PATH=/etc/acl</code>. Load it from a consumer script.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code>. Las herramientas administrativas lo cargan mediante <code>source</code>. Lee <code>pydhcp.env</code> como datos literales. Escriba rutas completas, como <code>ACL_MAC_PATH=/etc/acl</code>. Cárguelo desde un script consumidor.
+      Lector Bash compartido instalado en <code>/etc/pydhcp/tools/pydhcpenv.sh</code>. Las herramientas administrativas lo cargan mediante <code>source</code>. Lee <code>pydhcp.env</code> como datos literales. Escriba rutas completas, como <code>ACL_PATH=/etc/acl</code>. Cárguelo desde un script consumidor.
     </td>
   </tr>
 </table>
@@ -694,7 +694,7 @@ sudo cat /var/www/wpad/wpad.pac
 
 | Input | Description | Descripción |
 |---|---|---|
-| Administrator lists | Reads every `mac-*.txt` in `ACL_MAC_PATH`. Entry format: `a;MAC;IP;HOSTNAME;`. Comment the entire line as `#a;MAC;IP;HOSTNAME;` to disable it | Lee todos los archivos `mac-*.txt` de `ACL_MAC_PATH`. Formato: `a;MAC;IP;HOSTNAME;`. Para desactivar una entrada, comente la línea completa: `#a;MAC;IP;HOSTNAME;` |
+| Administrator lists | Reads every `mac-*.txt` in `ACL_PATH`. Entry format: `a;MAC;IP;HOSTNAME;`. Comment the entire line as `#a;MAC;IP;HOSTNAME;` to disable it | Lee todos los archivos `mac-*.txt` de `ACL_PATH`. Formato: `a;MAC;IP;HOSTNAME;`. Para desactivar una entrada, comente la línea completa: `#a;MAC;IP;HOSTNAME;` |
 | Blocked list | `ACL_BLOCK_FILE`, normally `/etc/pydhcp/acl/blockdhcp.txt`. It accepts active entries only; comments are discarded as malformed | `ACL_BLOCK_FILE`, normalmente `/etc/pydhcp/acl/blockdhcp.txt`. Solo admite entradas activas. Los comentarios se descartan por tener un formato inválido |
 | List order | Before any processing, every `mac-*.txt` is sorted by IP and `blockdhcp.txt` by line, and lines repeated exactly are removed, logged as `INFO: <list>: N duplicate(s) removed -fixed`. A list already in order is not rewritten | Antes de cualquier procesamiento, cada `mac-*.txt` se ordena por IP y `blockdhcp.txt` por línea, y se eliminan las líneas repetidas de forma exacta, con el registro `INFO: <lista>: N duplicate(s) removed -fixed`. Una lista ya ordenada no se reescribe |
 | Validation | Checks line format, duplicate values and active reservation addresses before stopping the daemon. Commented entries still count in duplicate detection | Comprueba el formato, los valores duplicados y las direcciones de reservas activas antes de detener el demonio. Las entradas comentadas también cuentan al buscar duplicados |
@@ -711,6 +711,10 @@ sudo bash tools/pyleases.sh
 | `mac-unlimited.txt`, `mac-limited.txt` | Administrator-maintained fixed reservations, processed like every `mac-*.txt` file. A malformed reservation or duplicate MAC, IP or hostname in these lists aborts the script | Reservas fijas mantenidas por el administrador, procesadas como cualquier archivo `mac-*.txt`. Una reserva mal formada o una MAC, IP o nombre duplicado en estas listas detiene el script |
 | `#a;MAC;IP;HOSTNAME;` | A commented reservation is disabled. Its MAC is included in the generated blocked class | Una reserva comentada queda desactivada. Su MAC se incluye en la clase de bloqueo generada |
 | `blockdhcp.txt` | `pyleases.sh` adds unapproved clients to this list and removes their lease records from the server’s database. After the rebuild, these MACs are denied new pool leases. Clients keep their configured addresses until their DHCP state changes. Invalid list entries are removed | `pyleases.sh` añade los clientes no autorizados a esta lista y elimina sus concesiones de la base del servidor. Tras reconstruir la configuración, esas MAC quedan bloqueadas para nuevas concesiones del pool. Cada cliente conserva su dirección hasta que cambie su estado DHCP. Las entradas inválidas se eliminan de la lista |
+
+```text
+2026-11-13 12:00:00 INFO: blockdhcp.txt: malformed line 1; removed -fixed
+```
 
 ##### Configuration rebuilding and updates
 
@@ -779,7 +783,7 @@ sudo bash tools/pyleases.sh
 
 | Description | Descripción |
 |---|---|
-| <b>Project backup</b>. It is a copy of the installation paths listed by <code>pybk.sh</code>, intended for the administrator. It is stored in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>; its name carries a timestamp and up to 3 copies are kept. Only <code>pybk.sh</code> creates one. When present, it also includes <code>/var/www/wpad</code>, the available and enabled <code>wpad.conf</code> site paths, and Apache's <code>ports.conf</code>. Symbolic links are stored as links. The archive includes the <code>mac-*.txt</code> lists of <code>ACL_MAC_PATH</code> (<code>/etc/acl</code> by default) and <code>/etc/pydhcp/acl</code>. | <b>Copia de seguridad del proyecto</b>. Es una copia de las rutas de instalación que enumera <code>pybk.sh</code>, destinada al administrador. Se guarda en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la fecha y hora en el nombre y conserva hasta tres archivos. Solo <code>pybk.sh</code> crea esta copia. También incluye, cuando existen, <code>/var/www/wpad</code>, las rutas de <code>wpad.conf</code> en sitios disponibles y habilitados, y <code>ports.conf</code> de Apache. Los enlaces simbólicos se guardan como enlaces. El comprimido incluye las listas <code>mac-*.txt</code> de <code>ACL_MAC_PATH</code> (<code>/etc/acl</code> por defecto) y <code>/etc/pydhcp/acl</code>. |
+| <b>Project backup</b>. It is a copy of the installation paths listed by <code>pybk.sh</code>, intended for the administrator. It is stored in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>; its name carries a timestamp and up to 3 copies are kept. Only <code>pybk.sh</code> creates one. When present, it also includes <code>/var/www/wpad</code>, the available and enabled <code>wpad.conf</code> site paths, and Apache's <code>ports.conf</code>. Symbolic links are stored as links. The archive includes the <code>mac-*.txt</code> lists of <code>ACL_PATH</code> (<code>/etc/acl</code> by default) and <code>/etc/pydhcp/acl</code>. | <b>Copia de seguridad del proyecto</b>. Es una copia de las rutas de instalación que enumera <code>pybk.sh</code>, destinada al administrador. Se guarda en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la fecha y hora en el nombre y conserva hasta tres archivos. Solo <code>pybk.sh</code> crea esta copia. También incluye, cuando existen, <code>/var/www/wpad</code>, las rutas de <code>wpad.conf</code> en sitios disponibles y habilitados, y <code>ports.conf</code> de Apache. Los enlaces simbólicos se guardan como enlaces. El comprimido incluye las listas <code>mac-*.txt</code> de <code>ACL_PATH</code> (<code>/etc/acl</code> por defecto) y <code>/etc/pydhcp/acl</code>. |
 | <b>Routine-operation backup</b>. It is the copy a script takes of one specific file right before modifying it, so the change can be undone. It is stored next to the original file, as <code>&lt;file&gt;.bak</code>, and only one copy is kept, overwritten on every run. | <b>Copia previa a una modificación</b>. Antes de modificar un archivo, algunos scripts guardan una copia junto al original, con la extensión <code>.bak</code>. Se conserva una sola copia y cada ejecución reemplaza la anterior. |
 
 #### pywebmin
@@ -898,6 +902,14 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 2026-11-01 10:00:00 ERROR: 2 key(s) invalid in pydhcp.env -abort
 ```
 
+#### Lease request diagnostics
+
+| Log example | Meaning | Significado |
+|---|---|---|
+| `INFO: REQUEST 02:00:00:00:00:01 ignored: not authoritative` | The requested IP differs from the static reservation. The non-authoritative server stays silent. The MAC identifies the client. | La IP solicitada difiere de la reserva fija. El servidor no autoritativo guarda silencio. La MAC identifica al cliente. |
+| `INFO: NAK 02:00:00:00:00:01 Requested IP differs from offer` | The server rejects an IP different from its offer. | El servidor rechaza una IP diferente de la ofrecida. |
+| `INFO: NAK 02:00:00:00:00:01 Not authorized for this IP` | The authoritative server rejects an IP different from the static reservation. | El servidor autoritativo rechaza una IP diferente de la reserva fija. |
+
 #### Daemon errors
 
 | Log | Cause | Causa |
@@ -905,7 +917,10 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | `ERROR: pydhcpd already running -abort` | Another pydhcpd instance holds the PID lock | Otra instancia de pydhcpd tiene el bloqueo del PID |
 | `ERROR: No interface defined (INTERFACESv4) -abort` | `INTERFACESv4` is empty in `pydhcp.env` | `INTERFACESv4` está vacía en `pydhcp.env` |
 | `ERROR: Interface <IFACE> missing -abort` | The interface in `INTERFACESv4` does not exist on this host | La interfaz de `INTERFACESv4` no existe en este equipo |
-| `ERROR: <detail of the configuration error>`<br>`ERROR: cannot start with an invalid configuration -abort` | `pydhcpd.conf` has an invalid value. The lines before the last one say which. Check it with `pydhcpd.py -t` | `pydhcpd.conf` tiene un valor inválido. Las líneas anteriores a la última dicen cuál. Compruébelo con `pydhcpd.py -t` |
+| `ERROR: absent.conf file not found -abort` | The configured file is missing. Startup aborts. | El archivo configurado no existe. El arranque se detiene. |
+| `ERROR: host 02:00:00:00:00:01`<br>`ERROR: invalid IP 999.999.999.999 -abort` | A static reservation contains an invalid IPv4 address. The first line identifies the MAC; the second gives the cause and aborts startup. | Una reserva fija contiene una dirección IPv4 inválida. La primera línea identifica la MAC; la segunda muestra la causa y detiene el arranque. |
+| `ERROR: DNS servers: 64 configured, max 63 -abort` | More than 63 DNS servers are configured. Startup aborts. | Hay más de 63 servidores DNS configurados. El arranque se detiene. |
+| `ERROR: pool lease 61/60/60`<br>`ERROR: require 0<min<=default<=max<2^32 -abort` | Pool lease times violate the minimum, default and maximum bounds. Startup aborts. | Los tiempos del pool incumplen los límites mínimo, predeterminado y máximo. El arranque se detiene. |
 | `ERROR: server-identifier missing in config -abort` | `pydhcpd.conf` has no `server-identifier` | `pydhcpd.conf` no tiene `server-identifier` |
 | `ERROR: pydhcpd.leases: No space left on device -abort` | Disk full. Without saving leases no client gets an IP, so the daemon stops. Checked at startup and on every cleanup cycle | Disco lleno. Sin guardar concesiones ningún cliente recibe IP, así que el demonio se detiene. Se comprueba al arrancar y en cada ciclo de limpieza |
 | `ERROR: pydhcpd.leases: Read-only file system -abort` | Disk mounted read-only. Same check and same stop | Disco montado como solo lectura. Misma comprobación y misma parada |
