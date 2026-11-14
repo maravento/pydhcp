@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconcile pydhcp DNS names and expired leases
+
+[Timer]
+OnBootSec=5s
+OnUnitInactiveSec=5s
+AccuracySec=1s
+Unit=pydhcp-dns.service
+
+[Install]
+WantedBy=timers.target

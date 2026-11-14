@@ -1,23 +1,6 @@
 #!/usr/bin/env python3
-# maravento.com
-#
-################################################################################
-#
 # pydhcpd -- Python DHCP Daemon
 # FILE: core/pydhcpd.py
-#
-# DESCRIPTION:
-# DHCP daemon for those migrating from isc-dhcp-server (EOL 2022), with
-# compatible configuration syntax and lease file format.
-#
-# USAGE:
-# systemctl {start|stop|restart|status} pydhcpd
-# pydhcpd.py -t, --test    Parse the configuration and exit
-#
-# ENV: /etc/pydhcp/pydhcp.env
-# LOG: /var/log/pydhcp.log
-#
-################################################################################
 
 import os
 import sys
@@ -139,6 +122,7 @@ MSG_INFORM   = 8
 OPT_SUBNET_MASK        = 1
 OPT_ROUTERS            = 3
 OPT_DNS                = 6
+OPT_DOMAIN_NAME        = 15
 OPT_HOSTNAME           = 12
 OPT_BROADCAST          = 28
 OPT_REQUESTED_IP       = 50
@@ -258,6 +242,7 @@ class DHCPConfig:
         self.routers          = ""
         self.broadcast        = ""
         self.dns_servers      = []
+        self.domain_name      = ""
         self.wpad_url         = ""
         self.min_lease        = 300
         self.default_lease    = 7200
@@ -334,7 +319,7 @@ class DHCPConfig:
                         f"host {h_mac}\nIP {h_ip} outside {net}")
                 if net is not None and h_addr in (net.network_address, net.broadcast_address):
                     raise ConfigError(
-                        f"host {h_mac}\nIP {h_ip} is network/broadcast in {net}")
+                        f"host {h_mac} IP {h_ip}\nnetwork/broadcast in {net}")
             if self.server_id and h_ip == self.server_id:
                 raise ConfigError(
                     f"host {h_mac}\nIP {h_ip} is server-identifier")
@@ -355,7 +340,7 @@ class DHCPConfig:
                 for h_mac, h_ip in self.static_hosts.items():
                     if s <= ipaddress.IPv4Address(h_ip) <= e:
                         raise ConfigError(
-                            f"host {h_mac}\nIP {h_ip} in pool {s}-{e}")
+                            f"host {h_mac} IP {h_ip}\nin pool {s}-{e}")
 
                 if self.server_id:
                     try:
@@ -386,6 +371,14 @@ class DHCPConfig:
                 raise ConfigError(
                     f"IP {ip}\nassigned to {seen_ips[ip]} and {mac}")
             seen_ips[ip] = mac
+
+        if self.domain_name:
+            labels = self.domain_name.split(".")
+            if (len(self.domain_name) > 253 or len(labels) < 2
+                    or not all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                               for label in labels)
+                    or not re.fullmatch(r"[A-Za-z]{2,}", labels[-1])):
+                raise ConfigError("option domain-name: invalid domain")
 
         if self.wpad_url and len(self.wpad_url.encode()) > 255:  # DHCP option format, see README, Fixed values
             raise ConfigError(
@@ -548,6 +541,14 @@ class DHCPConfig:
                     # thread (including SIGHUP reload) for an unbounded time.
                     log.info("DNS entry invalid: %.20s -skip", entry)
             self.dns_servers = resolved
+
+        if re.search(r'\boption\s+domain-name\s', body):
+            domain = re.search(r'\boption\s+domain-name\s+"([^"\n]*)"\s*;', body)
+            if not domain:
+                raise ConfigError("option domain-name: expected a quoted domain")
+            self.domain_name = domain.group(1).lower()
+            if not self.domain_name:
+                raise ConfigError("option domain-name: empty domain")
 
         m = re.search(r'option\s+wpad\s+"([^"]+)"\s*;', body)
         if m:
@@ -1310,6 +1311,9 @@ def build_packet(msg_type, xid, mac_str, offered_ip, server_ip, config, lease_ti
         dns_bytes = b"".join(ip_to_bytes(d) for d in config.dns_servers)
         add_opt(OPT_DNS, dns_bytes)
 
+    if config.domain_name:
+        add_opt(OPT_DOMAIN_NAME, config.domain_name.encode("ascii"))
+
     if config.wpad_url:
         add_opt(OPT_WPAD, config.wpad_url.encode())
 
@@ -1992,7 +1996,8 @@ def main():
     except ConfigError as e:
         error_lines = str(e).splitlines()
         for index, error_line in enumerate(error_lines):
-            log.error("%s%s", error_line,
+            marker = f"[{index + 1}/2] " if len(error_lines) == 2 else ""
+            log.error("%s%s%s", marker, error_line,
                       " -abort" if index == len(error_lines) - 1 else "")
         sys.exit(1)
 

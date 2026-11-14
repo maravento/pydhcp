@@ -12,18 +12,24 @@ FILE: README.md
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      <b>PyDHCP</b> is an open-source IPv4 DHCP server written in Python. <br>
-      <br>
-      <a href="https://github.com/isc-projects/dhcp">isc-dhcp-server</a> reached end of life in 2022. PyDHCP keeps several of its features and a similar configuration style, which can make migration easier. Its supported features are listed in SCOPE. <br>
-      <br>
-      PyDHCP implements DHCP under RFC 2131 over UDP ports 67 and 68. It uses a similar configuration syntax and lease-file format, with its own file paths. It runs as a <code>systemd</code> service. The legacy <code>/etc/init.d/pydhcpd</code> script is a compatibility interface for the <code>service</code> command; when systemd is active, it delegates actions to <code>systemctl</code> rather than starting a separate daemon.
+      <p><code>isc-dhcp-server</code> reached end of life in 2022, leaving those who administer it on local networks without a direct path to migrate their configurations without reengineering.</p>
+      <p>The most popular alternatives are Kea (also developed by ISC) and <code>dnsmasq</code>. Both use their own syntax and lease formats that differ from those of ISC DHCP. As a result, they cannot directly reuse existing files: migration requires translating configurations and adapting both the administration workflow and the <em>scripts</em> that depend on those formats.</p>
+      <p>PyDHCP fills this gap by bringing together the best of both worlds in an open-source solution for IPv4 local networks:</p>
+      <ul>
+        <li><strong>Continuity with ISC DHCP:</strong> It retains part of the configuration syntax and the lease-file format, allowing compatible rules to be adapted without starting from scratch.</li>
+        <li><strong>DNS integration like <code>dnsmasq</code>:</strong> It incorporates DNS resolution through Unbound to automatically publish client and static reservation names within the local domain.</li>
+        <li><strong>Additional control and automation:</strong> It includes a mechanism to automate DHCP assignments from access control lists (ACLs), per-client allocation controls and configuration backups.</li>
+      </ul>
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <b>PyDHCP</b> es un servidor DHCP IPv4 de código abierto escrito en Python. <br>
-      <br>
-      <a href="https://github.com/isc-projects/dhcp">isc-dhcp-server</a> llegó al fin de su ciclo de vida en 2022. PyDHCP conserva varias de sus funciones y una sintaxis de configuración similar, lo que puede facilitar la migración. Sus funciones se detallan en SCOPE. <br>
-      <br>
-      PyDHCP implementa DHCP según la RFC 2131 sobre los puertos UDP 67 y 68. Usa una sintaxis de configuración y un formato de archivo de concesiones similares, con rutas propias. Funciona como servicio de <code>systemd</code>. El script heredado <code>/etc/init.d/pydhcpd</code> ofrece compatibilidad con el comando <code>service</code>; cuando systemd está activo, delega las acciones en <code>systemctl</code> en lugar de iniciar otro demonio.
+      <p><code>isc-dhcp-server</code> alcanzó el fin de su ciclo de vida en 2022, dejando a quienes lo administran en redes locales sin una ruta directa para migrar sus configuraciones sin hacer reingeniería.</p>
+      <p>Las alternativas más populares son Kea (desarrollado también por ISC) y <code>dnsmasq</code>. Ambos utilizan sintaxis propias y formatos de concesiones distintos a los de ISC DHCP. Por ello, no permiten reutilizar directamente los archivos existentes: la migración requiere traducir las configuraciones y adaptar tanto el flujo de administración como los <em>scripts</em> que dependan de esos formatos.</p>
+      <p>PyDHCP llena ese vacío reuniendo lo mejor de ambos mundos en una solución de código abierto para redes locales IPv4:</p>
+      <ul>
+        <li><strong>Continuidad con ISC DHCP:</strong> Conserva parte de la sintaxis de configuración y el formato de archivo de concesiones, permitiendo adaptar las reglas compatibles sin partir de cero.</li>
+        <li><strong>Integración DNS como <code>dnsmasq</code>:</strong> Incorpora resolución DNS mediante Unbound para publicar automáticamente en el dominio local los nombres de los clientes y las reservas fijas.</li>
+        <li><strong>Control y automatización adicional:</strong> Incluye un mecanismo para automatizar las asignaciones DHCP a partir de listas de control de acceso (ACL), controles de asignación por cliente y respaldos de configuración.</li>
+      </ul>
     </td>
   </tr>
 </table>
@@ -47,12 +53,38 @@ FILE: README.md
   </tr>
 </table>
 
+### Network
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <p>Installation and update require the following:</p>
+      <ul>
+        <li>Required interfaces must have an UP link and configured global IPv4.</li>
+        <li>Internet access is required when installing or updating packages and downloading components.</li>
+        <li>The selected LAN IPv4 must be static and persistent.</li>
+      </ul>
+      <p>The operation continues if the applicable requirements above are met; otherwise, it aborts.</p>
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <p>La instalación y actualización requieren lo siguiente:</p>
+      <ul>
+        <li>Las interfaces requeridas deben tener enlace UP e IPv4 global configurada.</li>
+        <li>Se requiere Internet para instalar o actualizar paquetes y descargar componentes.</li>
+        <li>La IPv4 LAN seleccionada debe ser estática y persistente.</li>
+      </ul>
+      <p>La operación continúa si se cumplen los requisitos anteriores que correspondan; de lo contrario, aborta.</p>
+    </td>
+  </tr>
+</table>
+
 ### Software
 
 | Component | Requirements | Requisitos |
 |---|---|---|
 | Daemon | Python 3.8+ and systemd | Python 3.8+ y systemd |
-| Installer packages | `python3`, `systemd`, `iproute2`, `passwd`, `util-linux`, `coreutils`, `grep`, `sed`, `iputils-ping`, `findutils`, `libc-bin`, `logrotate`, `curl`, `zip`, `cron`, `perl`, `ncurses-bin`. `--install` and `--update` install the missing ones | `--install` y `--update` instalan los paquetes que falten |
+| Installer packages | `python3-yaml`, `python3`, `systemd`, `iproute2`, `passwd`, `util-linux`, `coreutils`, `grep`, `sed`, `iputils-ping`, `findutils`, `libc-bin`, `logrotate`, `curl`, `zip`, `cron`, `perl`, `ncurses-bin`, `unbound`, `openssl`. `--install` and `--update` install the missing ones | `--install` y `--update` instalan los paquetes que falten |
+| Awk | A POSIX-compatible `awk` command must be available before installation and tool execution; no implementation is imposed | Debe existir un comando `awk` compatible con POSIX antes de instalar o ejecutar herramientas; no se impone una implementación |
 | Optional WPAD | Apache and `apache2-utils`; the installer installs missing packages | Apache y `apache2-utils`. El instalador instala los paquetes ausentes |
 | Optional Webmin module | Webmin, Perl and `ncurses-bin`, in addition to the shared command dependencies | Webmin, Perl y `ncurses-bin`, además de las dependencias de comandos compartidas |
 
@@ -66,14 +98,19 @@ pydhcp/                           # deployed to: /etc/pydhcp [1770 root:pydhcpd]
 ├── acl/                          # PyDHCP-managed ACLs [0700 root:root]
 │   └── blockdhcp.txt             # blocked MAC addresses [0600 root:root]
 ├── conf/
+│   ├── forward.conf              # deployed to: /etc/unbound/unbound.conf.d/forward.conf [0644 root:root]
 │   └── wpad.conf                 # deployed to: /etc/apache2/sites-available/wpad.conf [0644 root:root]
 ├── core/                         # DHCP daemon and state [1770 root:pydhcpd]
 │   ├── pydhcpd.py                # IPv4 DHCP daemon [0755 root:root]
+│   ├── pydns.py                  # essential DHCP/DNS synchronization [0750 root:root]
 │   ├── pydhcpd.conf              # daemon configuration [0640 root:pydhcpd]
 │   └── pydhcpd.leases            # generated DHCP leases [0640 pydhcpd:pydhcpd]
 ├── init.d/
 │   └── pydhcpd                   # deployed to: /etc/init.d/pydhcpd [0750 root:root]
 ├── service/
+│   ├── pydhcp-dns.service        # DNS publisher, deployed to /etc/systemd/system [0644 root:root]
+│   ├── pydhcp-dns.path           # deployed to /etc/systemd/system; change watcher [0644 root:root]
+│   ├── pydhcp-dns.timer          # deployed to /etc/systemd/system; reconciliation [0644 root:root]
 │   └── pydhcpd.service           # deployed to: /etc/systemd/system/pydhcpd.service [0644 root:root]
 ├── tools/                        # administrative tools [0755 root:root]
 │   ├── pydhcpenv.sh              # shared Bash configuration reader [0644 root:root]
@@ -98,10 +135,24 @@ etc/
 ├── cron.d/
 │   ├── pydhcp                    # scheduled tasks [0644 root:root]
 │   └── pydhcp.lock               # cron writer lock [0600 root:root]
-└── logrotate.d/
-    └── pydhcp                    # log rotation policy [0644 root:root]
+├── default/
+│   └── unbound                   # daemon options written by the installer
+├── logrotate.d/
+│   └── pydhcp                    # log rotation policy [0644 root:root]
+├── systemd/system/
+│   ├── pydhcpd.service           # DHCP service [0644 root:root]
+│   ├── pydhcp-dns.service        # DNS name publication [0644 root:root]
+│   ├── pydhcp-dns.path           # lease/config change watcher [0644 root:root]
+│   └── pydhcp-dns.timer          # reconciliation after five seconds of inactivity [0644 root:root]
+└── unbound/
+    └── unbound.conf.d/
+        └── forward.conf         # active DNS configuration [0644 root:root]
 
 var/
+├── lib/
+│   └── pydhcp-dns/               # publication state [0700 root:root]
+│       ├── publish.lock          # serializes configuration and name publication
+│       └── records.json          # records owned by pydns.py
 ├── log/
 │   └── pydhcp.log                # shared DHCP log [0640 pydhcpd:pydhcpd]
 └── www/
@@ -155,9 +206,9 @@ sudo bash pysetup.sh --help   # or -h
 
 | SCOPE | ALCANCE |
 |---|---|
-| <ul><li>DHCPv4 on one configured LAN interface and subnet.</li><li>Dynamic address pools, static reservations and MAC admission rules.</li><li>Lease persistence, ICMP conflict checks and per-MAC allocation limits.</li><li>Optional PAC delivery through DHCP option 252 and Apache.</li><li>Configuration generation from ACL lists, backups and an optional Webmin module.</li></ul> | <ul><li>DHCPv4 en una interfaz LAN y una subred configuradas.</li><li>Pools dinámicos, reservas estáticas y reglas de admisión por MAC.</li><li>Persistencia de concesiones, comprobación ICMP y límites de asignación por MAC.</li><li>Entrega opcional de PAC mediante la opción DHCP 252 y Apache.</li><li>Generación de configuración desde listas ACL, respaldos y un módulo Webmin opcional.</li></ul> |
+| <ul><li>DHCPv4 on one configured LAN interface and subnet.</li><li>Dynamic address pools, static reservations and MAC admission rules.</li><li>DHCP option 15, Unbound DNS forwarding and local A/PTR name publication.</li><li>Lease persistence, ICMP conflict checks and per-MAC allocation limits.</li><li>Optional PAC delivery through DHCP option 252 and Apache.</li><li>Configuration generation from ACL lists, backups and an optional Webmin module.</li></ul> | <ul><li>DHCPv4 en una interfaz LAN y una subred configuradas.</li><li>Pools dinámicos, reservas estáticas y reglas de admisión por MAC.</li><li>Opción DHCP 15, reenvío DNS con Unbound y publicación local de registros A/PTR.</li><li>Persistencia de concesiones, comprobación ICMP y límites de asignación por MAC.</li><li>Entrega opcional de PAC mediante la opción DHCP 252 y Apache.</li><li>Generación de configuración desde listas ACL, respaldos y un módulo Webmin opcional.</li></ul> |
 | **OUT OF SCOPE** | **FUERA DE ALCANCE** |
-| <ul><li>DHCPv6, BOOTP/PXE and multi-subnet DHCP service.</li><li>LDAP, dynamic DNS updates and DHCP option 15.</li><li>Per-host or per-class DHCP option overrides, including different WPAD URLs.</li><li>Router failover and a shared allocation limit across all MACs.</li><li>LAN/WAN address configuration and firewall or proxy-policy management.</li><li>Mandatory proxy use and switch DHCP Snooping configuration.</li><li>Automatic PAC regeneration during updates, HTTPS setup and PAC syntax validation.</li></ul> | <ul><li>DHCPv6, BOOTP/PXE y servicio DHCP para varias subredes.</li><li>LDAP, actualizaciones DNS dinámicas y opción DHCP 15.</li><li>Opciones DHCP particulares por host o clase, incluidas URL WPAD diferentes.</li><li>Conmutación entre routers y límite de asignación compartido por todas las MAC.</li><li>Configuración de direcciones LAN/WAN y gestión de reglas de firewall o políticas de proxy.</li><li>Uso obligatorio del proxy y configuración de DHCP Snooping en switches.</li><li>Regeneración automática del PAC durante actualizaciones, configuración HTTPS y validación sintáctica del PAC.</li></ul> |
+| <ul><li>DHCPv6, BOOTP/PXE and multi-subnet DHCP service.</li><li>LDAP, RFC 2136 dynamic DNS updates and DHCP option 119.</li><li>Per-host or per-class DHCP option overrides, including different WPAD URLs.</li><li>Router failover and a shared allocation limit across all MACs.</li><li>LAN/WAN address configuration and firewall or proxy-policy management.</li><li>Mandatory proxy use and switch DHCP Snooping configuration.</li><li>Automatic PAC regeneration during updates, HTTPS setup and PAC syntax validation.</li></ul> | <ul><li>DHCPv6, BOOTP/PXE y servicio DHCP para varias subredes.</li><li>LDAP, actualizaciones DNS mediante RFC 2136 y opción DHCP 119.</li><li>Opciones DHCP particulares por host o clase, incluidas URL WPAD diferentes.</li><li>Conmutación entre routers y límite de asignación compartido por todas las MAC.</li><li>Configuración de direcciones LAN/WAN y gestión de reglas de firewall o políticas de proxy.</li><li>Uso obligatorio del proxy y configuración de DHCP Snooping en switches.</li><li>Regeneración automática del PAC durante actualizaciones, configuración HTTPS y validación sintáctica del PAC.</li></ul> |
 
 ## ISC-DHCP-SERVER VS PYDHCP
 
@@ -178,7 +229,7 @@ sudo bash pysetup.sh --help   # or -h
 | DHCP relay agents | ⛔ | No legitimate use without multi-segment support. `giaddr`/`hops` are parsed only to close a spoofing hole | PyDHCP no ofrece servicio de relay. Lee `giaddr` y `hops` para detectar y descartar paquetes de relay falsificados |
 | Clients whose `chaddr` differs from the frame source MAC | ⛔ | Dropped and logged: closes a spoofing hole | PyDHCP descarta y registra los paquetes si la MAC de `chaddr` no coincide con la MAC de origen Ethernet |
 | LDAP backend | ⛔ | Host reservations live in `pydhcpd.conf`, or in the `mac-*.txt` lists that `pyleases.sh` turns into reservations | Las reservas de host viven en `pydhcpd.conf`, o en las listas `mac-*.txt` que `pyleases.sh` convierte en reservas |
-| DDNS | ⛔ | The daemon never registers names in DNS; a lease grants an address, nothing else | El demonio nunca registra nombres en DNS; una concesión entrega una dirección, nada más |
+| DDNS | ⛔ | No RFC 2136 updates; the core/pydns.py component publishes local records in Unbound | Sin actualizaciones RFC 2136; el componente core/pydns.py publica registros locales en Unbound |
 | `client-updates` / `deny client-updates` | ⛔ | Depends on DDNS plus the client FQDN option, neither implemented | Depende de DDNS y de la opción FQDN del cliente, ninguna implementada |
 
 ### Directives
@@ -204,7 +255,8 @@ sudo bash pysetup.sh --help   # or -h
 | `option domain-name-servers` | ✅ | Comma-separated list, all served | Lista separada por comas, se entregan todas |
 | `option wpad ...;` | ✅ | Option 252. The daemon serves it whenever the directive is present in `pydhcpd.conf`; `WPAD_ENABLED` in `pydhcp.env` decides whether `tools/pyleases.sh` writes it when it regenerates the config | Opción 252. El demonio la entrega siempre que la directiva esté en `pydhcpd.conf`; `WPAD_ENABLED` en `pydhcp.env` decide si `tools/pyleases.sh` la escribe al regenerar la configuración |
 | `one-lease-per-client` | ⚠️ | Always enforced; one MAC can hold only one pool lease at a time | Se aplica siempre: cada MAC puede tener una sola concesión del pool a la vez |
-| `option domain-name` | ⛔ | Option 15 is not parsed or sent by this implementation | Esta implementación no interpreta ni envía la opción 15 |
+| `option domain-name` | ✅ | Quoted local domain, sent through option 15 | Dominio local entre comillas, enviado mediante la opción 15 |
+| `option domain-search` | ⛔ | Option 119 is not implemented | La opción 119 no está implementada |
 | `option subnet-mask` override | ⛔ | The netmask sent always matches the `subnet ... netmask ...` declaration | La máscara enviada siempre coincide con la declaración `subnet ... netmask ...` |
 | Per-host / per-class option scoping | ⛔ | Options declared at `subnet` level apply to every client uniformly | Las opciones declaradas a nivel `subnet` aplican a todos los clientes por igual |
 
@@ -220,7 +272,8 @@ sudo bash pysetup.sh --help   # or -h
 | `/etc/init.d/isc-dhcp-server` | `/etc/init.d/pydhcpd` | Compatible wrapper | Wrapper compatible |
 | `/var/log/syslog` | `/var/log/pydhcp.log` | Writes directly to file, does not use syslog, so no `log-facility` directive is needed | Escribe directamente al archivo, no usa syslog, así que no hace falta la directiva `log-facility` |
 | *(none)* | `pysetup.log` | Installer log, written in the directory containing `pysetup.sh` and rewritten on each run. Kept out of `/var/log/pydhcp.log` so install, update and remove runs never mix with daily operation | Log del instalador, escrito en el directorio que contiene `pysetup.sh` y reescrito en cada ejecución. Se mantiene fuera de `/var/log/pydhcp.log` para que las ejecuciones de instalación, actualización y desinstalación no se mezclen con la operación diaria |
-| `/etc/logrotate.d/rsyslog` | `/etc/logrotate.d/pydhcp` | Daily, one config for the whole project | Diaria, una sola configuración para todo el proyecto |
+| *(none)* | `pywebmin.log` | Webmin installer log beside `pywebmin.sh`, cleared after the root check on each run | Log del instalador Webmin junto a `pywebmin.sh`, vaciado tras comprobar root en cada ejecución |
+| `/etc/logrotate.d/rsyslog` | `/etc/logrotate.d/pydhcp` | Weekly, one config for the whole project | Semanal, una sola configuración para todo el proyecto |
 | `journalctl -u isc-dhcp-server` | `journalctl -u pydhcpd` | Both also reach journald through systemd | Ambos llegan además a journald a través de systemd |
 
 ### Commands
@@ -438,10 +491,10 @@ sudo tail -f /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The installer selects a LAN with an UP link and a global IPv4 address. With one candidate it selects it automatically; with several, it asks which to use. If that LAN has several IPv4 addresses, select one. The installer calculates subnet, mask and broadcast from its actual prefix. It then asks for the pool range, DNS servers, cleanup interval and optional WPAD deployment.
+      The installer selects a LAN with an UP link and a global IPv4 address. With one candidate it selects it automatically; with several, it asks which to use and Enter selects the first. If that LAN has several IPv4 addresses, Enter also selects the first. The installer calculates subnet, mask and broadcast from its actual prefix. It then asks for the pool range, DNS1/DNS2 upstream servers, local domain, cleanup interval and optional WPAD deployment. DHCP advertises the selected server IP as DNS.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El instalador selecciona una LAN con enlace UP e IPv4 global. Si existe una candidata, la selecciona automáticamente. Si existen varias, solicita una. Si esa LAN tiene varias IPv4, permite elegir una. Calcula subred, máscara y difusión desde su prefijo real. Después solicita el rango del pool, los servidores DNS, el intervalo de limpieza y el despliegue opcional de WPAD.
+      El instalador selecciona una LAN con enlace UP e IPv4 global. Si existe una candidata, la selecciona automáticamente. Si existen varias, solicita una y Enter selecciona la primera. Si esa LAN tiene varias IPv4, Enter también selecciona la primera. Calcula subred, máscara y difusión desde su prefijo real. Después solicita el rango del pool, DNS1/DNS2 externos, dominio local, intervalo de limpieza y despliegue opcional de WPAD. DHCP anuncia la IP seleccionada del servidor como DNS.
     </td>
   </tr>
 </table>
@@ -530,6 +583,7 @@ sudo tail -f /var/log/pydhcp.log
 | `SERV_SUBNET`, `SERV_MASK` | `subnet ... netmask ...` | Network address and netmask of the LAN subnet | Dirección de red y máscara de la subred LAN |
 | `SERV_BROADCAST` | `option broadcast-address` | Broadcast address of the LAN subnet | Dirección de broadcast de la subred LAN |
 | `SERV_DNS` | `option domain-name-servers` | DNS servers handed to clients; accepts a comma-separated list | Servidores DNS que se entregan a los clientes; admite una lista separada por comas |
+| `SERV_DOMAIN` | `option domain-name` | Required local domain; installation defaults to `home.arpa` | Dominio local obligatorio; la instalación propone `home.arpa` |
 | `SERV_INI_RANGE_BLOCK`, `SERV_END_RANGE_BLOCK` | `range` of the block pool | First and last IPv4 of the pool reserved for clients that are not on a MAC list | Primera y última IPv4 del pool reservado para los clientes que no están en una lista MAC |
 | `ACL_PATH`, `ACL_MAC_LIMITED`, `ACL_MAC_UNLIMITED` | `host` entries | Directory and files holding the administrator's MAC lists. `pyleases.sh` reads every `mac-*.txt` in that directory, not only those two files | Directorio y archivos con las listas MAC del administrador. `pyleases.sh` lee todos los `mac-*.txt` del directorio, no solo esos dos archivos |
 | `ACL_DHCP_PATH`, `ACL_BLOCK_FILE` | `class blockdhcp` members | Directory and file holding pydhcp's own blocked-MAC list, written by `pyleases.sh` | Directorio y archivo con la lista de MAC bloqueadas propia de pydhcp, escrita por `pyleases.sh` |
@@ -592,6 +646,20 @@ sudo tail -f /var/log/pydhcp.log
 sudo ls -ld /etc/pydhcp /etc/pydhcp/core /etc/pydhcp/tools /run/pydhcp
 sudo ls -l /etc/pydhcp/core/ /etc/pydhcp/pydhcp.env /var/log/pydhcp.log
 ```
+
+Both `--install` and `--update` restore the defined ownership and modes. Existing configurations and leases retain their contents. Repairs are logged with `INFO: ... -fixed`. Unbound certificates and private keys retain their own permissions.
+
+Tanto `--install` como `--update` restauran los propietarios y permisos definidos. Las configuraciones y concesiones existentes conservan su contenido. Las reparaciones se registran con `INFO: ... -fixed`. Los certificados y claves privadas de Unbound conservan sus permisos propios.
+
+| Path | Owner | Mode |
+|---|---|---|
+| `/etc/pydhcp`, `/etc/pydhcp/core` | `root:pydhcpd` | `1770` |
+| `/etc/pydhcp/tools`, `/etc/unbound/unbound.conf.d` | `root:root` | `755` |
+| `/etc/pydhcp/pydhcp.env`, `/etc/pydhcp/core/pydhcpd.conf` | `root:pydhcpd` | `640` |
+| `/etc/pydhcp/core/pydhcpd.leases` | `pydhcpd:pydhcpd` | `640` |
+| `/etc/unbound/unbound.conf.d/forward.conf`, `/etc/default/unbound` | `root:root` | `644` |
+| `/var/lib/pydhcp-dns` | `root:root` | `700` |
+| `/var/lib/pydhcp-dns/records.json`, `/var/lib/pydhcp-dns/publish.lock` | `root:root` | `600` |
 
 ### Operational details
 
@@ -740,9 +808,9 @@ sudo bash tools/pyleases.sh
   </tr>
 </table>
 
-> **⚠️ WARNING -- Generated DHCP configuration:** If you manage `pydhcpd.conf` manually, do not run `pyleases.sh`: it replaces the complete file.
+> **⚠️ WARNING -- Generated DHCP configuration:** If you manage `pydhcpd.conf` manually, or another project manages it, such as uhm with `uhmleases.sh`, do not run `pyleases.sh`: it replaces the complete file and discards the other entries.
 >
-> **⚠️ WARNING -- Generated DHCP configuration:** Si administra `pydhcpd.conf` manualmente, no ejecute `pyleases.sh`: reemplaza el archivo completo.
+> **⚠️ WARNING -- Configuración DHCP generada:** Si administra `pydhcpd.conf` manualmente, o lo gestiona otro proyecto, como uhm con `uhmleases.sh`, no ejecute `pyleases.sh`: reemplaza el archivo completo y descarta las demás entradas.
 
 
 #### pybk
@@ -863,10 +931,10 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      pydhcpd writes logs directly to <code>/var/log/pydhcp.log</code>. The daemon, <code>tools/pyleases.sh</code> and <code>tools/pybk.sh</code> append to this file, under one <code>weekly</code> rotation (<code>/etc/logrotate.d/pydhcp</code>). The path is fixed. Before each start, the service recreates the file if missing and restores its owner and mode. The installer writes to <code>pysetup.log</code> in its own directory and clears it at startup.
+      pydhcpd writes logs directly to <code>/var/log/pydhcp.log</code>. The daemon, <code>tools/pyleases.sh</code> and <code>tools/pybk.sh</code> append to this file, under one <code>weekly</code> rotation (<code>/etc/logrotate.d/pydhcp</code>). The path is fixed. Before each start, the service recreates the file if missing and restores its owner and mode. The installer writes to <code>pysetup.log</code> in its own directory and clears it at startup. The Webmin installer similarly writes to <code>pywebmin.log</code> beside its script.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      <code>pydhcpd</code> escribe directamente en <code>/var/log/pydhcp.log</code>. El demonio, <code>tools/pyleases.sh</code> y <code>tools/pybk.sh</code> escriben en ese mismo archivo. <code>logrotate</code> lo rota cada semana según <code>/etc/logrotate.d/pydhcp</code>. La ruta es fija. Antes de cada arranque, el servicio crea el archivo si falta y restaura su dueño y permisos. El instalador escribe en <code>pysetup.log</code>, junto al script, y lo vacía al inicio.
+      <code>pydhcpd</code> escribe directamente en <code>/var/log/pydhcp.log</code>. El demonio, <code>tools/pyleases.sh</code> y <code>tools/pybk.sh</code> escriben en ese mismo archivo. <code>logrotate</code> lo rota cada semana según <code>/etc/logrotate.d/pydhcp</code>. La ruta es fija. Antes de cada arranque, el servicio crea el archivo si falta y restaura su dueño y permisos. El instalador escribe en <code>pysetup.log</code>, junto al script, y lo vacía al inicio. El instalador Webmin escribe también su propio <code>pywebmin.log</code> junto al script.
     </td>
   </tr>
 </table>
@@ -918,9 +986,9 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | `ERROR: No interface defined (INTERFACESv4) -abort` | `INTERFACESv4` is empty in `pydhcp.env` | `INTERFACESv4` está vacía en `pydhcp.env` |
 | `ERROR: Interface <IFACE> missing -abort` | The interface in `INTERFACESv4` does not exist on this host | La interfaz de `INTERFACESv4` no existe en este equipo |
 | `ERROR: absent.conf file not found -abort` | The configured file is missing. Startup aborts. | El archivo configurado no existe. El arranque se detiene. |
-| `ERROR: host 02:00:00:00:00:01`<br>`ERROR: invalid IP 999.999.999.999 -abort` | A static reservation contains an invalid IPv4 address. The first line identifies the MAC; the second gives the cause and aborts startup. | Una reserva fija contiene una dirección IPv4 inválida. La primera línea identifica la MAC; la segunda muestra la causa y detiene el arranque. |
+| `ERROR: [1/2] host 02:00:00:00:00:01`<br>`ERROR: [2/2] invalid IP 999.999.999.999 -abort` | A static reservation contains an invalid IPv4 address. The first line identifies the MAC; the second gives the cause and aborts startup. | Una reserva fija contiene una dirección IPv4 inválida. La primera línea identifica la MAC; la segunda muestra la causa y detiene el arranque. |
 | `ERROR: DNS servers: 64 configured, max 63 -abort` | More than 63 DNS servers are configured. Startup aborts. | Hay más de 63 servidores DNS configurados. El arranque se detiene. |
-| `ERROR: pool lease 61/60/60`<br>`ERROR: require 0<min<=default<=max<2^32 -abort` | Pool lease times violate the minimum, default and maximum bounds. Startup aborts. | Los tiempos del pool incumplen los límites mínimo, predeterminado y máximo. El arranque se detiene. |
+| `ERROR: [1/2] pool lease 61/60/60`<br>`ERROR: [2/2] require 0<min<=default<=max<2^32 -abort` | Pool lease times violate the minimum, default and maximum bounds. Startup aborts. | Los tiempos del pool incumplen los límites mínimo, predeterminado y máximo. El arranque se detiene. |
 | `ERROR: server-identifier missing in config -abort` | `pydhcpd.conf` has no `server-identifier` | `pydhcpd.conf` no tiene `server-identifier` |
 | `ERROR: pydhcpd.leases: No space left on device -abort` | Disk full. Without saving leases no client gets an IP, so the daemon stops. Checked at startup and on every cleanup cycle | Disco lleno. Sin guardar concesiones ningún cliente recibe IP, así que el demonio se detiene. Se comprueba al arrancar y en cada ciclo de limpieza |
 | `ERROR: pydhcpd.leases: Read-only file system -abort` | Disk mounted read-only. Same check and same stop | Disco montado como solo lectura. Misma comprobación y misma parada |
@@ -979,6 +1047,9 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 
 ```
 /etc/pydhcp/core/pydhcpd.leases                  # Active leases database
+/var/lib/pydhcp-dns/records.json                 # Managed local DNS records
+/var/lib/pydhcp-dns/publish.lock                 # DNS synchronization lock
+/etc/unbound/unbound.conf.d/forward.conf.bak     # Previous DNS configuration when --configure changes it
 /run/pydhcp/pydhcpd.pid                          # PID file, written by the daemon
                                                  # (systemd creates the directory)
 /etc/bak/pydhcp/pybk_<TIMESTAMP>.zip             # Selected paths archived by tools/pybk.sh, up to 3 kept
@@ -986,25 +1057,93 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 /etc/webmin/pydhcp/.csrf_token                   # CSRF secret for the Webmin module (pywebmin.sh), mode 0600
 ```
 
-## ORIGINAL PROJECT
+## DNS UNBOUND
 
 ---
 
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Part of <strong>PyDHCP</strong> reimplements functions from ISC DHCP. This open-source server no longer receives support or updates (EOL/EOS).<br><br>We extend our special thanks to the developers who created this remarkable tool and devoted their time to building it. Without this foundation, the development of PyDHCP would not have been possible.
+      PyDHCP combines its Python DHCP daemon with Unbound as a separate DNS service. DHCP announces the server LAN IP through option 6 and the local domain through option 15. Unbound answers local names and forwards external queries to its configured upstream servers. <code>core/pydns.py</code> connects both services by publishing names from static reservations and active leases.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Una parte de <strong>PyDHCP</strong> reimplementa funciones de ISC DHCP. Este servidor de código abierto ya no recibe soporte ni actualizaciones (EOL/EOS).<br><br>Agradecemos especialmente a los programadores que crearon esta magnífica herramienta y dedicaron su tiempo a desarrollarla. Sin esta base, el desarrollo de PyDHCP no habría sido posible.
+      PyDHCP combina su demonio DHCP Python con Unbound como servicio DNS separado. DHCP anuncia la IP LAN del servidor mediante la opción 6. Anuncia el dominio local mediante la opción 15. Unbound responde nombres locales y reenvía consultas externas a los servidores configurados. <code>core/pydns.py</code> integra ambos servicios publicando nombres de reservas fijas y concesiones activas.
+    </td>
+  </tr>
+</table>
+
+### Components
+
+| Component | Description | Descripción |
+|---|---|---|
+| `pysetup.sh` | Selects LAN/IP, calculates the subnet, asks for DNS1/DNS2 and local domain, and deploys Unbound and publication units | Selecciona LAN/IP, calcula la subred, pregunta DNS1/DNS2 y dominio local, e instala Unbound y las unidades de publicación |
+| `pydhcp.env` | `SERVER_IP`, `SERV_SUBNET`, `SERV_MASK` and `SERV_DOMAIN` define the local DNS environment. `SERV_DNS` contains the DNS addresses announced to clients | `SERVER_IP`, `SERV_SUBNET`, `SERV_MASK` y `SERV_DOMAIN` definen el entorno DNS local. `SERV_DNS` contiene las direcciones DNS anunciadas a los clientes |
+| `core/pydhcpd.py` | Serves DHCP options 6 and 15; persists client hostnames in `core/pydhcpd.leases` | Entrega las opciones DHCP 6 y 15; guarda los nombres de clientes en `core/pydhcpd.leases` |
+| `core/pydhcpd.conf` | Defines the DHCP domain, client DNS addresses and named static reservations | Define el dominio DHCP, los DNS de clientes y las reservas fijas con nombre |
+| `core/pydhcpd.leases` | Supplies dynamic client names, addresses, binding states and expiry times | Proporciona nombres dinámicos, direcciones, estados y vencimientos de las concesiones |
+| `conf/forward.conf` | Installer template. Installation generates `/etc/unbound/unbound.conf.d/forward.conf` directly; it defines listeners, access-control, local zone and upstream DNS servers | Plantilla del instalador. La instalación genera directamente `/etc/unbound/unbound.conf.d/forward.conf`; define escucha, access-control, zona local y servidores DNS externos |
+| `unbound.service` | Runs DNS independently from the DHCP daemon; serves local records and forwards external queries | Ejecuta DNS independientemente del demonio DHCP; responde registros locales y reenvía consultas externas |
+| `core/pydns.py` | Essential synchronization component. Publishes A/PTR records using authenticated local `unbound-control`, preserving unrelated records | Componente esencial de sincronización. Publica registros A/PTR mediante `unbound-control` local autenticado y conserva registros ajenos |
+| `core/pydns.py --configure` | Synchronizes interface, access-control and local domain, then publishes names in the same invocation and lock | Sincroniza interfaz, access-control y dominio local; después publica nombres en la misma ejecución y bloqueo |
+| `tools/pyleases.sh` / UHM `core/uhmleases.sh` | Rebuild DHCP configuration, start DHCP, then invoke `pydns.py --configure` once | Reconstruyen la configuración DHCP, arrancan DHCP y ejecutan `pydns.py --configure` una vez |
+| `pydhcp-dns.service` | Runs the publisher as a root oneshot service with a private state directory | Ejecuta el publicador como servicio oneshot de root con un directorio de estado privado |
+| `pydhcp-dns.path` | Launches publication when leases, DHCP configuration or `pydhcp.env` change | Activa la publicación cuando cambian las concesiones, la configuración DHCP o `pydhcp.env` |
+| `pydhcp-dns.timer` | Reconciles five seconds after the publication service becomes inactive; handles expirations and missing records after Unbound restarts | Reconcilia cinco segundos después de quedar inactivo el publicador; gestiona vencimientos y registros ausentes tras reiniciar Unbound |
+| `/var/lib/pydhcp-dns/records.json` | Tracks managed records so obsolete names can be removed without deleting unrelated records | Registra los datos administrados para eliminar nombres obsoletos sin borrar registros ajenos |
+| `/var/lib/pydhcp-dns/publish.lock` | Serializes direct reloads and automatic name publication | Evita ejecuciones simultáneas entre recargas directas y publicación automática |
+
+### Resolution flow
+
+| Query or event | Description | Descripción |
+|---|---|---|
+| DHCP assignment | The client receives its address, server LAN IP as DNS, and `SERV_DOMAIN` as local domain | El cliente recibe su dirección, la IP LAN del servidor como DNS y `SERV_DOMAIN` como dominio local |
+| Local forward lookup | `portatil-ana.home.arpa` resolves to its published IPv4 address through an A record | `portatil-ana.home.arpa` resuelve su dirección IPv4 publicada mediante un registro A |
+| Local reverse lookup | A PTR record maps the published IPv4 address to the full local hostname | Un registro PTR relaciona la dirección IPv4 publicada con el nombre local completo |
+| External lookup | Client → Unbound → configured upstream DNS. The installed configuration uses forwarding, not direct recursion from root servers | Cliente → Unbound → DNS externo configurado. La instalación utiliza reenvío, no recursión directa desde servidores raíz |
+| Name changes | The publisher updates local records through `unbound-control` without restarting Unbound | El publicador actualiza los registros locales mediante `unbound-control` sin reiniciar Unbound |
+| Network/domain changes | A DHCP rebuild invokes `--configure`; changed Unbound configuration is validated and replaced before restarting the DNS service | La reconstrucción DHCP ejecuta `--configure`; valida y reemplaza la configuración Unbound modificada antes de reiniciar DNS |
+| DNS failure during rebuild | The reload reports ERROR; DHCP has already started and remains running | La recarga informa ERROR; DHCP ya está iniciado y continúa funcionando |
+
+### Operation
+
+| Component | Description | Descripción |
+|---|---|---|
+| Unbound | Installed as a forwarding resolver. DHCP option 6 announces the server LAN IP | Instalado como resolutor de reenvío. La opción DHCP 6 anuncia la IP LAN del servidor |
+| Conflict checks | Installation aborts for installed `bind9`, `pdns-recursor` or `unbound`, even when stopped | La instalación aborta con `bind9`, `pdns-recursor` o `unbound` instalados, aunque estén detenidos |
+| DNS prompts | DNS1 defaults to `1.1.1.2`; DNS2 defaults to `1.0.0.2`. The template retains `9.9.9.9` as a third upstream | DNS1 propone `1.1.1.2`; DNS2 propone `1.0.0.2`. La plantilla conserva `9.9.9.9` como tercer servidor externo |
+| Configuration | `/etc/unbound/unbound.conf.d/forward.conf`: loopback/LAN listeners, LAN access, local zone and authenticated loopback control | `/etc/unbound/unbound.conf.d/forward.conf`: escucha local/LAN, acceso LAN, zona local y control autenticado por loopback |
+| Domain | `SERV_DOMAIN` generates DHCP option 15. Option 119 is excluded | `SERV_DOMAIN` genera la opción DHCP 15. La opción 119 queda excluida |
+| Publication | `core/pydns.py` reads current reservations and unexpired active leases; publishes A/PTR through `unbound-control` | `core/pydns.py` lee reservas actuales y concesiones activas vigentes; publica A/PTR mediante `unbound-control` |
+| Names | Accepts valid single-label hostnames or the same hostname under `SERV_DOMAIN`. Invalid names are excluded | Acepta nombres válidos de una etiqueta o ese nombre dentro de `SERV_DOMAIN`. Excluye nombres inválidos |
+| Duplicates | Reservations win; dynamic ties prefer latest expiry, then name/IP. Reserved MACs/IPs cannot publish dynamic alternatives | Prioriza reservas; entre concesiones, prioriza vencimiento posterior y después nombre/IP. Las MAC/IP reservadas no publican alternativas dinámicas |
+| Triggers | File changes and DHCP rebuilds trigger publication. A five-second timer removes expired records and restores records after Unbound restarts | Los cambios de archivos y reconstrucciones DHCP activan la publicación. Un temporizador de cinco segundos elimina registros vencidos y repone registros después de reiniciar Unbound |
+| TTL | Local records use at most 30 seconds, bounded by dynamic lease expiry | Los registros locales utilizan hasta 30 segundos, limitados por el vencimiento de las concesiones dinámicas |
+| Ownership | `/var/lib/pydhcp-dns` is root-only (`0700`). Publication preserves unrelated records and refuses conflicting records managed elsewhere | `/var/lib/pydhcp-dns` pertenece exclusivamente a root (`0700`). La publicación conserva registros ajenos y rechaza registros en conflicto administrados externamente |
+| Updates | Code updates preserve DNS configuration. Installations without DNS integration require reinstalling | Las actualizaciones conservan la configuración DNS. Las instalaciones sin integración DNS requieren reinstalación |
+| Removal | Removes publication units/state and `forward.conf`; stops and disables Unbound. Package dependencies remain installed | Elimina unidades/estado de publicación y `forward.conf`; detiene y deshabilita Unbound. Conserva los paquetes instalados |
+| Configuration reloads | `pyleases.sh` and `uhmleases.sh` invoke `core/pydns.py --configure`. It synchronizes LAN interface, access-control and local zone from `pydhcp.env`, validates before replacing, and restarts Unbound only when configuration changes. Failed restarts restore the previous file | `pyleases.sh` y `uhmleases.sh` ejecutan `core/pydns.py --configure`. Sincroniza interfaz LAN, access-control y zona local desde `pydhcp.env`, valida antes de reemplazar y reinicia Unbound solamente si cambia la configuración. Restaura el archivo anterior si falla el reinicio |
+| Short names | Client suffix handling determines whether `portatil-ana` expands to the full name; verify Windows and systemd-resolved clients | El cliente determina si completa `portatil-ana` con el dominio; verifique clientes Windows y systemd-resolved |
+
+## ACKNOWLEDGMENTS
+
+---
+
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      Thanks are due to the Internet Systems Consortium (ISC) and NLnet Labs, and especially to the developers who created ISC-DHCP and Unbound. Without their work, PyDHCP would not have been possible.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Se agradece a Internet Systems Consortium (ISC) y a NLnet Labs, y especialmente a los desarrolladores que crearon ISC-DHCP y Unbound. Sin esta base, PyDHCP no habría sido posible.
     </td>
   </tr>
 </table>
 
 
-| Project | Version | EOL Date |
-| :-----: | :-----: | :------: |
-| [ISC-DHCP](https://github.com/isc-projects/dhcp) | 4.4.3-P1-4ubuntu2 | 2022 |
+| Project | Version | Status |
+| :-----: | :-----: | :----: |
+| [ISC-DHCP](https://github.com/isc-projects/dhcp) | 4.4.3-P1-4ubuntu2 | EOL/EOS 2022 |
+| [Unbound](https://nlnetlabs.nl/projects/unbound/about/) | Distribution package | Active |
 
 ## NOTICE
 

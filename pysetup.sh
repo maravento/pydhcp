@@ -7,13 +7,14 @@
 # FILE: pysetup.sh
 #
 # USAGE:
-# sudo bash pysetup.sh --install      Install
-# sudo bash pysetup.sh --update       Update code only (preserves user config)
-# sudo bash pysetup.sh --uninstall    Uninstall
-# sudo bash pysetup.sh --status       Report service, port, config and log
-# sudo bash pysetup.sh                Interactive menu
-# bash pysetup.sh -h                  Show usage
-# bash pysetup.sh --help              Show usage
+# ACTION                                    COMMAND
+# Install                                   sudo bash pysetup.sh --install
+# Update code only (preserves user config)  sudo bash pysetup.sh --update
+# Uninstall                                 sudo bash pysetup.sh --uninstall
+# Report service, port, config and log      sudo bash pysetup.sh --status
+# Interactive menu                          sudo bash pysetup.sh
+# Show usage                                bash pysetup.sh -h
+# Show usage                                bash pysetup.sh --help
 #
 # LOG: pysetup.log, in the directory containing this script
 #
@@ -56,6 +57,73 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+check_requirements() {
+    local network_command
+    for network_command in ip awk python3; do
+        command -v "$network_command" >/dev/null 2>&1 \
+            || abort "network command '$network_command' missing -abort"
+    done
+    case "$1" in
+        install)
+            # Verify source files exist
+            for source_file in core/pydhcpd.py core/pydhcpd.conf conf/forward.conf service/pydhcp-dns.service service/pydhcp-dns.path service/pydhcp-dns.timer service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh core/pydns.py; do
+                [ -f "$script_dir/$source_file" ] || { err "[1/2] missing source file: $source_file"; abort "[2/2] run pysetup.sh from the project directory -abort"; }
+            done
+            require_static_lan_candidate
+            check_conflicts "DNS server" bind9 pdns-recursor unbound
+            if [ -f "$core_dir/pydhcpd.py" ]; then
+            abort "pydhcp installed; use --update | --uninstall -abort"
+            fi
+
+            check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
+            check_port udp 67 "DHCP server"
+            warn_overlap "dhcp" dnsmasq
+            warn_wpad_port
+
+            # Detect and select network interface
+            choose_lan_interface "${PYDHCP_LAN_IFACE:-}"
+            iface_selected="$lan_iface_answer"
+            read_lan_ipv4 "$iface_selected" "${PYDHCP_SERVER_IP:-}"
+            check_static_lan "$iface_selected" "${lan_cidr_answer%/*}"
+            ;;
+        update)
+            [ -d "$install_dir" ] && [ -f "$install_dir/pydhcp.env" ] \
+                || abort "pydhcp is not installed -abort"
+        verify_source "$script_dir/tools/pydhcpenv.sh"
+        source "$script_dir/tools/pydhcpenv.sh"
+        local INTERFACESv4="" SERVER_IP=""
+        load_pydhcp_env "$install_dir/pydhcp.env" 'INTERFACESv4 SERVER_IP'
+        check_static_lan "$INTERFACESv4" "$SERVER_IP"
+            choose_lan_interface "$INTERFACESv4"
+            ;;
+    esac
+    check_ipv4_interfaces
+    if [ "$1" = install ]; then
+        check_internet
+    else
+        local package
+        for package in "${apt_deps[@]}"; do
+            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null \
+                | grep -q "ok installed"; then
+                check_internet
+                break
+            fi
+        done
+    fi
+}
+
+check_wpad_requirements() {
+    if [ -n "${PYDHCP_SQUID_PORT:-}" ]; then
+        local squid_status=0
+        detect_squid_port "$1" >/dev/null || squid_status=$?
+        [ "$squid_status" -ne 3 ] || abort "PYDHCP_SQUID_PORT is not a valid port -abort"
+    fi
+    check_conflicts "web server" nginx lighttpd caddy
+    verify_source "$script_dir/conf/wpad.conf"
+    check_port tcp "$wpad_port_value" "WPAD server"
+
+}
+
 # prevent overlapping runs
 script_lock="/var/lock/$(basename "$0" .sh).lock"
 (umask 077; : >> "$script_lock") || {
@@ -86,7 +154,7 @@ log() {
 # not just the ones this installer invokes -- e.g. iputils-ping is used by
 # pydhcpd.py when it cannot open a raw ICMP socket. Installed by
 # install_deps in --install and --update.
-apt_deps=(python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate perl ncurses-bin)
+apt_deps=(python3-yaml python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate perl ncurses-bin unbound openssl)
 
 # ------------------------------------------------------------------------------
 # VARIABLES
@@ -95,7 +163,7 @@ apt_deps=(python3 iproute2 passwd util-linux coreutils grep sed iputils-ping sys
 # validation -- one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
-UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
+UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
 UH_UINT='^(0|[1-9][0-9]*)$'
 
 # validation - signed integer only; use directly with =~
@@ -139,29 +207,90 @@ abort() { err "$*"; exit 1; }
 # FUNCTIONS
 # ------------------------------------------------------------------------------
 
+retry_cmd() {
+    [ "$#" -ge 2 ] || return 2
+    local retry_label="$1" retry_attempt retry_status
+    shift
+    for retry_attempt in 1 2 3; do
+        if "$@"; then
+            return 0
+        else
+            retry_status=$?
+        fi
+        [ "$retry_attempt" -lt 3 ] || return "$retry_status"
+        if declare -F log >/dev/null; then
+            log "INFO: $retry_label: retry $((retry_attempt + 1))/3" >&2
+        else
+            printf '%s INFO: %s: retry %s/3\n' \
+                "$(date '+%Y-%m-%d %H:%M:%S')" "$retry_label" \
+                "$((retry_attempt + 1))" >&2
+        fi
+        sleep 5
+    done
+}
+
 # OWNER AND MODE
 # Sets owner and mode on the opened file, never through a symlink: the
 # pydhcpd group can write /etc/pydhcp, so a path can be swapped for a link.
-# Usage: fix_dhcp_file <file> <owner> <group> <mode>
+# Usage: fix_dhcp_file <path> <owner> <group> <mode> [report] [directory]
 fix_dhcp_file() {
-    if ! python3 -I - "$1" "$2" "$3" "$4" <<'PY'
+    local fix_result
+    if ! fix_result=$(python3 -I - "$1" "$2" "$3" "$4" "${6:-file}" <<'PY'
 import grp, os, pwd, stat, sys
-path, owner, group, mode = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 8)
+path, owner, group = sys.argv[1:4]
+mode = int(sys.argv[4], 8)
 try:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
 except OSError:
     sys.exit(1)
 try:
     st = os.fstat(fd)
-    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+    valid = stat.S_ISDIR(st.st_mode) if sys.argv[5] == "directory" else (
+        stat.S_ISREG(st.st_mode) and st.st_nlink == 1)
+    if not valid:
         sys.exit(1)
-    os.fchown(fd, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
-    os.fchmod(fd, mode)
+    uid, gid = pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid
+    current = (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode))
+    changed = current != (uid, gid, mode)
+    if changed:
+        os.fchown(fd, uid, gid)
+        os.fchmod(fd, mode)
 finally:
     os.close(fd)
+if changed:
+    print("changed")
 PY
-    then
-        abort "$(basename "$1") is not a regular file -abort"
+    ); then
+        abort "$(basename "$1") is not a regular ${6:-file} -abort"
+    fi
+    if [[ "${5:-}" == report && "$fix_result" == changed ]]; then
+        log "INFO: $(basename "$1") perms fixed -fixed"
+    fi
+}
+
+repair_install_permissions() {
+    local path
+    fix_dhcp_file "$install_dir" root "$daemon_owner" 1770 report directory
+    fix_dhcp_file "$core_dir" root "$daemon_owner" 1770 report directory
+    for path in "$install_dir/tools" /etc/unbound/unbound.conf.d; do
+        fix_dhcp_file "$path" root root 755 report directory
+    done
+    fix_dhcp_file "$install_dir/pydhcp.env" root "$daemon_owner" 640 report
+    fix_dhcp_file "$core_dir/pydhcpd.conf" root "$daemon_owner" 640 report
+    fix_dhcp_file "$core_dir/pydhcpd.leases" \
+        "$daemon_owner" "$daemon_owner" 640 report
+    for path in /etc/unbound/unbound.conf.d/forward.conf \
+        /etc/default/unbound; do
+        fix_dhcp_file "$path" root root 644 report
+    done
+    if [ -e /var/lib/pydhcp-dns ] || [ -L /var/lib/pydhcp-dns ]; then
+        fix_dhcp_file /var/lib/pydhcp-dns root root 700 report directory
+        for path in /var/lib/pydhcp-dns/records.json \
+            /var/lib/pydhcp-dns/publish.lock; do
+            if [ -e "$path" ] || [ -L "$path" ]; then
+                fix_dhcp_file "$path" root root 600 report
+            fi
+        done
     fi
 }
 
@@ -359,7 +488,8 @@ update_stop_service() {
     [ "$load_state" != not-found ] || return 0
     state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect service: $unit"
     case "$state" in
-        active|reloading|activating|deactivating) update_services+=("$unit") ;;
+        active|reloading|activating|deactivating)
+            [ "$unit" = pydhcp-dns.service ] || update_services+=("$unit") ;;
         inactive|failed) ;;
         *) update_error "unexpected service state: $unit ($state)" ;;
     esac
@@ -412,8 +542,8 @@ update_apply() {
             if (( ${#compared_file} <= 19 )); then
                 update_error "src and dst do not match: $compared_file"
             fi
-            log "ERROR: src and dst: $compared_file"
-            update_error "src and dst do not match"
+            log "ERROR: [1/2] src and dst: $compared_file"
+            update_error "[2/2] src and dst do not match"
         }
         info "updated $(basename "$target")"
     done
@@ -517,7 +647,7 @@ acl_prepare() {
             log "ERROR: cannot set owner of $acl_dir -abort"
             exit 1
         fi
-        log "WARNING: created ACL directory $acl_dir -alert"
+        log "INFO: created ACL directory $acl_dir"
     elif [ -d "$acl_dir" ] && [ ! -L "$acl_dir" ]; then
         acl_fix_perms "$acl_dir" "$dir_mode"
     else
@@ -540,7 +670,7 @@ acl_prepare() {
                 log "ERROR: cannot set perms of $(basename "$acl_file") -abort"
                 exit 1
             fi
-            log "WARNING: created empty $(basename "$acl_file") -alert"
+            log "INFO: created empty $(basename "$acl_file")"
         elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
             acl_fix_perms "$acl_file" "$file_mode"
         else
@@ -568,17 +698,22 @@ acl_fix_perms() {
 
 # INTERACTIVE PROMPTS
 # Each one asks for a value, validates it and repeats until it is correct
-ask_dns() {
-    local prompt_text="$1" default_value="$2" target_var="$3" user_answer
-    while true; do
-        read -rp "${prompt_text} [Default: ${default_value}]: " user_answer
-        user_answer="${user_answer:-$default_value}"
-        if [[ "$user_answer" =~ $UH_DNS ]]; then
-            printf -v "$target_var" '%s' "$user_answer"
-            break
-        fi
-        info "Invalid DNS format, try again -retry"
-    done
+# dns primary
+is_dns1() {
+    local DNS1
+    read -r -p "Enter DNS1 (e.g. 1.1.1.2): " DNS1 \
+        || abort "cannot read the primary DNS answer -abort"
+    DNSNEW1="${DNS1:-1.1.1.2}"
+    [[ "$DNSNEW1" =~ $UH_IPV4 ]]
+}
+
+# dns secondary
+is_dns2() {
+    local DNS2
+    read -r -p "Enter DNS2 (e.g. 1.0.0.2): " DNS2 \
+        || abort "cannot read the secondary DNS answer -abort"
+    DNSNEW2="${DNS2:-1.0.0.2}"
+    [[ "$DNSNEW2" =~ $UH_IPV4 ]]
 }
 
 # validation - integer is representable as a signed 64-bit value
@@ -687,12 +822,12 @@ if result.returncode != 0 or result.stderr.strip():
 sys.stdout.write(result.stdout)
 PY
     ); then
-        err "cannot check ${proto^^} port $port"
-        abort "fix the ss query before installing -abort"
+        err "[1/2] cannot check ${proto^^} port $port"
+        abort "[2/2] fix the ss query before installing -abort"
     fi
     if [ -n "$port_listeners" ]; then
-        err "${proto^^} port $port in use by another $role"
-        abort "stop that service before installing -abort"
+        err "[1/2] ${proto^^} port $port in use by another $role"
+        abort "[2/2] stop that service before installing -abort"
     fi
 }
 
@@ -807,15 +942,6 @@ deploy_wpad() {
     local server_ip="$1" lan_subnet="$2" lan_mask="$3"
 
     wpad_enabled_value="false"
-    if [ -n "${PYDHCP_SQUID_PORT:-}" ]; then
-        local squid_status=0
-        detect_squid_port "$server_ip" >/dev/null || squid_status=$?
-        [ "$squid_status" -ne 3 ] || abort "PYDHCP_SQUID_PORT is not a valid port -abort"
-    fi
-    check_conflicts "web server" nginx lighttpd caddy
-    verify_source "$script_dir/conf/wpad.conf"
-    check_port tcp "$wpad_port_value" "WPAD server"
-
     local apache_pkg missing_apache_packages=()
     for apache_pkg in apache2 apache2-utils; do
         if ! dpkg-query -W -f='${Status}' "$apache_pkg" 2>/dev/null | grep -q "ok installed"; then
@@ -826,7 +952,7 @@ deploy_wpad() {
         command -v apt-get >/dev/null 2>&1 || abort "apt-get is required to install Apache -abort"
         check_ipv4_interfaces
         check_internet
-        DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_apache_packages[@]}" \
+        retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_apache_packages[@]}" \
             || abort "cannot install Apache packages -abort"
     fi
     for apache_pkg in apache2 apache2-utils; do
@@ -835,7 +961,7 @@ deploy_wpad() {
     done
     if dpkg-query -W -f='${Status}' apache2-doc 2>/dev/null | grep -q "ok installed"; then
         command -v apt >/dev/null 2>&1 || abort "apt is required to reinstall apache2-doc -abort"
-        DEBIAN_FRONTEND=noninteractive apt -qq install -y --reinstall apache2-doc \
+        retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt -qq install -y --reinstall apache2-doc \
             || abort "cannot reinstall apache2-doc -abort"
     fi
 
@@ -968,6 +1094,9 @@ check_internet() {
 # DEPENDENCIES
 # Install the missing packages of apt_deps
 install_deps() {
+    if ! command -v awk >/dev/null 2>&1; then
+        abort "awk is not installed -abort"
+    fi
     local dep_pkg missing_pkgs=()
     for dep_pkg in "${apt_deps[@]}"; do
         [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" == *"ok installed"* ]] || missing_pkgs+=("$dep_pkg")
@@ -975,8 +1104,8 @@ install_deps() {
     (( ${#missing_pkgs[@]} == 0 )) && return 0
     check_ipv4_interfaces
     check_internet
-    DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
-        || { err "cannot install ${missing_pkgs[*]}"; abort "install them with apt, then re-run -abort"; }
+    retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
+        || { err "[1/2] cannot install ${missing_pkgs[*]}"; abort "[2/2] install them with apt, then re-run -abort"; }
     info "Installed: ${missing_pkgs[*]}"
 }
 
@@ -1011,14 +1140,15 @@ choose_lan_interface() {
     for iface_index in "${!lan_candidates[@]}"; do
         iface_name="${lan_candidates[$iface_index]}"
         iface_state=$(ip -br link show "$iface_name" | awk '{print $2}')
-        iface_addrs=$(ip -4 -o addr show dev "$iface_name" scope global | awk '{print $4}' | paste -sd' ')
-        printf ' [%d] %s (%s, %s)\n' "$((iface_index + 1))" "$iface_name" "$iface_state" "${iface_addrs:-no IPv4}"
+        printf ' [%d] %s (%s)\n' "$((iface_index + 1))" "$iface_name" "$iface_state"
+        describe_lan_ipv4 "$iface_name"
     done
     while true; do
-        read -r -p "Select LAN Interface [1-${#lan_candidates[@]}]: " iface_choice || {
+        read -r -p "Select LAN Interface [1-${#lan_candidates[@]}] [1]: " iface_choice || {
             log "ERROR: cannot read LAN interface selection -abort"
             exit 1
         }
+        iface_choice="${iface_choice:-1}"
         if [[ "$iface_choice" =~ $UH_UINT ]] && [ "${#iface_choice}" -le 5 ] \
            && [ "$iface_choice" -ge 1 ] && [ "$iface_choice" -le "${#lan_candidates[@]}" ]; then
             lan_iface_answer="${lan_candidates[$((iface_choice - 1))]}"
@@ -1026,6 +1156,171 @@ choose_lan_interface() {
         fi
         log "INFO: invalid LAN interface selection -retry"
     done
+}
+
+check_static_lan() {
+    local static_result
+    static_result=$(python3 -I - "$1" "$2" <<'STATIC_LAN'
+import configparser
+import fnmatch
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+iface, address = sys.argv[1:]
+
+def run(*args):
+    return subprocess.check_output(
+        args, text=True, stderr=subprocess.DEVNULL, timeout=10,
+        env={**os.environ, 'LC_ALL': 'C', 'SYSTEMD_PAGER': 'cat'}).strip()
+
+def has_address(values):
+    return any(str(ipaddress.ip_interface(value.split(',')[0]).ip)
+               == address for value in values)
+
+def persistent_static():
+    data = json.loads(run('ip', '-j', '-4', 'addr', 'show', 'dev', iface))
+    selected = [entry for link in data for entry in link['addr_info']
+                if entry.get('local') == address]
+    if len(selected) != 1:
+        return 'unknown'
+    entry = selected[0]
+    if entry.get('dynamic') or 'dynamic' in entry.get('flags', []):
+        return 'dhcp'
+
+    nm_active = False
+    if shutil.which('nmcli'):
+        try:
+            uuid = run('nmcli', '-g', 'GENERAL.CON-UUID',
+                       'device', 'show', iface)
+            if uuid and uuid != '--':
+                nm_active = True
+                method = run('nmcli', '-g', 'ipv4.method',
+                             'connection', 'show', uuid)
+                addresses = run('nmcli', '-g', 'ipv4.addresses',
+                                'connection', 'show', uuid)
+                if method != 'manual' or not has_address(
+                        addresses.split(', ')):
+                    return 'unknown'
+                rows = run('nmcli', '-t', '--escape', 'no',
+                           '-f', 'UUID,FILENAME', 'connection', 'show')
+                netplan_profile = False
+                for row in rows.splitlines():
+                    key, _, filename = row.partition(':')
+                    if key != uuid:
+                        continue
+                    netplan_profile = (filename.startswith('/run/') and
+                                       '/netplan-' in filename)
+                    if not filename.startswith('/etc/'):
+                        continue
+                    config = configparser.ConfigParser(interpolation=None)
+                    config.read(filename)
+                    if config.get('ipv4', 'method') != 'manual':
+                        return 'unknown'
+                    values = [value for key, value in config['ipv4'].items()
+                              if re.fullmatch(r'address\d+', key)]
+                    if has_address(values):
+                        return 'static'
+                if not netplan_profile:
+                    return 'unknown'
+        except (OSError, ValueError, configparser.Error,
+                subprocess.SubprocessError):
+            if nm_active:
+                return 'unknown'
+
+    if not shutil.which('netplan'):
+        return 'unknown'
+    # Runtime Netplan overrides cannot prove persistent configuration.
+    if list(Path('/run/netplan').glob('*.yaml')):
+        return 'unknown'
+    if not nm_active:
+        status = run('networkctl', '--no-pager', 'status', iface)
+        if not re.search(r'Network File: .*netplan.*\.network', status):
+            return 'unknown'
+    import yaml
+    try:
+        network = yaml.safe_load(run('netplan', 'get')).get('network', {})
+    except yaml.YAMLError:
+        return 'unknown'
+    for kind in ('ethernets', 'wifis', 'bridges', 'bonds', 'vlans'):
+        for name, config in network.get(kind, {}).items():
+            match = config.get('match', {})
+            if match:
+                mac = data[0].get('permaddr', data[0].get('address', ''))
+                matches = not (set(match) - {'name', 'macaddress'})
+                if 'name' in match:
+                    matches &= fnmatch.fnmatchcase(iface, match['name'])
+                if 'macaddress' in match:
+                    matches &= mac.lower() == match['macaddress'].lower()
+                if config.get('set-name') == iface:
+                    matches = True
+            else:
+                matches = name == iface
+            if matches and has_address(config.get('addresses', [])):
+                return 'static'
+    return 'unknown'
+
+try:
+    print(persistent_static())
+except (OSError, ValueError, KeyError, TypeError, AttributeError,
+        ImportError, subprocess.SubprocessError):
+    print('unknown')
+STATIC_LAN
+    ) || static_result=unknown
+    if [ "${3:-}" = probe ]; then
+        printf '%s\n' "$static_result"
+        return 0
+    fi
+    case "$static_result" in
+        static) return 0 ;;
+        dhcp)
+            log "ERROR: [1/2] LAN $1: $2 uses DHCP"
+            log "ERROR: [2/2] configure a static LAN IPv4 -abort"
+            ;;
+        *)
+            log "ERROR: [1/2] LAN $1: $2"
+            log "ERROR: [2/2] cannot verify persistent static IPv4 -abort"
+            ;;
+    esac
+    exit 1
+}
+
+lan_ipv4_condition() {
+    case "$(check_static_lan "$1" "$2" probe)" in
+        static) printf 'static' ;;
+        dhcp) printf 'dynamic' ;;
+        *) printf 'unverified' ;;
+    esac
+}
+
+describe_lan_ipv4() {
+    local cidr
+    while read -r cidr; do
+        printf '      %s (%s)\n' "$cidr" \
+            "$(lan_ipv4_condition "$1" "${cidr%/*}")"
+    done < <(ip -4 -o addr show dev "$1" scope global | awk '{print $4}')
+}
+
+require_static_lan_candidate() {
+    local iface cidr
+    local -a candidates=()
+    mapfile -t candidates < <(list_ipv4_ifaces)
+    (( ${#candidates[@]} > 1 )) || return 0
+    for iface in "${candidates[@]}"; do
+        while read -r cidr; do
+            if [ "$(check_static_lan "$iface" "${cidr%/*}" probe)" = static ]; then
+                return 0
+            fi
+        done < <(ip -4 -o addr show dev "$iface" scope global | awk '{print $4}')
+    done
+    log "ERROR: [1/2] no interface has a verified static IPv4"
+    log "ERROR: [2/2] configure a static LAN IPv4 -abort"
+    exit 1
 }
 
 read_lan_ipv4() {
@@ -1058,13 +1353,17 @@ read_lan_ipv4() {
     fi
     echo "IPv4 addresses on LAN '$selected_iface':"
     for ipv4_index in "${!lan_addresses[@]}"; do
-        printf ' [%d] %s\n' "$((ipv4_index + 1))" "${lan_addresses[$ipv4_index]}"
+        printf ' [%d] %s (%s)\n' "$((ipv4_index + 1))" \
+            "${lan_addresses[$ipv4_index]}" \
+            "$(lan_ipv4_condition "$selected_iface" \
+                "${lan_addresses[$ipv4_index]%/*}")"
     done
     while true; do
-        read -r -p "Select LAN IPv4 number: " ipv4_choice || {
+        read -r -p "Select LAN IPv4 number [1]: " ipv4_choice || {
             log "ERROR: cannot read LAN IPv4 selection -abort"
             exit 1
         }
+        ipv4_choice="${ipv4_choice:-1}"
         if [[ "$ipv4_choice" =~ $UH_UINT ]] && [ "${#ipv4_choice}" -le 5 ] \
            && [ "$ipv4_choice" -ge 1 ] && [ "$ipv4_choice" -le "${#lan_addresses[@]}" ]; then
             lan_cidr_answer="${lan_addresses[$((ipv4_choice - 1))]}"
@@ -1075,7 +1374,7 @@ read_lan_ipv4() {
 }
 
 # ------------------------------------------------------------------------------
-# REMOVE
+# UNINSTALL
 # ------------------------------------------------------------------------------
 
 do_uninstall() {
@@ -1111,6 +1410,13 @@ do_uninstall() {
     fi
 
     log "INFO: Stopping and disabling pydhcpd service..."
+    systemctl stop pydhcp-dns.path pydhcp-dns.timer pydhcp-dns.service 2>/dev/null || true
+    systemctl disable pydhcp-dns.path pydhcp-dns.timer 2>/dev/null || true
+    systemctl stop unbound 2>/dev/null || true
+    systemctl disable unbound 2>/dev/null || true
+    rm -f /etc/unbound/unbound.conf.d/forward.conf
+    rm -f /etc/systemd/system/pydhcp-dns.{service,path,timer}
+    rm -rf -- /var/lib/pydhcp-dns
     systemctl stop pydhcpd 2>/dev/null || true
     systemctl disable pydhcpd 2>/dev/null || true
 
@@ -1153,21 +1459,27 @@ do_uninstall() {
 # ------------------------------------------------------------------------------
 
 do_update() {
+    check_requirements update
+    [ -f /etc/unbound/unbound.conf.d/forward.conf ] \
+        && grep -q '^SERV_DOMAIN=' "$install_dir/pydhcp.env" \
+        || abort "DNS setup missing; reinstall pydhcp -abort"
     install_deps
-    [ -d "$install_dir" ] && [ -f "$install_dir/pydhcp.env" ] \
-        || abort "pydhcp is not installed -abort"
     update_reset /etc/cron.d/pydhcp
     local file
-    for file in core/pydhcpd.py service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh tools/pyleases.sh tools/pybk.sh tools/pywebmin.sh; do
+    for file in core/pydhcpd.py service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh tools/pyleases.sh tools/pybk.sh tools/pywebmin.sh core/pydns.py service/pydhcp-dns.service service/pydhcp-dns.path service/pydhcp-dns.timer; do
         verify_source "$script_dir/$file"
     done
     update_file "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py" 755 root:root
+    update_file "$script_dir/core/pydns.py" "$core_dir/pydns.py" 750 root:root
     update_file "$script_dir/service/pydhcpd.service" "$service_file" 644 root:root
     update_file "$script_dir/init.d/pydhcpd" "$init_file" 750 root:root
     for file in pydhcpenv.sh pyleases.sh pybk.sh pywebmin.sh; do
         local mode=750
         [ "$file" != pydhcpenv.sh ] || mode=644
         update_file "$script_dir/tools/$file" "$install_dir/tools/$file" "$mode" root:root
+    done
+    for file in pydhcp-dns.service pydhcp-dns.path pydhcp-dns.timer; do
+        update_file "$script_dir/service/$file" "/etc/systemd/system/$file" 644 root:root
     done
     update_target /etc/logrotate.d/pydhcp
     update_target "$pydhcp_log_file" 640
@@ -1176,9 +1488,13 @@ do_update() {
     update_preflight
     update_backup "$script_dir/tools/pybk.sh"
     update_begin
+    update_stop_service pydhcp-dns.path
+    update_stop_service pydhcp-dns.timer
+    update_stop_service pydhcp-dns.service
     update_stop_service pydhcpd
     update_wait_jobs
     update_apply
+    repair_install_permissions
     # Repair the ACL directory modes set by --install; lists are never rewritten
     acl_prepare "$acl_mac_dir" 700 600 "$acl_limited_file" "$acl_unlimited_file"
     acl_prepare "$acl_dhcp_dir" 700 600 "$acl_block_file"
@@ -1215,21 +1531,7 @@ PY_ROTATE
 # ------------------------------------------------------------------------------
 
 do_install() {
-    install_deps
-    if [ -f "$core_dir/pydhcpd.py" ]; then
-        err "pydhcpd is already installed at $install_dir"
-        abort "use --update or --uninstall instead -abort"
-    fi
-
-    check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
-    check_port udp 67 "DHCP server"
-    warn_overlap "dhcp" dnsmasq
-    warn_wpad_port
-
-    # Detect and select network interface
-    choose_lan_interface "${PYDHCP_LAN_IFACE:-}"
-    iface_selected="$lan_iface_answer"
-    read_lan_ipv4 "$iface_selected" "${PYDHCP_SERVER_IP:-}"
+    check_requirements install
     server_ip_answer="${lan_cidr_answer%/*}"
     mapfile -t network_values < <(python3 -c '
 import ipaddress, sys
@@ -1298,27 +1600,39 @@ sys.exit(0 if valid else 1)
     done
     info "Pool range: $pool_start_answer -> $pool_end_answer"
 
-    # DNS servers
-    ask_dns "Enter DNS server(s)" "8.8.8.8,1.1.1.1" dns_answer
+    # DNS upstreams and local DHCP domain
+    until is_dns1; do info "Invalid DNS format, try again -retry"; done
+    until is_dns2; do info "Invalid DNS format, try again -retry"; done
+    dns_answer="$server_ip_answer"
     info "DNS servers: $dns_answer"
+    while true; do
+        read -r -p "Enter local domain [home.arpa]: " domain_answer \
+            || abort "cannot read local domain -abort"
+        domain_answer="${domain_answer:-home.arpa}"
+        if [[ "$domain_answer" =~ $UH_FQDN ]] && (( ${#domain_answer} <= 253 )); then
+            domain_answer="${domain_answer,,}"
+            break
+        fi
+    done
 
     # Pool lease cleanup interval
     ask_number "DHCP pool lease cleanup interval in seconds" "60" cleanup_answer
 
     # Optional features
     wpad_enabled_value="false"
+    local wpad_requested=false
     if confirm "Deploy WPAD/PAC on port $wpad_port_value (DHCP option 252)?" "y"; then
+        check_wpad_requirements "$server_ip_answer"
+        wpad_requested=true
+    fi
+    install_deps
+    if "$wpad_requested"; then
         deploy_wpad "$server_ip_answer" "$local_subnet" "$netmask_answer"
     fi
     # ping-check matches isc-dhcp-server's own default (on unless explicitly
     # disabled), so it is not prompted for -- edit PING_CHECK_ENABLED in
     # pydhcp.env afterward if your environment has strict ICMP firewall rules.
     ping_check_value="true"
-
-    # Verify source files exist
-    for source_file in core/pydhcpd.py core/pydhcpd.conf service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh; do
-        [ -f "$script_dir/$source_file" ] || { err "missing source file: $source_file"; abort "run pysetup.sh from the project directory -abort"; }
-    done
 
     # Create system group and user
     if ! getent group "$daemon_owner" &>/dev/null; then
@@ -1402,6 +1716,7 @@ SERV_MASK=$netmask_answer
 SERV_INI_RANGE_BLOCK=$pool_start_answer
 SERV_END_RANGE_BLOCK=$pool_end_answer
 SERV_DNS=$dns_answer
+SERV_DOMAIN=$domain_answer
 
 # ACL
 ACL_PATH=$acl_base_dir
@@ -1448,6 +1763,7 @@ ENVEOF
     sed -i "s|option broadcast-address .*;|option broadcast-address ${local_broadcast};|" "$conf_tmp"
     sed -i "s|range [0-9.]* [0-9.]*;|range $pool_start_answer $pool_end_answer;|" "$conf_tmp"
     sed -i "s|option domain-name-servers .*;|option domain-name-servers ${dns_answer};|" "$conf_tmp"
+    sed -i "s|option domain-name \".*\";|option domain-name \"${domain_answer}\";|" "$conf_tmp"
     sed -i "s|^cleanup-interval .*|cleanup-interval ${cleanup_answer};|" "$conf_tmp"
     sed -i "/pool {/,/}/ s|min-lease-time .*;|min-lease-time ${cleanup_answer};|" "$conf_tmp"
     sed -i "/pool {/,/}/ s|default-lease-time .*;|default-lease-time ${cleanup_answer};|" "$conf_tmp"
@@ -1474,6 +1790,37 @@ ENVEOF
             || abort "cannot create pydhcpd.leases -abort"
         fix_dhcp_file "$core_dir/pydhcpd.leases" "$daemon_owner" "$daemon_owner" 640
     fi
+
+    # DNS
+    # Configure the DNS resolver
+    install -d -m 755 -o root -g root /etc/unbound/unbound.conf.d
+    python3 - "$script_dir/conf/forward.conf" \
+        /etc/unbound/unbound.conf.d/forward.conf \
+        "$server_ip_answer" "$local_subnet" "$netmask_answer" "$domain_answer" \
+        "$DNSNEW1" "$DNSNEW2" <<'DNS_CONF'
+import ipaddress, pathlib, re, sys
+source, target, address, subnet, mask, domain, dns1, dns2 = sys.argv[1:]
+text = pathlib.Path(source).read_text()
+text = text.replace('192.168.0.10', address)
+text = text.replace('192.168.0.0/24', str(ipaddress.IPv4Network(f'{subnet}/{mask}', strict=False)))
+text = text.replace('home.arpa', domain)
+upstreams = {'1.1.1.2': dns1, '1.0.0.2': dns2}
+text = re.sub(r'(?m)^    forward-addr: (.*)$',
+              lambda match: '    forward-addr: ' + upstreams.get(match[1], match[1]), text)
+pathlib.Path(target).write_text(text)
+DNS_CONF
+    fix_dhcp_file /etc/unbound/unbound.conf.d/forward.conf root root 644 report
+    tee /etc/default/unbound >/dev/null <<'DNS_DEFAULTS'
+DAEMON_OPTS=""
+DNS_DEFAULTS
+    fix_dhcp_file /etc/default/unbound root root 644 report
+    unbound-control-setup || abort "cannot prepare unbound control -abort"
+    unbound-checkconf || abort "unbound config check failed -abort"
+    systemctl daemon-reload
+    systemctl enable --now unbound
+    systemctl restart unbound || abort "cannot start unbound -abort"
+
+    install -m 750 -o root -g root "$script_dir/core/pydns.py" "$core_dir/pydns.py"
 
     # Deploy tools
     mkdir -p "$install_dir/tools"
@@ -1502,6 +1849,11 @@ ENVEOF
     info "updated pydhcpd.service"
     chown root:root "$service_file"
     chmod 644 "$service_file"
+
+    for dns_unit in pydhcp-dns.service pydhcp-dns.path pydhcp-dns.timer; do
+        install -m 644 -o root -g root "$script_dir/service/$dns_unit" \
+            "/etc/systemd/system/$dns_unit"
+    done
 
     # Deploy init.d wrapper
     verify_source "$script_dir/init.d/pydhcpd"
@@ -1533,6 +1885,8 @@ EOF
     chmod 644 /etc/logrotate.d/pydhcp
     chown root:root /etc/logrotate.d/pydhcp
 
+    repair_install_permissions
+
     # Enable and start service
     info "updated /etc/logrotate.d/pydhcp"
     log "INFO: Enabling and starting pydhcpd ..."
@@ -1541,9 +1895,11 @@ EOF
     systemctl start pydhcpd || true
     sleep 1
     if ! systemctl is-active --quiet pydhcpd; then
-        { err "pydhcpd failed to start"; abort "check it with: journalctl -u pydhcpd -n 50 -abort"; }
+        { err "[1/2] pydhcpd failed to start"; abort "[2/2] check it with: journalctl -u pydhcpd -n 50 -abort"; }
     fi
 
+    systemctl enable --now pydhcp-dns.path pydhcp-dns.timer
+    systemctl start pydhcp-dns.service || abort "cannot publish DNS names -abort"
     info "pydhcpd installed and running"
     info "Configuration : $core_dir/pydhcpd.conf"
     info "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"

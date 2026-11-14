@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch pydhcp names for DNS publication
+
+[Path]
+PathChanged=/etc/pydhcp/core/pydhcpd.leases
+PathChanged=/etc/pydhcp/core/pydhcpd.conf
+PathChanged=/etc/pydhcp/pydhcp.env
+Unit=pydhcp-dns.service
+
+[Install]
+WantedBy=multi-user.target

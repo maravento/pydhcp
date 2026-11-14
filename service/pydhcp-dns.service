@@ -1,0 +1,18 @@
+[Unit]
+Description=pydhcp local DNS name publication
+After=unbound.service pydhcpd.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /etc/pydhcp/core/pydns.py
+StateDirectory=pydhcp-dns
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/pydhcp-dns
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+TimeoutStartSec=30

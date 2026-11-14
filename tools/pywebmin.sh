@@ -7,10 +7,14 @@
 # FILE: tools/pywebmin.sh
 #
 # USAGE:
-# sudo bash pywebmin.sh --install    Install the module
-# sudo bash pywebmin.sh --uninstall  Uninstall the module
-# bash pywebmin.sh -h                Show this help
-# bash pywebmin.sh --help            Show this help
+# ACTION                COMMAND
+# Interactive menu      sudo bash pywebmin.sh
+# Install the module    sudo bash pywebmin.sh --install
+# Uninstall the module  sudo bash pywebmin.sh --uninstall
+# Show this help        bash pywebmin.sh -h
+# Show this help        bash pywebmin.sh --help
+#
+# LOG: pywebmin.log, in the directory containing this script
 #
 ################################################################################
 
@@ -52,9 +56,13 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
-# Terminal messages
+# logging
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+log_file="${script_dir}/pywebmin.log"
+{ > "$log_file"; } 2>/dev/null || true
 log() {
     local msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$msg" >> "$log_file" 2>/dev/null || true
     if [[ "$1" == ERROR:* ]]; then echo "$msg" >&2; else echo "$msg"; fi
 }
 info() { log "INFO: $*"; }
@@ -76,6 +84,10 @@ if ! flock -n 200; then
 fi
 
 # dependencies
+if ! command -v awk >/dev/null 2>&1; then
+    log_error "ERROR: awk is not installed -abort"
+    exit 1
+fi
 for dep_pkg in coreutils util-linux systemd grep sed ncurses-bin perl; do
     if [[ "$(dpkg-query -W -f='${Status}' "$dep_pkg" 2>/dev/null)" != *"ok installed"* ]]; then
         log_error "ERROR: dependency '$dep_pkg' is not installed -abort"
