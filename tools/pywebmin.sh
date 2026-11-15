@@ -7,12 +7,12 @@
 # FILE: tools/pywebmin.sh
 #
 # USAGE:
-# ACTION                COMMAND
-# Interactive menu      sudo bash pywebmin.sh
-# Install the module    sudo bash pywebmin.sh --install
-# Uninstall the module  sudo bash pywebmin.sh --uninstall
-# Show this help        bash pywebmin.sh -h
-# Show this help        bash pywebmin.sh --help
+# COMMAND                            ACTION
+# sudo bash pywebmin.sh              Interactive menu
+# sudo bash pywebmin.sh --install    Install the module
+# sudo bash pywebmin.sh --uninstall  Uninstall the module
+# bash pywebmin.sh -h                Show this help
+# bash pywebmin.sh --help            Show this help
 #
 # LOG: pywebmin.log, in the directory containing this script
 #

@@ -7,14 +7,14 @@
 # FILE: pysetup.sh
 #
 # USAGE:
-# ACTION                                    COMMAND
-# Install                                   sudo bash pysetup.sh --install
-# Update code only (preserves user config)  sudo bash pysetup.sh --update
-# Uninstall                                 sudo bash pysetup.sh --uninstall
-# Report service, port, config and log      sudo bash pysetup.sh --status
-# Interactive menu                          sudo bash pysetup.sh
-# Show usage                                bash pysetup.sh -h
-# Show usage                                bash pysetup.sh --help
+# COMMAND                           ACTION
+# sudo bash pysetup.sh --install    Install
+# sudo bash pysetup.sh --update     Update code only (preserves user config)
+# sudo bash pysetup.sh --uninstall  Uninstall
+# sudo bash pysetup.sh --status     Report service, port, config and log
+# sudo bash pysetup.sh              Interactive menu
+# bash pysetup.sh -h                Show usage
+# bash pysetup.sh --help            Show usage
 #
 # LOG: pysetup.log, in the directory containing this script
 #

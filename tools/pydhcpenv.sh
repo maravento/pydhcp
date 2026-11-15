@@ -7,8 +7,8 @@
 # FILE: tools/pydhcpenv.sh
 #
 # USAGE:
-# ACTION                            COMMAND
-# Load shared environment settings  source pydhcpenv.sh
+# COMMAND              ACTION
+# source pydhcpenv.sh  Load shared environment settings
 #
 ################################################################################
 

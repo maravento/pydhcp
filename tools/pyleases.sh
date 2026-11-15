@@ -7,8 +7,8 @@
 # FILE: tools/pyleases.sh
 #
 # USAGE:
-# ACTION          COMMAND
-# (no arguments)  sudo bash pyleases.sh
+# COMMAND                ACTION
+# sudo bash pyleases.sh  (no arguments)
 #
 # LOG: /var/log/pydhcp.log
 #

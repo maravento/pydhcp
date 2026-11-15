@@ -7,10 +7,10 @@
 # FILE: tools/pybk.sh
 #
 # USAGE:
-# ACTION                                  COMMAND
-# Create a backup now                     sudo bash pybk.sh
-# Register the @monthly cron entry        sudo bash pybk.sh --install
-# Remove the cron entry (keeps archives)  sudo bash pybk.sh --uninstall
+# COMMAND                        ACTION
+# sudo bash pybk.sh              Create a backup now
+# sudo bash pybk.sh --install    Register the @monthly cron entry
+# sudo bash pybk.sh --uninstall  Remove the cron entry (keeps archives)
 #
 # LOG: /var/log/pydhcp.log
 #
