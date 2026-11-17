@@ -67,13 +67,23 @@ check_requirements() {
         install)
             # Verify source files exist
             for source_file in core/pydhcpd.py core/pydhcpd.conf conf/forward.conf service/pydhcp-dns.service service/pydhcp-dns.path service/pydhcp-dns.timer service/pydhcpd.service init.d/pydhcpd tools/pydhcpenv.sh core/pydns.py; do
-                [ -f "$script_dir/$source_file" ] || { err "[1/2] missing source file: $source_file"; abort "[2/2] run pysetup.sh from the project directory -abort"; }
+                [ -f "$script_dir/$source_file" ] || { err "[1/2] missing source file: $source_file"; abort "[2/2] run it from the project directory -abort"; }
             done
-            require_static_lan_candidate
-            check_conflicts "DNS server" bind9 pdns-recursor unbound
             if [ -f "$core_dir/pydhcpd.py" ]; then
-            abort "pydhcp installed; use --update | --uninstall -abort"
+                abort "pydhcp installed; use --update | --uninstall -abort"
             fi
+            if [[ "$(dpkg-query -W -f='${Status}' unbound 2>/dev/null)" == *"ok installed"* ]]; then
+                echo "Unbound detected. PyDHCP replaces these configurations:"
+                echo "/etc/unbound/unbound.conf.d/forward.conf and /etc/default/unbound"
+                echo "Local control is configured; Unbound is enabled and restarted."
+                if ! confirm "Replace Unbound configurations and continue?" "n"; then
+                    info "Aborted by user"
+                    log "INFO: pysetup done"
+                    exit 0
+                fi
+            fi
+            require_static_lan_candidate
+            check_conflicts "DNS server" bind9 pdns-recursor
 
             check_conflicts "DHCP server" isc-dhcp-server kea-dhcp4-server udhcpd
             check_port udp 67 "DHCP server"
@@ -154,7 +164,7 @@ log() {
 # not just the ones this installer invokes -- e.g. iputils-ping is used by
 # pydhcpd.py when it cannot open a raw ICMP socket. Installed by
 # install_deps in --install and --update.
-apt_deps=(python3-yaml python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate perl ncurses-bin unbound openssl)
+apt_deps=(python3-yaml python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate perl ncurses-bin unbound openssl diffutils)
 
 # ------------------------------------------------------------------------------
 # VARIABLES
@@ -497,8 +507,8 @@ update_stop_service() {
     systemctl stop "$unit" || update_error "cannot stop service: $unit"
     state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect stopped: $unit"
     [ "$state" = inactive ] || {
-        log "ERROR: $unit state: $state"
-        update_error "$unit did not stop"
+        log "ERROR: [1/2] $unit state: $state"
+        update_error "[2/2] $unit did not stop"
     }
 }
 
@@ -555,8 +565,8 @@ update_resume() {
         systemctl start "$unit" || update_error "cannot start service: $unit"
         state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect started: $unit"
         [ "$state" = active ] || {
-            log "ERROR: $unit state: $state"
-            update_error "$unit did not start"
+            log "ERROR: [1/2] $unit state: $state"
+            update_error "[2/2] $unit did not start"
         }
     done
 }
@@ -647,7 +657,7 @@ acl_prepare() {
             log "ERROR: cannot set owner of $acl_dir -abort"
             exit 1
         fi
-        log "INFO: created ACL directory $acl_dir"
+        log "WARNING: created ACL directory $acl_dir -alert"
     elif [ -d "$acl_dir" ] && [ ! -L "$acl_dir" ]; then
         acl_fix_perms "$acl_dir" "$dir_mode"
     else
@@ -670,7 +680,7 @@ acl_prepare() {
                 log "ERROR: cannot set perms of $(basename "$acl_file") -abort"
                 exit 1
             fi
-            log "INFO: created empty $(basename "$acl_file")"
+            log "WARNING: created empty $(basename "$acl_file") -alert"
         elif [ -f "$acl_file" ] && [ ! -L "$acl_file" ]; then
             acl_fix_perms "$acl_file" "$file_mode"
         else
@@ -700,20 +710,20 @@ acl_fix_perms() {
 # Each one asks for a value, validates it and repeats until it is correct
 # dns primary
 is_dns1() {
-    local DNS1
-    read -r -p "Enter DNS1 (e.g. 1.1.1.2): " DNS1 \
+    local dns1
+    read -r -p "Enter DNS1 (e.g. 1.1.1.2): " dns1 \
         || abort "cannot read the primary DNS answer -abort"
-    DNSNEW1="${DNS1:-1.1.1.2}"
-    [[ "$DNSNEW1" =~ $UH_IPV4 ]]
+    dns_new1="${dns1:-1.1.1.2}"
+    [[ "$dns_new1" =~ $UH_IPV4 ]]
 }
 
 # dns secondary
 is_dns2() {
-    local DNS2
-    read -r -p "Enter DNS2 (e.g. 1.0.0.2): " DNS2 \
+    local dns2
+    read -r -p "Enter DNS2 (e.g. 1.0.0.2): " dns2 \
         || abort "cannot read the secondary DNS answer -abort"
-    DNSNEW2="${DNS2:-1.0.0.2}"
-    [[ "$DNSNEW2" =~ $UH_IPV4 ]]
+    dns_new2="${dns2:-1.0.0.2}"
+    [[ "$dns_new2" =~ $UH_IPV4 ]]
 }
 
 # validation - integer is representable as a signed 64-bit value
@@ -973,7 +983,7 @@ deploy_wpad() {
     write_pac "$server_ip" "$lan_subnet" "$lan_mask" \
         || wpad_failed "cannot write wpad.pac"
     chown -R www-data:www-data "$wpad_root" \
-        && chmod -R 755 "$wpad_root" \
+        && chmod 644 "$wpad_root/wpad.pac" \
         || wpad_failed "cannot set wpad.pac permissions"
 
     install -m 644 -o root -g root "$script_dir/conf/wpad.conf" "$wpad_vhost_dest" \
@@ -1105,15 +1115,15 @@ install_deps() {
     check_ipv4_interfaces
     check_internet
     retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get -qq install -y "${missing_pkgs[@]}" \
-        || { err "[1/2] cannot install ${missing_pkgs[*]}"; abort "[2/2] install them with apt, then re-run -abort"; }
-    info "Installed: ${missing_pkgs[*]}"
+        || { for dep_pkg in "${missing_pkgs[@]}"; do warn "cannot install $dep_pkg -alert"; done; abort "install them with apt, then re-run -abort"; }
+    for dep_pkg in "${missing_pkgs[@]}"; do info "installed $dep_pkg"; done
 }
 
 # LAN SELECTION
 # Select an existing interface and one of its configured IPv4 addresses
 choose_lan_interface() {
     local preset_iface="${1:-}"
-    local iface_name iface_choice iface_index iface_addrs iface_state
+    local iface_name iface_choice iface_index iface_state
     local -a lan_candidates=()
     while IFS= read -r iface_name; do
         lan_candidates+=("$iface_name")
@@ -1409,7 +1419,6 @@ do_uninstall() {
         abort "pybk.sh: missing or not executable -abort"
     fi
 
-    log "INFO: Stopping and disabling pydhcpd service..."
     systemctl stop pydhcp-dns.path pydhcp-dns.timer pydhcp-dns.service 2>/dev/null || true
     systemctl disable pydhcp-dns.path pydhcp-dns.timer 2>/dev/null || true
     systemctl stop unbound 2>/dev/null || true
@@ -1419,21 +1428,21 @@ do_uninstall() {
     rm -rf -- /var/lib/pydhcp-dns
     systemctl stop pydhcpd 2>/dev/null || true
     systemctl disable pydhcpd 2>/dev/null || true
+    info "stopped and disabled pydhcpd"
 
-    log "INFO: Removing system files..."
     rm -f "$service_file"
     rm -f "$init_file"
     rm -f /etc/logrotate.d/pydhcp && info "Removed /etc/logrotate.d/pydhcp"
     rm -f -- "$pydhcp_log_file" "$pydhcp_log_file".*
+    info "removed system files"
 
     rm -f /etc/cron.d/pydhcp /etc/cron.d/pydhcp.update-disabled
     if [ -x "$install_dir/tools/pybk.sh" ]; then
         "$install_dir/tools/pybk.sh" --uninstall || true
     fi
 
-    if [ -x "$install_dir/tools/pywebmin.sh" ]; then
-        log "INFO: Removing Webmin module ..."
-        "$install_dir/tools/pywebmin.sh" --uninstall || true
+    if [ -x "$install_dir/tools/pywebmin.sh" ] && [ -d /usr/share/webmin/pydhcp ]; then
+        "$install_dir/tools/pywebmin.sh" --uninstall && info "removed Webmin module"
     fi
 
     remove_wpad "$wpad_port_value"
@@ -1441,11 +1450,14 @@ do_uninstall() {
     [[ "$install_dir" == "/etc/pydhcp" ]] || abort "unexpected install dir: $install_dir -abort"
 
     # Remove the project and keep its ACL directory.
-    log "INFO: Removing $install_dir ..."
-    find "$install_dir" -mindepth 1 -maxdepth 1 ! -path "$acl_dhcp_dir" -exec rm -rf -- {} +
+    find "$install_dir" -mindepth 1 -maxdepth 1 ! -path "$acl_dhcp_dir" -exec rm -rf -- {} + \
+        && info "removed $install_dir"
 
-    log "INFO: Removing system user and group $daemon_owner ..."
-    userdel "$daemon_owner" 2>/dev/null || warn "cannot remove user $daemon_owner -alert"
+    if userdel "$daemon_owner" 2>/dev/null; then
+        info "removed user and group $daemon_owner"
+    else
+        warn "cannot remove user $daemon_owner -alert"
+    fi
     groupdel "$daemon_owner" 2>/dev/null || true
 
     systemctl daemon-reload
@@ -1487,6 +1499,28 @@ do_update() {
     update_target "${update_cron_file}.lock" 600
     update_preflight
     update_backup "$script_dir/tools/pybk.sh"
+    # Restore missing Unbound remote-control credentials.
+    local unbound_credential
+    local unbound_credentials=(
+        /etc/unbound/unbound_server.key
+        /etc/unbound/unbound_server.pem
+        /etc/unbound/unbound_control.key
+        /etc/unbound/unbound_control.pem
+    )
+
+    for unbound_credential in "${unbound_credentials[@]}"; do
+        if [ ! -s "$unbound_credential" ]; then
+            info "Unbound control credentials missing; running unbound-control-setup"
+            unbound-control-setup \
+                || update_error "cannot prepare Unbound control certificates"
+            break
+        fi
+    done
+
+    for unbound_credential in "${unbound_credentials[@]}"; do
+        [ -s "$unbound_credential" ] \
+            || update_error "Unbound control credential missing: $(basename "$unbound_credential")"
+    done
     update_begin
     update_stop_service pydhcp-dns.path
     update_stop_service pydhcp-dns.timer
@@ -1692,7 +1726,6 @@ sys.exit(0 if valid else 1)
         info "pydhcp.env already exists, not overwritten -skip"
         info "interface not changed, keeping value in pydhcp.env"
     else
-        log "INFO: Creating pydhcp.env ..."
         cat > "$install_dir/pydhcp.env" <<ENVEOF
 # =============================================================================
 # PYDHCP
@@ -1785,19 +1818,26 @@ ENVEOF
 
     # Initialize empty leases file if not present
     if [ ! -f "$core_dir/pydhcpd.leases" ]; then
-        log "INFO: Creating empty pydhcpd.leases ..."
         (set -C; umask 077; : > "$core_dir/pydhcpd.leases") 2>/dev/null \
             || abort "cannot create pydhcpd.leases -abort"
         fix_dhcp_file "$core_dir/pydhcpd.leases" "$daemon_owner" "$daemon_owner" 640
+        info "created empty pydhcpd.leases"
     fi
 
     # DNS
     # Configure the DNS resolver
+    local dns_config
+    for dns_config in /etc/unbound/unbound.conf.d/forward.conf /etc/default/unbound; do
+        if [ -f "$dns_config" ]; then
+            cp -p -- "$dns_config" "${dns_config}.bak" \
+                || abort "cannot back up $(basename "$dns_config") -abort"
+        fi
+    done
     install -d -m 755 -o root -g root /etc/unbound/unbound.conf.d
     python3 - "$script_dir/conf/forward.conf" \
         /etc/unbound/unbound.conf.d/forward.conf \
         "$server_ip_answer" "$local_subnet" "$netmask_answer" "$domain_answer" \
-        "$DNSNEW1" "$DNSNEW2" <<'DNS_CONF'
+        "$dns_new1" "$dns_new2" <<'DNS_CONF'
 import ipaddress, pathlib, re, sys
 source, target, address, subnet, mask, domain, dns1, dns2 = sys.argv[1:]
 text = pathlib.Path(source).read_text()
@@ -1889,13 +1929,12 @@ EOF
 
     # Enable and start service
     info "updated /etc/logrotate.d/pydhcp"
-    log "INFO: Enabling and starting pydhcpd ..."
     systemctl daemon-reload
     systemctl enable --force pydhcpd
     systemctl start pydhcpd || true
     sleep 1
     if ! systemctl is-active --quiet pydhcpd; then
-        { err "[1/2] pydhcpd failed to start"; abort "[2/2] check it with: journalctl -u pydhcpd -n 50 -abort"; }
+        { err "[1/2] pydhcpd failed to start"; abort "[2/2] see: journalctl -u pydhcpd -n 50 -abort"; }
     fi
 
     systemctl enable --now pydhcp-dns.path pydhcp-dns.timer
@@ -2010,7 +2049,6 @@ case "${1:-}" in
     --uninstall) do_uninstall ;;
     --status) do_status ;;
     "") show_menu ;;
-    -h|--help) usage ;;
     *)
         err "invalid option -abort"
         usage
@@ -2019,3 +2057,4 @@ case "${1:-}" in
 esac
 
 log "INFO: pysetup done"
+

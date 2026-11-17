@@ -411,6 +411,10 @@ sudo bash pysetup.sh --help   # or -h
 | File | `--update` | `--uninstall` |
 |------|-----------|------------|
 | `pydhcpd.py` | ✅ overwritten | ✅ removed |
+| `pydns.py` | ✅ overwritten | ✅ removed |
+| `pydhcp-dns.service` | ✅ overwritten | ✅ removed |
+| `pydhcp-dns.path` | ✅ overwritten | ✅ removed |
+| `pydhcp-dns.timer` | ✅ overwritten | ✅ removed |
 | `pydhcpd.service` | ✅ overwritten | ✅ removed |
 | `init.d/pydhcpd` | ✅ overwritten | ✅ removed |
 | `tools/pybk.sh` | ✅ overwritten | ✅ removed (its cron entry is deregistered first) |
@@ -481,10 +485,10 @@ sudo tail -f /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      The installer selects a LAN with an UP link and a global IPv4 address. With one candidate it selects it automatically; with several, it asks which to use and Enter selects the first. If that LAN has several IPv4 addresses, Enter also selects the first. The installer calculates subnet, mask and broadcast from its actual prefix. It then asks for the pool range, DNS1/DNS2 upstream servers, local domain, cleanup interval and optional WPAD deployment. DHCP advertises the selected server IP as DNS.
+      Before selecting the LAN, the installer aborts if <code>bind9</code>, <code>pdns-recursor</code>, <code>isc-dhcp-server</code>, <code>kea-dhcp4-server</code> or <code>udhcpd</code> is installed, or if UDP 67 is in use. It warns if <code>dnsmasq</code> is installed. It also warns, without aborting, if the WPAD port (TCP 18800) is in use. The installer selects a LAN with an UP link and a global IPv4 address. With one candidate it selects it automatically; with several, it asks which to use and Enter selects the first. If that LAN has several IPv4 addresses, Enter also selects the first. The installer calculates subnet, mask and broadcast from its actual prefix. It then asks for the pool range, DNS1/DNS2 upstream servers, local domain, cleanup interval and optional WPAD deployment. DHCP advertises the selected server IP as DNS.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      El instalador selecciona una LAN con enlace UP e IPv4 global. Si existe una candidata, la selecciona automáticamente. Si existen varias, solicita una y Enter selecciona la primera. Si esa LAN tiene varias IPv4, Enter también selecciona la primera. Calcula subred, máscara y difusión desde su prefijo real. Después solicita el rango del pool, DNS1/DNS2 externos, dominio local, intervalo de limpieza y despliegue opcional de WPAD. DHCP anuncia la IP seleccionada del servidor como DNS.
+      Antes de seleccionar la LAN, el instalador aborta si están instalados <code>bind9</code>, <code>pdns-recursor</code>, <code>isc-dhcp-server</code>, <code>kea-dhcp4-server</code> o <code>udhcpd</code>, o si UDP 67 está en uso. Avisa si <code>dnsmasq</code> está instalado. También avisa, sin abortar, si el puerto de WPAD (TCP 18800) está en uso. El instalador selecciona una LAN con enlace UP e IPv4 global. Si existe una candidata, la selecciona automáticamente. Si existen varias, solicita una y Enter selecciona la primera. Si esa LAN tiene varias IPv4, Enter también selecciona la primera. Calcula subred, máscara y difusión desde su prefijo real. Después solicita el rango del pool, DNS1/DNS2 externos, dominio local, intervalo de limpieza y despliegue opcional de WPAD. DHCP anuncia la IP seleccionada del servidor como DNS.
     </td>
   </tr>
 </table>
@@ -681,7 +685,7 @@ Tanto `--install` como `--update` restauran los propietarios y permisos definido
 
 | Operation | Description | Descripción |
 |---|---|---|
-| Installation | Optional; Yes is the default. Uses TCP 18800. The installer checks web-server conflicts and the port before deployment | Es opcional. La respuesta predeterminada es Sí. Utiliza TCP 18800. Antes del despliegue, comprueba conflictos con servidores web y el puerto |
+| Installation | Optional; Yes is the default. Uses TCP 18800. If WPAD is chosen, the installer aborts before deployment if `nginx`, `lighttpd` or `caddy` is installed, or if the port is in use | Es opcional. La respuesta predeterminada es Sí. Utiliza TCP 18800. Si se elige WPAD, el instalador aborta antes del despliegue si están instalados `nginx`, `lighttpd` o `caddy`, o si el puerto está en uso |
 | Apache preparation | Installs missing `apache2` and `apache2-utils`. If `apache2-doc` is installed, reinstalls it afterward. Enables `alias`, `mime` and the Apache service | Instala `apache2` y `apache2-utils` si faltan. Después reinstala `apache2-doc` si ya está instalado. Habilita `alias`, `mime` y el servicio Apache |
 | Files | Writes `/var/www/wpad/wpad.pac`; installs and enables `/etc/apache2/sites-available/wpad.conf`; adds `Listen SERVER_IP:18800` when needed | Escribe `/var/www/wpad/wpad.pac`. Instala y habilita `/etc/apache2/sites-available/wpad.conf`. Añade `Listen SERVER_IP:18800` si hace falta |
 | Startup | Tests Apache configuration, reloads Apache if active or starts it otherwise, then probes the PAC URL. A deployment failure aborts installation | Comprueba la configuración de Apache. Lo recarga si está activo o lo inicia si está detenido. Después consulta la URL PAC. Un fallo del despliegue detiene la instalación |
@@ -808,10 +812,10 @@ sudo bash tools/pyleases.sh
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Creates <code>pybk_&lt;TIMESTAMP&gt;.zip</code> in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>. It includes the installation tree, administrator MAC lists, pydhcp's blocked-MAC list, systemd unit, init.d script, logrotate configuration, cron file and Webmin module. It also includes existing WPAD files and Apache’s <code>ports.conf</code>. Missing paths are skipped. The archive uses paths relative to <code>/</code>. It reads <code>BACKUP_DIR</code> from <code>pydhcp.env</code>. Any other value aborts before anything is created, written or deleted. The directory is exclusive to <code>pybk.sh</code>. After publishing the archive, the script deletes entries whose names do not match <code>pybk_*.zip</code> and keeps the three most recent archives.
+      Creates <code>pybk_&lt;TIMESTAMP&gt;.zip</code> in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>. It includes the installation tree, administrator MAC lists, pydhcp's blocked-MAC list, systemd units (<code>pydhcpd</code>, <code>pydhcp-dns</code>), Unbound configuration (<code>/etc/unbound</code>, <code>/etc/default/unbound</code>), DNS state (<code>/var/lib/pydhcp-dns</code>), init.d script, logrotate configuration, cron file and Webmin module. It also includes existing WPAD files and Apache’s <code>ports.conf</code>. Missing paths are skipped. The archive uses paths relative to <code>/</code>. It reads <code>BACKUP_DIR</code> from <code>pydhcp.env</code>. Any other value aborts before anything is created, written or deleted. The directory is exclusive to <code>pybk.sh</code>. After publishing the archive, the script deletes entries whose names do not match <code>pybk_*.zip</code> and keeps the three most recent archives.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Crea <code>pybk_&lt;TIMESTAMP&gt;.zip</code> en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la instalación, las listas MAC del administrador, la lista de MAC bloqueadas de pydhcp, la unidad systemd, el script init.d, logrotate, cron y el módulo Webmin. También incluye los archivos WPAD existentes y <code>ports.conf</code> de Apache. Omite las rutas ausentes. El comprimido utiliza rutas relativas a <code>/</code>. Lee <code>BACKUP_DIR</code> de <code>pydhcp.env</code>. Cualquier otro valor aborta antes de crear, escribir o borrar nada. El directorio es exclusivo de <code>pybk.sh</code>. Tras publicar el comprimido, el script elimina las entradas cuyo nombre no coincida con <code>pybk_*.zip</code> y conserva los tres comprimidos más recientes.
+      Crea <code>pybk_&lt;TIMESTAMP&gt;.zip</code> en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la instalación, las listas MAC del administrador, la lista de MAC bloqueadas de pydhcp, la unidades systemd (<code>pydhcpd</code>, <code>pydhcp-dns</code>), la configuración de Unbound (<code>/etc/unbound</code>, <code>/etc/default/unbound</code>), el estado DNS (<code>/var/lib/pydhcp-dns</code>), el script init.d, logrotate, cron y el módulo Webmin. También incluye los archivos WPAD existentes y <code>ports.conf</code> de Apache. Omite las rutas ausentes. El comprimido utiliza rutas relativas a <code>/</code>. Lee <code>BACKUP_DIR</code> de <code>pydhcp.env</code>. Cualquier otro valor aborta antes de crear, escribir o borrar nada. El directorio es exclusivo de <code>pybk.sh</code>. Tras publicar el comprimido, el script elimina las entradas cuyo nombre no coincida con <code>pybk_*.zip</code> y conserva los tres comprimidos más recientes.
     </td>
   </tr>
 </table>
@@ -987,7 +991,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | `ERROR: UDP port 67 occupied -abort` | Another DHCP server is using UDP 67 | Otro servidor DHCP está usando UDP 67 |
 | `ERROR: Cannot bind UDP port 67 -abort` | UDP 67 cannot be opened for another reason | UDP 67 no se puede abrir por otro motivo |
 | `ERROR: Raw socket failed on <IFACE> -abort` | The daemon cannot open the interface to read packets | El demonio no puede abrir la interfaz para leer paquetes |
-| `WARNING: cannot open /var/log/pydhcp.log for writing (<cause>), stdout only -alert` | The log file cannot be opened. Messages go only to the journal | No se puede abrir el log. Los mensajes van solo al journal |
+| `WARNING: [1/2] cannot open /var/log/pydhcp.log`<br>`WARNING: [2/2] logging to stdout only -alert` | The log file cannot be opened. Messages go only to the journal | No se puede abrir el log. Los mensajes van solo al journal |
 | `WARNING: pydhcp.env missing -fallback` | `pydhcp.env` does not exist. Default values are used | `pydhcp.env` no existe. Se usan los valores por defecto |
 | `WARNING: <KEY> invalid -fallback`<br>`WARNING: <KEY> low -fallback` | A numeric key in `pydhcp.env` is not a number, or is below 1. Its default is used | Una clave numérica de `pydhcp.env` no es un número, o es menor que 1. Se usa su valor por defecto |
 | `WARNING: cleanup-interval <N> < 5 -fallback` | `cleanup-interval` is below 5. It is raised to 5 | `cleanup-interval` es menor que 5. Se sube a 5 |
@@ -1047,9 +1051,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 /etc/webmin/pydhcp/.csrf_token                   # CSRF secret for the Webmin module (pywebmin.sh), mode 0600
 ```
 
-## DNS UNBOUND
-
----
+### DNS Unbound
 
 <table width="100%">
   <tr>
@@ -1062,7 +1064,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
   </tr>
 </table>
 
-### Components
+#### Components
 
 | Component | Description | Descripción |
 |---|---|---|
@@ -1082,7 +1084,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | `/var/lib/pydhcp-dns/records.json` | Tracks managed records so obsolete names can be removed without deleting unrelated records | Registra los datos administrados para eliminar nombres obsoletos sin borrar registros ajenos |
 | `/var/lib/pydhcp-dns/publish.lock` | Serializes direct reloads and automatic name publication | Evita ejecuciones simultáneas entre recargas directas y publicación automática |
 
-### Resolution flow
+#### Resolution flow
 
 | Query or event | Description | Descripción |
 |---|---|---|
@@ -1094,12 +1096,13 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | Network/domain changes | A DHCP rebuild invokes `--configure`; changed Unbound configuration is validated and replaced before restarting the DNS service | La reconstrucción DHCP ejecuta `--configure`; valida y reemplaza la configuración Unbound modificada antes de reiniciar DNS |
 | DNS failure during rebuild | The reload reports ERROR; DHCP has already started and remains running | La recarga informa ERROR; DHCP ya está iniciado y continúa funcionando |
 
-### Operation
+#### Operation
 
 | Component | Description | Descripción |
 |---|---|---|
 | Unbound | Installed as a forwarding resolver. DHCP option 6 announces the server LAN IP | Instalado como resolutor de reenvío. La opción DHCP 6 anuncia la IP LAN del servidor |
-| Conflict checks | Installation aborts for installed `bind9`, `pdns-recursor` or `unbound`, even when stopped | La instalación aborta con `bind9`, `pdns-recursor` o `unbound` instalados, aunque estén detenidos |
+| Conflict checks | Installation aborts for installed `bind9` or `pdns-recursor`, even when stopped. An existing PyDHCP installation aborts before checking Unbound | La instalación aborta con `bind9` o `pdns-recursor` instalados, aunque estén detenidos. Si PyDHCP ya está instalado, aborta antes de comprobar Unbound |
+| Existing Unbound | Reuses the installed package after confirmation, before package installation or configuration changes. The prompt identifies `forward.conf`, `/etc/default/unbound`, local control setup and enabling/restarting Unbound. No or Enter cancels installation; Yes continues. Existing versions of both configuration files are copied to adjacent `.bak` files before replacement | Reutiliza el paquete instalado después de confirmar, antes de instalar paquetes o modificar configuraciones. La pregunta identifica `forward.conf`, `/etc/default/unbound`, el control local y la habilitación/reinicio de Unbound. No o Enter cancela la instalación; Sí continúa. Copia ambos archivos existentes a archivos `.bak` junto a los originales antes de reemplazarlos |
 | DNS prompts | DNS1 defaults to `1.1.1.2`; DNS2 defaults to `1.0.0.2`. The template retains `9.9.9.9` as a third upstream | DNS1 propone `1.1.1.2`; DNS2 propone `1.0.0.2`. La plantilla conserva `9.9.9.9` como tercer servidor externo |
 | Configuration | `/etc/unbound/unbound.conf.d/forward.conf`: loopback/LAN listeners, LAN access, local zone and authenticated loopback control | `/etc/unbound/unbound.conf.d/forward.conf`: escucha local/LAN, acceso LAN, zona local y control autenticado por loopback |
 | Domain | `SERV_DOMAIN` generates DHCP option 15. Option 119 is excluded | `SERV_DOMAIN` genera la opción DHCP 15. La opción 119 queda excluida |

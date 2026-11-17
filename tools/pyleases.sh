@@ -8,7 +8,7 @@
 #
 # USAGE:
 # COMMAND                ACTION
-# sudo bash pyleases.sh  (no arguments)
+# sudo bash pyleases.sh  Run (no arguments)
 #
 # LOG: /var/log/pydhcp.log
 #
@@ -546,7 +546,10 @@ unset env_owner env_perms
 # LOAD_CONF
 # Reads keys as data instead of sourcing the file, so a tampered or
 # maliciously replaced env file cannot execute code.
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh"
+if ! source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/pydhcpenv.sh" 2>/dev/null; then
+    log "ERROR: cannot load pydhcpenv.sh -abort"
+    exit 1
+fi
 env_keys='SERVER_IP SERV_SUBNET SERV_BROADCAST SERV_MASK SERV_INI_RANGE_BLOCK SERV_END_RANGE_BLOCK SERV_DNS SERV_DOMAIN ACL_PATH ACL_DHCP_PATH ACL_MAC_LIMITED ACL_MAC_UNLIMITED ACL_BLOCK_FILE PYDHCPD_LEASES CLEANUP_INTERVAL AUTHORIZED_LEASE_TIME QUARANTINE_DURATION WPAD_ENABLED WPAD_PORT PING_CHECK_ENABLED PING_TIMEOUT_SECONDS DHCPDv4_CONF DAEMON_USER DAEMON_GROUP'
 
 # LOAD

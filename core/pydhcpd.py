@@ -49,9 +49,10 @@ if not _TEST_MODE:
     try:
         _log_handlers.insert(0, logging.FileHandler(LOG_FILE))
     except OSError as e:
+        _ts = time.strftime('%Y-%m-%d %H:%M:%S')
         sys.stderr.write(
-            f"WARNING: cannot open {LOG_FILE} for writing ({e}), "
-            "stdout only -alert\n")
+            f"{_ts} WARNING: [1/2] cannot open {LOG_FILE}\n"
+            f"{_ts} WARNING: [2/2] logging to stdout only -alert\n")
 
 logging.basicConfig(
     level=logging.INFO,
