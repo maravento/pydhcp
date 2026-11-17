@@ -241,11 +241,31 @@ def synchronize(desired, state_path, run_control=control):
             if live_owners.get(owner, set()) <= obsolete and owner not in desired_owners}
     if bulk:
         run_control('local_datas_remove', data='\n'.join(sorted(bulk)) + '\n')
-    for key in sorted(obsolete):
-        if key in live and key[0] not in bulk:
-            run_control('local_data_remove', previous_by_key[key])
+    # Unbound removes whole names only (a full RR is answered "ok" and kept),
+    # so drop the name and put back every RR on it that must stay.
+    removed_owners = sorted({key[0] for key in obsolete if key in live} - bulk)
+    for owner in removed_owners:
+        run_control('local_data_remove', owner)
+    restored = {key: line for key, line in live.items()
+                if key[0] in removed_owners and key not in obsolete and key not in desired_by_key}
+    additions = sorted(set(additions) | set(restored.values())
+                       | {record for key, record in desired_by_key.items() if key[0] in removed_owners})
     if additions:
-        run_control('local_datas', data='\n'.join(sorted(additions)) + '\n')
+        run_control('local_datas', data='\n'.join(additions) + '\n')
+    # Commit the new state only once Unbound really matches it; otherwise the
+    # pending state keeps ownership and the next run retries.
+    still_live = set()
+    for line in run_control('list_local_data').splitlines():
+        try:
+            still_live.add(record_key(line))
+        except ValueError:
+            continue
+    for problem, keys in (('cannot remove', obsolete & still_live),
+                          ('cannot publish', set(desired_by_key) - still_live),
+                          ('cannot restore', set(restored) - still_live)):
+        if keys:
+            key = min(keys)
+            raise ValueError(f'{problem} DNS record: {key[0]} {key[1]} {key[2]}')
     temporary.write_text(json.dumps(sorted(desired)) + '\n')
     os.replace(temporary, state_path)
 
