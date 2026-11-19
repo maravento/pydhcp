@@ -81,6 +81,13 @@ check_requirements() {
                     log "INFO: pysetup done"
                     exit 0
                 fi
+                # Record the reused Unbound state so the uninstall can restore it
+                mkdir -p "$install_dir" \
+                    && printf 'enabled=%s\nactive=%s\n' \
+                        "$(systemctl is-enabled unbound 2>/dev/null || true)" \
+                        "$(systemctl is-active unbound 2>/dev/null || true)" \
+                        > "$install_dir/.unbound-reused" \
+                    || abort "cannot record Unbound state -abort"
             fi
             require_static_lan_candidate
             check_conflicts "DNS server" bind9 pdns-recursor
@@ -99,11 +106,11 @@ check_requirements() {
         update)
             [ -d "$install_dir" ] && [ -f "$install_dir/pydhcp.env" ] \
                 || abort "pydhcp is not installed -abort"
-        verify_source "$script_dir/tools/pydhcpenv.sh"
-        source "$script_dir/tools/pydhcpenv.sh"
-        local INTERFACESv4="" SERVER_IP=""
-        load_pydhcp_env "$install_dir/pydhcp.env" 'INTERFACESv4 SERVER_IP'
-        check_static_lan "$INTERFACESv4" "$SERVER_IP"
+            verify_source "$script_dir/tools/pydhcpenv.sh"
+            source "$script_dir/tools/pydhcpenv.sh"
+            local INTERFACESv4="" SERVER_IP=""
+            load_pydhcp_env "$install_dir/pydhcp.env" 'INTERFACESv4 SERVER_IP'
+            check_static_lan "$INTERFACESv4" "$SERVER_IP"
             choose_lan_interface "$INTERFACESv4"
             ;;
     esac
@@ -170,7 +177,7 @@ apt_deps=(python3-yaml python3 iproute2 passwd util-linux coreutils grep sed ipu
 # VARIABLES
 # ------------------------------------------------------------------------------
 
-# validation -- one variable per thing validated; use directly with =~
+# validation -one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_CIDR='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])/(3[0-2]|[12][0-9]|[0-9])$'
 UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
@@ -953,7 +960,7 @@ deploy_wpad() {
 
     wpad_enabled_value="false"
     local apache_pkg missing_apache_packages=()
-    for apache_pkg in apache2 apache2-utils; do
+    for apache_pkg in apache2 apache2-bin apache2-data apache2-doc apache2-utils; do
         if ! dpkg-query -W -f='${Status}' "$apache_pkg" 2>/dev/null | grep -q "ok installed"; then
             missing_apache_packages+=("$apache_pkg")
         fi
@@ -965,15 +972,16 @@ deploy_wpad() {
         retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_apache_packages[@]}" \
             || abort "cannot install Apache packages -abort"
     fi
-    for apache_pkg in apache2 apache2-utils; do
+    for apache_pkg in apache2 apache2-bin apache2-data apache2-doc apache2-utils; do
         dpkg-query -W -f='${Status}' "$apache_pkg" 2>/dev/null | grep -q "ok installed" \
             || abort "$apache_pkg is not installed -abort"
     done
-    if dpkg-query -W -f='${Status}' apache2-doc 2>/dev/null | grep -q "ok installed"; then
-        command -v apt >/dev/null 2>&1 || abort "apt is required to reinstall apache2-doc -abort"
-        retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt -qq install -y --reinstall apache2-doc \
-            || abort "cannot reinstall apache2-doc -abort"
-    fi
+    # apache2-doc breaks after apache2 installs or upgrades; reinstall it always
+    command -v apt >/dev/null 2>&1 || abort "apt is required to reinstall apache2-doc -abort"
+    check_ipv4_interfaces
+    check_internet
+    retry_cmd "install packages" env DEBIAN_FRONTEND=noninteractive apt -qq install -y --reinstall apache2-doc \
+        || abort "cannot reinstall apache2-doc -abort"
 
     a2enmod -q alias mime || abort "cannot enable Apache WPAD modules -abort"
     systemctl enable apache2 || abort "cannot enable apache2 -abort"
@@ -1154,11 +1162,10 @@ choose_lan_interface() {
         describe_lan_ipv4 "$iface_name"
     done
     while true; do
-        read -r -p "Select LAN Interface [1-${#lan_candidates[@]}] [1]: " iface_choice || {
+        read -r -p "Select LAN Interface [1-${#lan_candidates[@]}]: " iface_choice || {
             log "ERROR: cannot read LAN interface selection -abort"
             exit 1
         }
-        iface_choice="${iface_choice:-1}"
         if [[ "$iface_choice" =~ $UH_UINT ]] && [ "${#iface_choice}" -le 5 ] \
            && [ "$iface_choice" -ge 1 ] && [ "$iface_choice" -le "${#lan_candidates[@]}" ]; then
             lan_iface_answer="${lan_candidates[$((iface_choice - 1))]}"
@@ -1369,11 +1376,10 @@ read_lan_ipv4() {
                 "${lan_addresses[$ipv4_index]%/*}")"
     done
     while true; do
-        read -r -p "Select LAN IPv4 number [1]: " ipv4_choice || {
+        read -r -p "Select LAN IPv4 number: " ipv4_choice || {
             log "ERROR: cannot read LAN IPv4 selection -abort"
             exit 1
         }
-        ipv4_choice="${ipv4_choice:-1}"
         if [[ "$ipv4_choice" =~ $UH_UINT ]] && [ "${#ipv4_choice}" -le 5 ] \
            && [ "$ipv4_choice" -ge 1 ] && [ "$ipv4_choice" -le "${#lan_addresses[@]}" ]; then
             lan_cidr_answer="${lan_addresses[$((ipv4_choice - 1))]}"
@@ -1421,9 +1427,34 @@ do_uninstall() {
 
     systemctl stop pydhcp-dns.path pydhcp-dns.timer pydhcp-dns.service 2>/dev/null || true
     systemctl disable pydhcp-dns.path pydhcp-dns.timer 2>/dev/null || true
-    systemctl stop unbound 2>/dev/null || true
-    systemctl disable unbound 2>/dev/null || true
-    rm -f /etc/unbound/unbound.conf.d/forward.conf
+    if [ -f "$install_dir/.unbound-reused" ]; then
+        # Reused Unbound: put back its files and its enabled/active state
+        local unbound_file unbound_enabled unbound_active
+        unbound_enabled=$(sed -n 's/^enabled=//p' "$install_dir/.unbound-reused")
+        unbound_active=$(sed -n 's/^active=//p' "$install_dir/.unbound-reused")
+        for unbound_file in /etc/unbound/unbound.conf.d/forward.conf /etc/default/unbound; do
+            if [ -f "${unbound_file}.bak" ]; then
+                mv -f -- "${unbound_file}.bak" "$unbound_file" \
+                    || warn "cannot restore $(basename "$unbound_file") -alert"
+            else
+                rm -f -- "$unbound_file"
+            fi
+        done
+        if [ "$unbound_enabled" = enabled ]; then
+            systemctl enable unbound 2>/dev/null || warn "cannot enable reused Unbound -alert"
+        else
+            systemctl disable unbound 2>/dev/null || true
+        fi
+        if [ "$unbound_active" = active ]; then
+            systemctl restart unbound 2>/dev/null || warn "cannot restart reused Unbound -alert"
+        else
+            systemctl stop unbound 2>/dev/null || true
+        fi
+    else
+        systemctl stop unbound 2>/dev/null || true
+        systemctl disable unbound 2>/dev/null || true
+        rm -f /etc/unbound/unbound.conf.d/forward.conf
+    fi
     rm -f /etc/systemd/system/pydhcp-dns.{service,path,timer}
     rm -rf -- /var/lib/pydhcp-dns
     systemctl stop pydhcpd 2>/dev/null || true
@@ -1437,9 +1468,6 @@ do_uninstall() {
     info "removed system files"
 
     rm -f /etc/cron.d/pydhcp /etc/cron.d/pydhcp.update-disabled
-    if [ -x "$install_dir/tools/pybk.sh" ]; then
-        "$install_dir/tools/pybk.sh" --uninstall || true
-    fi
 
     if [ -x "$install_dir/tools/pywebmin.sh" ] && [ -d /usr/share/webmin/pydhcp ]; then
         "$install_dir/tools/pywebmin.sh" --uninstall && info "removed Webmin module"
@@ -1510,7 +1538,7 @@ do_update() {
 
     for unbound_credential in "${unbound_credentials[@]}"; do
         if [ ! -s "$unbound_credential" ]; then
-            info "Unbound control credentials missing; running unbound-control-setup"
+            info "Unbound control keys missing, running setup"
             unbound-control-setup \
                 || update_error "cannot prepare Unbound control certificates"
             break
@@ -1647,6 +1675,7 @@ sys.exit(0 if valid else 1)
             domain_answer="${domain_answer,,}"
             break
         fi
+        info "invalid local domain -retry"
     done
 
     # Pool lease cleanup interval
@@ -1700,7 +1729,7 @@ sys.exit(0 if valid else 1)
 
     # Deploy pydhcpd.conf (preserved on update -- never overwritten)
     if [ -f "$core_dir/pydhcpd.conf" ]; then
-        { info "pydhcpd.conf already exists in $install_dir"; info "static hosts and blocked MACs kept"; info "network parameters updated with your answers"; }
+        info "pydhcpd.conf kept -skip"
     else
         verify_source "$script_dir/core/pydhcpd.conf"
         conf_tmp=$(mktemp "$core_dir/.pydhcpd.conf.XXXXXX") || abort "cannot create temp file -abort"
@@ -1723,8 +1752,7 @@ sys.exit(0 if valid else 1)
     # any other future script read these from here instead of asking again,
     # adding only their own keys if missing.
     if [ -f "$install_dir/pydhcp.env" ]; then
-        info "pydhcp.env already exists, not overwritten -skip"
-        info "interface not changed, keeping value in pydhcp.env"
+        info "pydhcp.env kept, interface unchanged -skip"
     else
         cat > "$install_dir/pydhcp.env" <<ENVEOF
 # =============================================================================

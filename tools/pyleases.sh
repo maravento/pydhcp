@@ -92,7 +92,7 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
-# validation -- one variable per thing validated; use directly with =~
+# validation -one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
 UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
@@ -278,7 +278,7 @@ initialize_empty_files() {
 # very end of the script (postcondition -- catches a bug in the processing
 # done in between). Priority order: mac-*.txt (admin-owned, fatal on
 # conflict) > blockdhcp.txt (owned by pydhcp itself, loses against mac-*.txt).
-# No other function in this script does duplicate detection/removal.
+# clean_block_list() repeats the blockdhcp.txt cleanup before update_dhcp_conf, in case the move in dedup_mac_vs() failed.
 
 # Silent self-defense: removes any active line from $1 whose MAC (field 2)
 # either repeats within $1 itself or is already claimed by a higher-priority
@@ -860,10 +860,15 @@ class "blockdhcp" {
     match pick-first-value (option dhcp-client-identifier, hardware);
 }' >>"$dhcp_conf_temp"
 
+        # MACs active in mac-*.txt never join blockdhcp, even if
+        # dedup_mac_vs() could not rewrite blockdhcp.txt
+        local keep_macs
+        keep_macs=$(grep -hE '^a;' "$ACL_PATH"/mac-*.txt 2>/dev/null \
+            | cut -d ';' -f 2 | tr '[:upper:]' '[:lower:]' | sort -u)
         {
             cut -d ';' -f 2 "$ACL_BLOCK_FILE" 2>/dev/null
             grep -h '^#a;' "$ACL_PATH"/mac-*.txt 2>/dev/null | cut -d ';' -f 2 || true
-        } | grep -E "$UH_MAC" | tr '[:upper:]' '[:lower:]' | sort -u \
+        } | grep -E "$UH_MAC" | tr '[:upper:]' '[:lower:]' | sort -u | grep -vxF -f <(printf '%s\n' "$keep_macs") \
           | while IFS= read -r mac_list; do
                 printf 'subclass "blockdhcp" 1:%s;\n' "$mac_list" >>"$dhcp_conf_temp"
             done || true
@@ -957,15 +962,6 @@ class "blockdhcp" {
         fi
     }
 
-    # Log lines below do not carry the function name -- they use short,
-    # generic phrasing instead.
-    clean_acl() {
-        log "INFO: removing empty lines from ACL files"
-        sed '/^$/d' -i "$ACL_BLOCK_FILE"
-        sed '/^$/d' -i "$ACL_MAC_LIMITED"
-        sed '/^$/d' -i "$ACL_MAC_UNLIMITED"
-    }
-
     order_files_acl() {
         sort -V "$ACL_BLOCK_FILE" -o "$ACL_BLOCK_FILE"
         # mac-*.txt: sorted by IP (field 3). Purely cosmetic -- update_dhcp_conf()
@@ -979,7 +975,6 @@ class "blockdhcp" {
         done
     }
 
-    clean_acl
     clean_block_list
 
     systemctl stop pydhcpd || true

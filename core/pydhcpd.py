@@ -152,6 +152,15 @@ CONCAT_OPTS = {3, 6}
 class ConfigError(Exception):
     pass
 
+
+def log_config_error(err, level, flag):
+    """Logs a ConfigError, split in [1/2]/[2/2] when it has two lines."""
+    error_lines = str(err).splitlines()
+    for index, error_line in enumerate(error_lines):
+        marker = f"[{index + 1}/2] " if len(error_lines) == 2 else ""
+        level("%s%s%s", marker, error_line,
+              f" {flag}" if index == len(error_lines) - 1 else "")
+
 _UH_MAC = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
 
 # =============================================================================
@@ -1995,11 +2004,7 @@ def main():
     try:
         config.load(defaults["conf"])
     except ConfigError as e:
-        error_lines = str(e).splitlines()
-        for index, error_line in enumerate(error_lines):
-            marker = f"[{index + 1}/2] " if len(error_lines) == 2 else ""
-            log.error("%s%s%s", marker, error_line,
-                      " -abort" if index == len(error_lines) - 1 else "")
+        log_config_error(e, log.error, "-abort")
         sys.exit(1)
 
     if not config.server_id:
@@ -2048,6 +2053,8 @@ def main():
             log.info("%d static hosts, %d blocked MACs",
                      len(new_config.static_hosts), len(new_config.blocked_macs))
             log.info("%d pool IPs", len(server.leases.pool))
+        except ConfigError as e:
+            log_config_error(e, log.warning, "-fallback")
         except Exception:
             log.warning("Reload failed -fallback")
 

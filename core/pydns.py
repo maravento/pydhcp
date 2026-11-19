@@ -280,6 +280,8 @@ def main():
         logging.error('Usage: pydns.py [--configure] -abort')
         return 1
     configure = sys.argv[1:] == ['--configure']
+    # State files are root-only (600); without this they inherit umask 022 (644).
+    os.umask(0o077)
     try:
         # Direct reload callers also need the same root-only state and lock.
         STATE_DIR.mkdir(mode=0o700, exist_ok=True)
