@@ -21,7 +21,7 @@ STATE_DIR = Path('/var/lib/pydhcp-dns')
 UNBOUND_CONF = '/etc/unbound/unbound.conf'
 FORWARD_CONF = Path('/etc/unbound/unbound.conf.d/forward.conf')
 UH_HOST = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
-UH_FQDN = re.compile(r'^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$')
+UH_FQDN = re.compile(r'^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$')
 UH_MAC = re.compile(r'^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
 
 
