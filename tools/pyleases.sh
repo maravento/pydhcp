@@ -92,10 +92,10 @@ done
 # VARIABLES
 # ------------------------------------------------------------------------------
 
-# validation -one variable per thing validated; use directly with =~
+# validation - one variable per thing validated; use directly with =~
 UH_IPV4='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$'
 UH_NETMASK='^(0\.0\.0\.0|128\.0\.0\.0|192\.0\.0\.0|224\.0\.0\.0|240\.0\.0\.0|248\.0\.0\.0|252\.0\.0\.0|254\.0\.0\.0|255\.0\.0\.0|255\.128\.0\.0|255\.192\.0\.0|255\.224\.0\.0|255\.240\.0\.0|255\.248\.0\.0|255\.252\.0\.0|255\.254\.0\.0|255\.255\.0\.0|255\.255\.128\.0|255\.255\.192\.0|255\.255\.224\.0|255\.255\.240\.0|255\.255\.248\.0|255\.255\.252\.0|255\.255\.254\.0|255\.255\.255\.0|255\.255\.255\.128|255\.255\.255\.192|255\.255\.255\.224|255\.255\.255\.240|255\.255\.255\.248|255\.255\.255\.252|255\.255\.255\.254|255\.255\.255\.255)$'
-UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+UH_FQDN='^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$'
 UH_DNS='^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])(,(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))*$'
 UH_UINT='^(0|[1-9][0-9]*)$'
 UH_BOOL='^(true|false)$'
@@ -176,7 +176,7 @@ PY
 verify_dhcp_files() {
     local leases_report=report
     mkdir -p /etc/pydhcp
-    chown root:"${DAEMON_GROUP:-pydhcpd}" /etc/pydhcp
+    chown root:"$DAEMON_GROUP" /etc/pydhcp
     chmod 1770 /etc/pydhcp
     if [ ! -f "$PYDHCPD_LEASES" ]; then
         leases_report=""
@@ -185,7 +185,7 @@ verify_dhcp_files() {
             exit 1
         fi
     fi
-    fix_dhcp_file "$PYDHCPD_LEASES" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640 "$leases_report"
+    fix_dhcp_file "$PYDHCPD_LEASES" "$DAEMON_USER" "$DAEMON_GROUP" 640 "$leases_report"
 }
 
 verify_dhcp_config() {
@@ -193,7 +193,7 @@ verify_dhcp_config() {
         log "ERROR: pydhcpd.conf not found -abort"
         exit 1
     fi
-    fix_dhcp_file "$DHCPDv4_CONF" root "${DAEMON_GROUP:-pydhcpd}" 640 report
+    fix_dhcp_file "$DHCPDv4_CONF" root "$DAEMON_GROUP" 640 report
 }
 
 # ACL PREPARATION
@@ -333,8 +333,8 @@ check_duplicate() {
         local field_count field_name dup_macs dup_mac has_error=0
         for field_count in 2 3 4; do
             case $field_count in 2) field_name="MAC" ;; 3) field_name="IP" ;; 4) field_name="hostname" ;; esac
-            if [ "$field_count" = 2 ]; then
-                dup_macs=$(cut -d';' -f2 "${acl_mac_files[@]}" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
+            if [[ "$field_count" == 2 || "$field_count" == 4 ]]; then
+                dup_macs=$(cut -d';' -f"$field_count" "${acl_mac_files[@]}" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort | uniq -d)
             else
                 dup_macs=$(cut -d';' -f${field_count} "${acl_mac_files[@]}" 2>/dev/null | sort | uniq -d)
             fi
@@ -636,6 +636,28 @@ if (( ${#key_errors[@]} > 0 )); then
 fi
 unset key_errors key_error env_key
 
+# FALLBACK
+if [[ -z "${DAEMON_USER:-}" ]]; then
+    log "WARNING: DAEMON_USER defaults to pydhcpd -fallback"
+    DAEMON_USER="${DAEMON_USER:-pydhcpd}"
+fi
+if [[ -z "${DAEMON_GROUP:-}" ]]; then
+    log "WARNING: DAEMON_GROUP defaults to pydhcpd -fallback"
+    DAEMON_GROUP="${DAEMON_GROUP:-pydhcpd}"
+fi
+if [[ -z "${DHCPDv4_CONF:-}" ]]; then
+    log "WARNING: DHCPDv4_CONF defaults to pydhcpd.conf -fallback"
+    DHCPDv4_CONF="${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
+fi
+if [[ -z "${PING_TIMEOUT_SECONDS:-}" ]]; then
+    log "WARNING: PING_TIMEOUT_SECONDS defaults to 1s -fallback"
+    PING_TIMEOUT_SECONDS="${PING_TIMEOUT_SECONDS:-1}"
+fi
+if [[ -z "${QUARANTINE_DURATION:-}" ]]; then
+    log "WARNING: QUARANTINE_DURATION defaults to 60s -fallback"
+    QUARANTINE_DURATION="${QUARANTINE_DURATION:-60}"
+fi
+
 wpad_port="$WPAD_PORT"
 
 # KEY GUARD
@@ -681,7 +703,7 @@ fi
 
 if [ "$PING_CHECK_ENABLED" = true ]; then
     ping_check_line="ping-check true;"
-    ping_timeout_line="ping-timeout ${PING_TIMEOUT_SECONDS:-1};"
+    ping_timeout_line="ping-timeout $PING_TIMEOUT_SECONDS;"
 else
     ping_check_line="ping-check false;"
     ping_timeout_line=""
@@ -703,7 +725,7 @@ check_mac_ip_ranges
 
 is_pydhcp() {
     leases_file="$PYDHCPD_LEASES"
-    dhcp_conf="${DHCPDv4_CONF:-/etc/pydhcp/core/pydhcpd.conf}"
+    dhcp_conf="$DHCPDv4_CONF"
     dhcp_conf_temp=$(mktemp "/etc/pydhcp/.pydhcpd.conf.XXXXXX") || { log "ERROR: cannot create config temp; check /etc/pydhcp -abort"; exit 1; }
     temp_files+=("$dhcp_conf_temp")
 
@@ -781,13 +803,13 @@ is_pydhcp() {
                 log "ERROR: cannot replace $(basename "$leases_file") -abort"
                 exit 1
             fi
-            fix_dhcp_file "$leases_file" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
+            fix_dhcp_file "$leases_file" "$DAEMON_USER" "$DAEMON_GROUP" 640
         elif (( parsed_line > 0 )); then
             if ! mv -fT -- "$temp_leases" "$leases_file"; then
                 log "ERROR: cannot replace $(basename "$leases_file") -abort"
                 exit 1
             fi
-            fix_dhcp_file "$leases_file" "${DAEMON_USER:-pydhcpd}" "${DAEMON_GROUP:-pydhcpd}" 640
+            fix_dhcp_file "$leases_file" "$DAEMON_USER" "$DAEMON_GROUP" 640
         elif [[ -s "$leases_file" ]]; then
             # Nothing was parsed at all: the file did not look like leases.
             # Truncating it here would throw away data over a parser failure.
@@ -809,7 +831,7 @@ is_pydhcp() {
         echo "# pydhcpd Configuration
 authoritative;
 cleanup-interval $CLEANUP_INTERVAL;
-abandon-lease-time ${QUARANTINE_DURATION:-60};
+abandon-lease-time $QUARANTINE_DURATION;
 $wpad_header
 server-identifier $SERVER_IP;
 deny duplicates;
@@ -863,8 +885,11 @@ class "blockdhcp" {
         # MACs active in mac-*.txt never join blockdhcp, even if
         # dedup_mac_vs() could not rewrite blockdhcp.txt
         local keep_macs
-        keep_macs=$(grep -hE '^a;' "$ACL_PATH"/mac-*.txt 2>/dev/null \
-            | cut -d ';' -f 2 | tr '[:upper:]' '[:lower:]' | sort -u)
+        keep_macs=$( { grep -hE '^a;' /dev/null "${acl_files[@]}" || [ "$?" -eq 1 ]; } |
+            cut -d ';' -f 2 | tr '[:upper:]' '[:lower:]' | sort -u) || {
+            log "ERROR: cannot read active MAC lists -abort"
+            exit 1
+        }
         {
             cut -d ';' -f 2 "$ACL_BLOCK_FILE" 2>/dev/null
             grep -h '^#a;' "$ACL_PATH"/mac-*.txt 2>/dev/null | cut -d ';' -f 2 || true
@@ -901,13 +926,16 @@ class "blockdhcp" {
             local bak_temp
             bak_temp=$(mktemp "${dhcp_conf}.bak.XXXXXX") || { log "ERROR: cannot create config backup; check /etc/pydhcp -abort"; exit 1; }
             temp_files+=("$bak_temp")
-            { cp -fP -- "$dhcp_conf" "$bak_temp" && mv -fT -- "$bak_temp" "${dhcp_conf}.bak"; } || rm -f -- "$bak_temp"
+            if ! cp -fP -- "$dhcp_conf" "$bak_temp" || ! mv -fT -- "$bak_temp" "${dhcp_conf}.bak"; then
+                log "ERROR: cannot back up pydhcpd.conf -abort"
+                exit 1
+            fi
         fi
         if ! mv -fT -- "$dhcp_conf_temp" "$dhcp_conf"; then
             log "ERROR: cannot replace $(basename "$dhcp_conf") -abort"
             exit 1
         fi
-        fix_dhcp_file "$dhcp_conf" root "${DAEMON_GROUP:-pydhcpd}" 640
+        fix_dhcp_file "$dhcp_conf" root "$DAEMON_GROUP" 640
     }
 
     # Log lines below do not carry the function name -- they use short,
@@ -996,7 +1024,7 @@ class "blockdhcp" {
                 log "ERROR: cannot restore $(basename "$dhcp_conf") -abort"
                 exit 1
             fi
-            fix_dhcp_file "$dhcp_conf" root "${DAEMON_GROUP:-pydhcpd}" 640
+            fix_dhcp_file "$dhcp_conf" root "$DAEMON_GROUP" 640
             log "INFO: restored backup config, retrying start"
             systemctl reset-failed pydhcpd 2>/dev/null || true
             systemctl start pydhcpd || true
