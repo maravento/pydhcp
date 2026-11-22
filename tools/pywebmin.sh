@@ -21,7 +21,13 @@
 set -euo pipefail
 
 # USAGE
-# Answered before any check: --help must work without root
+# root check
+if [ "$(id -u)" != "0" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
+    exit 1
+fi
+
+# Help exits before logging
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
@@ -49,12 +55,6 @@ esac
 # ------------------------------------------------------------------------------
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
-
-# root check
-if [ "$(id -u)" != "0" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
-    exit 1
-fi
 
 # logging
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

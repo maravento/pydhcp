@@ -52,7 +52,7 @@ FILE: README.md
       <ul>
         <li>Required interfaces must have an UP link and configured global IPv4.</li>
         <li>Internet access is required when installing or updating packages and downloading components.</li>
-        <li>The selected LAN IPv4 must be static and persistent.</li>
+        <li>The selected LAN IPv4 must be static and persistent before deployment. Interactive installation can configure it using the current network manager.</li>
       </ul>
       <p>The operation continues if the applicable requirements above are met; otherwise, it aborts.</p>
     </td>
@@ -61,7 +61,7 @@ FILE: README.md
       <ul>
         <li>Las interfaces requeridas deben tener enlace UP e IPv4 global configurada.</li>
         <li>Se requiere Internet para instalar o actualizar paquetes y descargar componentes.</li>
-        <li>La IPv4 LAN seleccionada debe ser estática y persistente.</li>
+        <li>La IPv4 LAN seleccionada debe ser estática y persistente antes del despliegue. La instalación interactiva puede configurarla con el gestor de red activo.</li>
       </ul>
       <p>La operación continúa si se cumplen los requisitos anteriores que correspondan; de lo contrario, aborta.</p>
     </td>
