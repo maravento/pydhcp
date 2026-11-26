@@ -158,7 +158,7 @@ case "${1:-}" in
             # Re-check identity before escalating to SIGKILL: the PID may have
             # been recycled while we waited.
             if pid_is_pydhcpd "$pid"; then
-                log "INFO: Process $pid did not terminate, forcing..."
+                log "WARNING: pid $pid did not stop, using SIGKILL -fallback"
                 kill -9 "$pid" 2>/dev/null || true
                 sleep 1
             fi

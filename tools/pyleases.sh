@@ -32,7 +32,11 @@ fi
 # logging
 log_file="/var/log/pydhcp.log"
 log() {
-    local log_msg="$(date '+%Y-%m-%d %H:%M:%S') $1"
+    local log_date="$(date '+%Y-%m-%d %H:%M:%S')"
+    local log_msg="$log_date $1"
+    if (( $# == 2 )); then
+        log_msg+=$'\n'"$log_date $2"
+    fi
     echo "$log_msg" >> "$log_file" 2>/dev/null || true
     if [[ "$1" == ERROR:* ]]; then
         echo "$log_msg" >&2
@@ -165,7 +169,7 @@ if changed:
     print("changed")
 PY
     ); then
-        log "ERROR: $(basename "$1") is not a regular file -abort"
+        log "ERROR: cannot set owner and mode of $(basename "$1") -abort"
         exit 1
     fi
     if [[ "${5:-}" == report && "$fix_result" == changed ]]; then
@@ -176,8 +180,11 @@ PY
 verify_dhcp_files() {
     local leases_report=report
     mkdir -p /etc/pydhcp
-    chown root:"$DAEMON_GROUP" /etc/pydhcp
-    chmod 1770 /etc/pydhcp
+    if [ "$(stat -c '%U:%G %a' /etc/pydhcp)" != "root:$DAEMON_GROUP 1770" ]; then
+        chown root:"$DAEMON_GROUP" /etc/pydhcp
+        chmod 1770 /etc/pydhcp
+        log "INFO: pydhcp perms fixed -fixed"
+    fi
     if [ ! -f "$PYDHCPD_LEASES" ]; then
         leases_report=""
         if ! (set -C; umask 077; : > "$PYDHCPD_LEASES") 2>/dev/null; then
@@ -330,7 +337,7 @@ check_duplicate() {
     local acl_mac_files=("$ACL_PATH"/mac-*.txt)
     shopt -u nullglob
     if (( ${#acl_mac_files[@]} > 0 )); then
-        local field_count field_name dup_macs dup_mac has_error=0
+        local field_count field_name dup_macs dup_mac duplicate_message has_error=0
         for field_count in 2 3 4; do
             case $field_count in 2) field_name="MAC" ;; 3) field_name="IP" ;; 4) field_name="hostname" ;; esac
             if [[ "$field_count" == 2 || "$field_count" == 4 ]]; then
@@ -341,7 +348,12 @@ check_duplicate() {
             if [[ -n "$dup_macs" ]]; then
                 while IFS= read -r dup_mac; do
                     [[ -z "$dup_mac" ]] && continue
-                    log "WARNING: duplicate $field_name ${dup_mac:0:20} -alert"
+                    duplicate_message="WARNING: duplicate $field_name $dup_mac -alert"
+                    if (( ${#duplicate_message} + 20 > 80 )); then
+                        log "WARNING: [1/2] $dup_mac" "WARNING: [2/2] duplicate $field_name -alert"
+                    else
+                        log "$duplicate_message"
+                    fi
                     has_error=1
                 done <<< "$dup_macs"
             fi
@@ -414,7 +426,10 @@ normalize_acl_file() {
     [ -f "$acl_file" ] || return 0
 
     # Remove blank (now-empty) lines.
-    sed -i '/^$/d' "$acl_file"
+    if grep -q '^$' "$acl_file"; then
+        sed -i '/^$/d' "$acl_file"
+        log "INFO: $(basename "$acl_file") blank lines removed -fixed"
+    fi
 
     if [[ -n "$line_pattern" ]]; then
         tmp_file=$(mktemp) || { log "ERROR: cannot create temp file; check /tmp -abort"; exit 1; }
@@ -658,21 +673,15 @@ if [[ -z "${QUARANTINE_DURATION:-}" ]]; then
     QUARANTINE_DURATION="${QUARANTINE_DURATION:-60}"
 fi
 
-wpad_port="$WPAD_PORT"
-
 # KEY GUARD
 # Guard: SERVER_IP must never fall inside its own block-pool range -- pydhcpd.py
 # rejects this at config load, but that only surfaces after this script has
 # already stopped the daemon and rewritten pydhcpd.conf. Catching it here,
 # before any destructive action, avoids leaving the daemon down over a config
 # mistake that could have been caught up front.
-if python3 -c "
-import ipaddress, sys
-server_ip = ipaddress.IPv4Address(sys.argv[1])
-pool_start = ipaddress.IPv4Address(sys.argv[2])
-pool_end = ipaddress.IPv4Address(sys.argv[3])
-print('1' if pool_start <= server_ip <= pool_end else '0')
-" "$SERVER_IP" "$SERV_INI_RANGE_BLOCK" "$SERV_END_RANGE_BLOCK" 2>/dev/null | grep -q '^1$'; then
+server_ip_int=$(ip_to_int "$SERVER_IP")
+if (( server_ip_int >= $(ip_to_int "$SERV_INI_RANGE_BLOCK") \
+      && server_ip_int <= $(ip_to_int "$SERV_END_RANGE_BLOCK") )); then
     log "ERROR: SERVER_IP overlaps DHCP block range -abort"
     exit 1
 fi
@@ -681,7 +690,7 @@ fi
 # DHCPD CONFIG
 # ------------------------------------------------------------------------------
 
-wpad_url="http://$SERVER_IP:$wpad_port/wpad.pac"
+wpad_url="http://$SERVER_IP:$WPAD_PORT/wpad.pac"
 
 wpad_ready=0
 if [ "$WPAD_ENABLED" = true ]; then
@@ -784,7 +793,7 @@ is_pydhcp() {
                         elif grep -qi "^a;${mac_address};" "$ACL_BLOCK_FILE" 2>/dev/null; then
                             log "INFO: $mac_address blocked (lease discarded)"
                         else
-                            log "INFO: $mac_address blocked, host=${client_name:0:20}"
+                            log "INFO: $mac_address blocked: $client_name"
                             echo "$line_lease" >> "$ACL_BLOCK_FILE"
                         fi
                     fi
@@ -828,6 +837,7 @@ is_pydhcp() {
     # Log lines below do not carry the function name -- they use short,
     # generic phrasing instead.
     update_dhcp_conf() {
+        local invalid_hostname
         echo "# pydhcpd Configuration
 authoritative;
 cleanup-interval $CLEANUP_INTERVAL;
@@ -866,7 +876,12 @@ $ping_timeout_line
                     continue
                 fi
                 if ! [[ $user_source =~ ^[A-Za-z0-9._-]{1,63}$ ]]; then
-                    log "INFO: invalid hostname ${user_source:0:20} -skip"
+                    printf -v invalid_hostname '%q' "$user_source"
+                    if (( ${#invalid_hostname} > 31 )); then
+                        log "INFO: [1/2] $invalid_hostname" "INFO: [2/2] invalid hostname -skip"
+                    else
+                        log "INFO: invalid hostname $invalid_hostname -skip"
+                    fi
                     continue
                 fi
                 echo "

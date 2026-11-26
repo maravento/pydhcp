@@ -13,8 +13,8 @@
 # sudo bash pysetup.sh --uninstall  Uninstall
 # sudo bash pysetup.sh --status     Report service, port, config and log
 # sudo bash pysetup.sh              Interactive menu
-# bash pysetup.sh -h                Show usage
-# bash pysetup.sh --help            Show usage
+# sudo bash pysetup.sh -h           Show usage
+# sudo bash pysetup.sh --help       Show usage
 #
 # LOG: pysetup.log, in the directory containing this script
 #
@@ -26,13 +26,13 @@ set -euo pipefail
 # REQUIREMENTS
 # ------------------------------------------------------------------------------
 
-# Source directory (where this script lives) -- needed by the logging block
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
 
+# Source directory (where this script lives) -- needed by the logging block
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -263,10 +263,10 @@ if changed:
     print("changed")
 PY
     ); then
-        abort "$(basename "$1") is not a regular ${6:-file} -abort"
+        abort "cannot set owner and mode of $(basename "$1") -abort"
     fi
     if [[ "${5:-}" == report && "$fix_result" == changed ]]; then
-        log "INFO: $(basename "$1") perms fixed -fixed"
+        info "$(basename "$1") perms fixed -fixed"
     fi
 }
 
@@ -493,13 +493,16 @@ update_stop_service() {
         active|reloading|activating|deactivating)
             [ "$unit" = pydhcp-dns.service ] || update_services+=("$unit") ;;
         inactive|failed) ;;
-        *) update_error "unexpected service state: $unit ($state)" ;;
+        *)
+            err "[1/2] $unit state: $state"
+            update_error "[2/2] unexpected service state"
+            ;;
     esac
     update_stopped_services+=("$unit")
     systemctl stop "$unit" || update_error "cannot stop service: $unit"
     state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect stopped: $unit"
     [ "$state" = inactive ] || {
-        log "ERROR: [1/2] $unit state: $state"
+        err "[1/2] $unit state: $state"
         update_error "[2/2] $unit did not stop"
     }
 }
@@ -544,7 +547,7 @@ update_apply() {
             if (( ${#compared_file} <= 19 )); then
                 update_error "src and dst do not match: $compared_file"
             fi
-            log "ERROR: [1/2] src and dst: $compared_file"
+            err "[1/2] src and dst: $compared_file"
             update_error "[2/2] src and dst do not match"
         }
         info "updated $(basename "$target")"
@@ -557,7 +560,7 @@ update_resume() {
         systemctl start "$unit" || update_error "cannot start service: $unit"
         state=$(systemctl show -p ActiveState --value "$unit") || update_error "cannot inspect started: $unit"
         [ "$state" = active ] || {
-            log "ERROR: [1/2] $unit state: $state"
+            err "[1/2] $unit state: $state"
             update_error "[2/2] $unit did not start"
         }
     done
@@ -833,6 +836,12 @@ PY
     fi
 }
 
+query_port_listeners() {
+    local port_error
+    port_error=$(ss -lnH "--$1" "sport = :$2" 2>&1 >&3) || return 1
+    [[ "$port_error" != *[![:space:]]* ]]
+} 3>&1
+
 # WPAD
 # Removes the Apache virtualhost, the PAC file and the Listen line of the port
 remove_wpad() {
@@ -984,7 +993,6 @@ deploy_wpad() {
     sed -i -E "s|^<VirtualHost \*:[0-9]+>|<VirtualHost *:${wpad_port_value}>|" "$wpad_vhost_dest" \
         || wpad_failed "cannot set the wpad.conf port"
 
-    [ -f "${apache_ports}.bak" ] || cp -f "$apache_ports" "${apache_ports}.bak" &>/dev/null || true
     { grep -qxF "Listen ${server_ip}:${wpad_port_value}" "$apache_ports" \
         || grep -qxF "Listen ${wpad_port_value}" "$apache_ports" \
         || echo "Listen ${server_ip}:${wpad_port_value}" >> "$apache_ports"; } \
@@ -1012,23 +1020,7 @@ deploy_wpad() {
 # Warns before the WPAD question when its port is not free. Never aborts.
 warn_wpad_port() {
     local port_listeners
-    if ! port_listeners=$(python3 - tcp "$wpad_port_value" <<'PY'
-import subprocess
-import sys
-
-try:
-    result = subprocess.run(
-        ["ss", "-lnH", f"--{sys.argv[1]}", f"sport = :{sys.argv[2]}"],
-        capture_output=True,
-        text=True,
-    )
-except OSError:
-    sys.exit(1)
-if result.returncode != 0 or result.stderr.strip():
-    sys.exit(1)
-sys.stdout.write(result.stdout)
-PY
-    ); then
+    if ! port_listeners=$(query_port_listeners tcp "$wpad_port_value"); then
         warn "cannot check TCP port $wpad_port_value for WPAD -alert"
         return 0
     fi
@@ -1037,14 +1029,11 @@ PY
     fi
 }
 
-# IFACES
-# List network interfaces other than loopback
+# check ipv4 interfaces
 list_ifaces() {
     ip -br link show 2>/dev/null | awk '$1 != "lo" {sub(/@.*/, "", $1); printf "%s %s\n", $1, ($2 == "UP") ? "UP" : "DOWN"}'
 }
 
-# IPV4 INTERFACES
-# Offer only interfaces with an active link and configured global IPv4
 list_ipv4_ifaces() {
     local iface state
     while read -r iface state; do
@@ -1056,7 +1045,6 @@ list_ipv4_ifaces() {
     done < <(list_ifaces)
 }
 
-# check ipv4 interfaces
 check_ipv4_interfaces() {
     local max_attempts=24 attempt=1
 
@@ -1129,12 +1117,10 @@ choose_lan_interface() {
                 return 0
             fi
         done
-        log "ERROR: LAN must be an active interface with IPv4 -abort"
-        exit 1
+        abort "LAN must be an active interface with IPv4 -abort"
     fi
     (( ${#lan_candidates[@]} > 0 )) || {
-        log "ERROR: no LAN interface available -abort"
-        exit 1
+        abort "no LAN interface available -abort"
     }
     echo "Available LAN interfaces:"
     for iface_index in "${!lan_candidates[@]}"; do
@@ -1145,15 +1131,14 @@ choose_lan_interface() {
     done
     while true; do
         read -r -p "Select LAN Interface [1-${#lan_candidates[@]}]: " iface_choice || {
-            log "ERROR: cannot read LAN interface selection -abort"
-            exit 1
+            abort "cannot read LAN interface selection -abort"
         }
         if [[ "$iface_choice" =~ $UH_UINT ]] && [ "${#iface_choice}" -le 5 ] \
            && [ "$iface_choice" -ge 1 ] && [ "$iface_choice" -le "${#lan_candidates[@]}" ]; then
             lan_iface_answer="${lan_candidates[$((iface_choice - 1))]}"
             return 0
         fi
-        log "INFO: invalid LAN interface selection -retry"
+        info "invalid LAN interface selection -retry"
     done
 }
 
@@ -1312,12 +1297,12 @@ check_static_lan() {
     case "$(lan_ipv4_condition "$1" "$2")" in
         static) return 0 ;;
         dynamic)
-            log "ERROR: [1/2] LAN $1: $2 uses DHCP"
-            log "ERROR: [2/2] configure a static LAN IPv4 -abort"
+            err "[1/2] LAN $1: $2 uses DHCP"
+            err "[2/2] configure a static LAN IPv4 -abort"
             ;;
         *)
-            log "ERROR: [1/2] LAN $1: $2"
-            log "ERROR: [2/2] cannot verify persistent static IPv4 -abort"
+            err "[1/2] LAN $1: $2"
+            err "[2/2] cannot verify persistent static IPv4 -abort"
             ;;
     esac
     exit 1
@@ -1337,10 +1322,14 @@ pydhcp_ipv4_number() {
     printf '%u\n' "$(( (a << 24) | (b << 16) | (c << 8) | d ))"
 }
 
+pydhcp_ipv4_address() {
+    local address="$1"
+    printf '%d.%d.%d.%d\n' "$((address >> 24))" "$((address >> 16 & 255))" \
+        "$((address >> 8 & 255))" "$((address & 255))"
+}
+
 pydhcp_lan_mask() {
-    local mask=$(( (0xffffffff << (32 - $1)) & 0xffffffff ))
-    printf '%d.%d.%d.%d\n' "$((mask >> 24))" "$((mask >> 16 & 255))" \
-        "$((mask >> 8 & 255))" "$((mask & 255))"
+    pydhcp_ipv4_address "$(( (0xffffffff << (32 - $1)) & 0xffffffff ))"
 }
 
 pydhcp_lan_prefix() {
@@ -1825,13 +1814,11 @@ read_lan_ipv4() {
     local -a lan_addresses=()
     mapfile -t lan_addresses < <(ip -4 -o addr show dev "$selected_iface" scope global | awk '{print $4}')
     (( ${#lan_addresses[@]} > 0 )) || {
-        log "ERROR: LAN '$selected_iface' has no IPv4 address -abort"
-        exit 1
+        abort "LAN '$selected_iface' has no IPv4 address -abort"
     }
     for candidate_cidr in "${lan_addresses[@]}"; do
         [[ "$candidate_cidr" =~ $UH_CIDR ]] || {
-            log "ERROR: LAN '$selected_iface' has invalid IPv4/prefix -abort"
-            exit 1
+            abort "LAN '$selected_iface' has invalid IPv4/prefix -abort"
         }
     done
     if [ -n "$preset_ip" ]; then
@@ -1841,8 +1828,7 @@ read_lan_ipv4() {
                 return 0
             fi
         done
-        log "ERROR: requested IPv4 is not configured on LAN -abort"
-        exit 1
+        abort "requested IPv4 is not configured on LAN -abort"
     fi
     if (( ${#lan_addresses[@]} == 1 )); then
         lan_cidr_answer="${lan_addresses[0]}"
@@ -1857,15 +1843,14 @@ read_lan_ipv4() {
     done
     while true; do
         read -r -p "Select LAN IPv4 number: " ipv4_choice || {
-            log "ERROR: cannot read LAN IPv4 selection -abort"
-            exit 1
+            abort "cannot read LAN IPv4 selection -abort"
         }
         if [[ "$ipv4_choice" =~ $UH_UINT ]] && [ "${#ipv4_choice}" -le 5 ] \
            && [ "$ipv4_choice" -ge 1 ] && [ "$ipv4_choice" -le "${#lan_addresses[@]}" ]; then
             lan_cidr_answer="${lan_addresses[$((ipv4_choice - 1))]}"
             return 0
         fi
-        log "INFO: invalid LAN IPv4 selection -retry"
+        info "invalid LAN IPv4 selection -retry"
     done
 }
 
@@ -1935,6 +1920,7 @@ do_uninstall() {
         systemctl disable unbound 2>/dev/null || true
         rm -f /etc/unbound/unbound.conf.d/forward.conf
     fi
+    rm -f -- /etc/unbound/unbound.conf.d/forward.conf.pydns.bak
     rm -f /etc/systemd/system/pydhcp-dns.{service,path,timer}
     rm -rf -- /var/lib/pydhcp-dns
     systemctl stop pydhcpd 2>/dev/null || true
@@ -2026,8 +2012,10 @@ do_update() {
     done
 
     for unbound_credential in "${unbound_credentials[@]}"; do
-        [ -s "$unbound_credential" ] \
-            || update_error "Unbound control credential missing: $(basename "$unbound_credential")"
+        [ -s "$unbound_credential" ] || {
+            err "[1/2] $(basename "$unbound_credential")"
+            update_error "[2/2] Unbound control credential missing"
+        }
     done
     update_begin
     update_stop_service pydhcp-dns.path
@@ -2097,47 +2085,43 @@ do_install() {
         fi
     fi
 
+    local lan_prefix server_number mask_number network_number broadcast_number
+    [[ "$lan_cidr_answer" =~ $UH_CIDR ]] || abort "cannot calculate LAN network -abort"
     server_ip_answer="${lan_cidr_answer%/*}"
-    mapfile -t network_values < <(python3 -c '
-import ipaddress, sys
-net = ipaddress.IPv4Interface(sys.argv[1]).network
-print(net.netmask)
-print(net.network_address)
-print(net.broadcast_address)
-' "$lan_cidr_answer")
-    [ "${#network_values[@]}" -eq 3 ] || abort "cannot calculate LAN network -abort"
-    netmask_answer="${network_values[0]}"
-    local_subnet="${network_values[1]}"
-    local_broadcast="${network_values[2]}"
+    lan_prefix="${lan_cidr_answer#*/}"
+    netmask_answer=$(pydhcp_lan_mask "$lan_prefix")
+    server_number=$(pydhcp_ipv4_number "$server_ip_answer")
+    mask_number=$(pydhcp_ipv4_number "$netmask_answer")
+    network_number=$(( server_number & mask_number ))
+    broadcast_number=$(( network_number | (0xffffffff ^ mask_number) ))
+    local_subnet=$(pydhcp_ipv4_address "$network_number")
+    local_broadcast=$(pydhcp_ipv4_address "$broadcast_number")
     info "LAN IPv4: $lan_cidr_answer"
 
     # POOL
     # Use full addresses and preserve the daemon's pool size and network guards
-    mapfile -t pool_defaults < <(python3 -c '
-import ipaddress, sys
-iface = ipaddress.IPv4Interface(sys.argv[1])
-net = iface.network
-base = int(net.network_address)
-last = int(net.broadcast_address) - 1
-server = int(iface.ip)
-first = base + 1
-if last < first or net.prefixlen >= 31:
-    sys.exit(1)
-start = min(base + 220, last)
-end = min(base + 235, last)
-if start <= server <= end:
-    if server > first:
-        end = server - 1
-        start = max(first, end - 15)
-    else:
-        start = server + 1
-        end = min(last, start + 15)
-if start > end:
-    sys.exit(1)
-print(ipaddress.IPv4Address(start))
-print(ipaddress.IPv4Address(end))
-' "$lan_cidr_answer")
-    [ "${#pool_defaults[@]}" -eq 2 ] || abort "LAN has no usable DHCP pool -abort"
+    local pool_first pool_last pool_start pool_end start_number end_number
+    local -a pool_defaults
+    (( lan_prefix < 31 )) || abort "LAN has no usable DHCP pool -abort"
+    pool_first=$(( network_number + 1 ))
+    pool_last=$(( broadcast_number - 1 ))
+    pool_start=$(( network_number + 220 ))
+    pool_end=$(( network_number + 235 ))
+    (( pool_start <= pool_last )) || pool_start=$pool_last
+    (( pool_end <= pool_last )) || pool_end=$pool_last
+    if (( pool_start <= server_number && server_number <= pool_end )); then
+        if (( server_number > pool_first )); then
+            pool_end=$(( server_number - 1 ))
+            pool_start=$(( pool_end - 15 ))
+            (( pool_start >= pool_first )) || pool_start=$pool_first
+        else
+            pool_start=$(( server_number + 1 ))
+            pool_end=$(( pool_start + 15 ))
+            (( pool_end <= pool_last )) || pool_end=$pool_last
+        fi
+    fi
+    (( pool_start <= pool_end )) || abort "LAN has no usable DHCP pool -abort"
+    pool_defaults=("$(pydhcp_ipv4_address "$pool_start")" "$(pydhcp_ipv4_address "$pool_end")")
     while true; do
         read -r -p "Enter pool start [${pool_defaults[0]}]: " pool_start_answer \
             || abort "cannot read pool start -abort"
@@ -2149,16 +2133,11 @@ print(ipaddress.IPv4Address(end))
             info "invalid pool IPv4 address -retry"
             continue
         fi
-        if python3 -c '
-import ipaddress, sys
-net = ipaddress.IPv4Interface(sys.argv[1]).network
-server = ipaddress.IPv4Interface(sys.argv[1]).ip
-start, end = map(ipaddress.IPv4Address, sys.argv[2:])
-valid = start in net and end in net and start <= end
-valid = valid and net.network_address < start and end < net.broadcast_address
-valid = valid and not start <= server <= end and int(end) - int(start) < 65536
-sys.exit(0 if valid else 1)
-' "$lan_cidr_answer" "$pool_start_answer" "$pool_end_answer"; then
+        start_number=$(pydhcp_ipv4_number "$pool_start_answer")
+        end_number=$(pydhcp_ipv4_number "$pool_end_answer")
+        if (( network_number < start_number && start_number <= end_number &&
+              end_number < broadcast_number && end_number - start_number < 65536 &&
+              (server_number < start_number || server_number > end_number) )); then
             break
         fi
         info "invalid pool: subnet, server, order or size -retry"
@@ -2211,7 +2190,7 @@ sys.exit(0 if valid else 1)
     fi
 
     for existing_config in "${existing_configs[@]}" "${wpad_configs[@]}"; do
-        cp -p -- "$existing_config" "${existing_config}.bak" \
+        [ -f "${existing_config}.bak" ] || cp -p -- "$existing_config" "${existing_config}.bak" \
             || abort "cannot back up $(basename "$existing_config") -abort"
     done
     if "$unbound_reused"; then
@@ -2238,33 +2217,38 @@ sys.exit(0 if valid else 1)
 
     # Create system group and user
     if ! getent group "$daemon_owner" &>/dev/null; then
-        groupadd --system "$daemon_owner"
+        groupadd --system "$daemon_owner" || abort "cannot create group $daemon_owner -abort"
         info "created group $daemon_owner"
     else
         info "Group $daemon_owner already exists -skip"
     fi
 
     if ! id "$daemon_owner" &>/dev/null; then
-        useradd --system --no-create-home --shell /bin/false --gid "$daemon_owner" --comment "Python DHCP Daemon" "$daemon_owner"
+        useradd --system --no-create-home --shell /bin/false --gid "$daemon_owner" --comment "Python DHCP Daemon" "$daemon_owner" \
+            || abort "cannot create user $daemon_owner -abort"
         info "created user $daemon_owner"
     else
         info "User $daemon_owner already exists -skip"
     fi
 
     # Create install directory
-    mkdir -p "$install_dir"
-    chown root:"$daemon_owner" "$install_dir"
-    chmod 1770 "$install_dir"
-    mkdir -p "$core_dir"
-    chown root:"$daemon_owner" "$core_dir"
-    chmod 1770 "$core_dir"
+    mkdir -p "$install_dir" \
+        && chown root:"$daemon_owner" "$install_dir" \
+        && chmod 1770 "$install_dir" \
+        || abort "cannot prepare $install_dir -abort"
+    mkdir -p "$core_dir" \
+        && chown root:"$daemon_owner" "$core_dir" \
+        && chmod 1770 "$core_dir" \
+        || abort "cannot prepare $core_dir -abort"
 
     # Deploy daemon and config files
     verify_source "$script_dir/core/pydhcpd.py"
-    cp "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py"
+    cp "$script_dir/core/pydhcpd.py" "$core_dir/pydhcpd.py" \
+        || abort "cannot install pydhcpd.py -abort"
     info "updated pydhcpd.py"
-    chown root:root "$core_dir/pydhcpd.py"
-    chmod 755 "$core_dir/pydhcpd.py"
+    chown root:root "$core_dir/pydhcpd.py" \
+        && chmod 755 "$core_dir/pydhcpd.py" \
+        || abort "cannot install pydhcpd.py -abort"
 
     # Deploy pydhcpd.conf (preserved on update -- never overwritten)
     if [ -f "$core_dir/pydhcpd.conf" ]; then
@@ -2345,6 +2329,7 @@ RATE_LIMIT_MAX=5
 RESERVATION_TTL_SECONDS=30
 
 # Backup
+# Changing these defaults is not recommended
 BACKUP_DIR=/etc/bak/pydhcp
 # =============================================================================
 
@@ -2356,23 +2341,38 @@ ENVEOF
 
     # Apply network parameters to pydhcpd.conf
     conf_tmp=$(mktemp "$install_dir/.pydhcpd.conf.XXXXXX") || abort "cannot create temp file -abort"
-    cp -f "$core_dir/pydhcpd.conf" "$conf_tmp"
-    sed -i "s|^server-identifier .*|server-identifier ${server_ip_answer};|" "$conf_tmp"
-    sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${local_subnet} netmask ${netmask_answer}|" "$conf_tmp"
-    sed -i "s|option routers .*;|option routers ${server_ip_answer};|" "$conf_tmp"
-    sed -i "s|option broadcast-address .*;|option broadcast-address ${local_broadcast};|" "$conf_tmp"
-    sed -i "s|range [0-9.]* [0-9.]*;|range $pool_start_answer $pool_end_answer;|" "$conf_tmp"
-    sed -i "s|option domain-name-servers .*;|option domain-name-servers ${dns_answer};|" "$conf_tmp"
-    sed -i "s|option domain-name \".*\";|option domain-name \"${domain_answer}\";|" "$conf_tmp"
-    sed -i "s|^cleanup-interval .*|cleanup-interval ${cleanup_answer};|" "$conf_tmp"
-    sed -i "/pool {/,/}/ s|min-lease-time .*;|min-lease-time ${cleanup_answer};|" "$conf_tmp"
-    sed -i "/pool {/,/}/ s|default-lease-time .*;|default-lease-time ${cleanup_answer};|" "$conf_tmp"
-    sed -i "/pool {/,/}/ s|max-lease-time .*;|max-lease-time ${cleanup_answer};|" "$conf_tmp"
+    cp -f "$core_dir/pydhcpd.conf" "$conf_tmp" \
+        || abort "cannot copy pydhcpd.conf -abort"
+    sed -i "s|^server-identifier .*|server-identifier ${server_ip_answer};|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "s|subnet [0-9.]* netmask [0-9.]*|subnet ${local_subnet} netmask ${netmask_answer}|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "s|option routers .*;|option routers ${server_ip_answer};|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "s|option broadcast-address .*;|option broadcast-address ${local_broadcast};|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "s|range [0-9.]* [0-9.]*;|range $pool_start_answer $pool_end_answer;|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "s|option domain-name-servers .*;|option domain-name-servers ${dns_answer};|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "s|option domain-name \".*\";|option domain-name \"${domain_answer}\";|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "s|^cleanup-interval .*|cleanup-interval ${cleanup_answer};|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "/pool {/,/}/ s|min-lease-time .*;|min-lease-time ${cleanup_answer};|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "/pool {/,/}/ s|default-lease-time .*;|default-lease-time ${cleanup_answer};|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
+    sed -i "/pool {/,/}/ s|max-lease-time .*;|max-lease-time ${cleanup_answer};|" "$conf_tmp" \
+        || abort "cannot edit pydhcpd.conf -abort"
     if [[ "$wpad_enabled_value" == "true" ]]; then
-        sed -i "s|# option wpad code 252 = text;|option wpad code 252 = text;|" "$conf_tmp"
-        sed -i "s|# option wpad \"http://SERVER_IP:[0-9]*/wpad.pac\";|option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
+        sed -i "s|# option wpad code 252 = text;|option wpad code 252 = text;|" "$conf_tmp" \
+            || abort "cannot edit pydhcpd.conf -abort"
+        sed -i "s|# option wpad \"http://SERVER_IP:[0-9]*/wpad.pac\";|option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp" \
+            || abort "cannot edit pydhcpd.conf -abort"
     else
-        sed -i "s|# option wpad \"http://SERVER_IP:[0-9]*/wpad.pac\";|# option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp"
+        sed -i "s|# option wpad \"http://SERVER_IP:[0-9]*/wpad.pac\";|# option wpad \"http://${server_ip_answer}:${wpad_port_value}/wpad.pac\";|" "$conf_tmp" \
+            || abort "cannot edit pydhcpd.conf -abort"
     fi
     if ! mv -fT -- "$conf_tmp" "$core_dir/pydhcpd.conf"; then
         rm -f -- "$conf_tmp"
@@ -2394,50 +2394,53 @@ ENVEOF
     # DNS
     # Configure the DNS resolver
     install -d -m 755 -o root -g root /etc/unbound/unbound.conf.d
-    python3 - "$script_dir/conf/forward.conf" \
-        /etc/unbound/unbound.conf.d/forward.conf \
-        "$server_ip_answer" "$local_subnet" "$netmask_answer" "$domain_answer" \
-        "$dns_new1" "$dns_new2" <<'DNS_CONF'
-import ipaddress, pathlib, re, sys
-source, target, address, subnet, mask, domain, dns1, dns2 = sys.argv[1:]
-text = pathlib.Path(source).read_text()
-text = text.replace('192.168.0.10', address)
-text = text.replace('192.168.0.0/24', str(ipaddress.IPv4Network(f'{subnet}/{mask}', strict=False)))
-text = text.replace('home.arpa', domain)
-upstreams = {'1.1.1.2': dns1, '1.0.0.2': dns2}
-text = re.sub(r'(?m)^    forward-addr: (.*)$',
-              lambda match: '    forward-addr: ' + upstreams.get(match[1], match[1]), text)
-pathlib.Path(target).write_text(text)
-DNS_CONF
+    local forward_config
+    forward_config=$(
+        sed -z 's/\r\n\?/\n/g' "$script_dir/conf/forward.conf" |
+            sed -e "s|192\.168\.0\.10|$server_ip_answer|g" \
+                -e "s|192\.168\.0\.0/24|$local_subnet/$lan_prefix|g" \
+                -e "s|home\.arpa|$domain_answer|g" \
+                -e "/^    forward-addr: 1\.1\.1\.2$/ { s|1\.1\.1\.2|$dns_new1|; b; }" \
+                -e "s|^    forward-addr: 1\.0\.0\.2$|    forward-addr: $dns_new2|" &&
+        printf '.'
+    ) || abort "cannot write forward.conf -abort"
+    printf '%s' "${forward_config%.}" > /etc/unbound/unbound.conf.d/forward.conf \
+        || abort "cannot write forward.conf -abort"
     fix_dhcp_file /etc/unbound/unbound.conf.d/forward.conf root root 644 report
-    tee /etc/default/unbound >/dev/null <<'DNS_DEFAULTS'
+    tee /etc/default/unbound >/dev/null <<'DNS_DEFAULTS' || abort "cannot write /etc/default/unbound -abort"
 DAEMON_OPTS=""
 DNS_DEFAULTS
     fix_dhcp_file /etc/default/unbound root root 644 report
     unbound-control-setup || abort "cannot prepare unbound control -abort"
     unbound-checkconf || abort "unbound config check failed -abort"
-    systemctl daemon-reload
-    systemctl enable --now unbound
+    systemctl daemon-reload \
+        && systemctl enable --now unbound \
+        || abort "cannot enable unbound -abort"
     systemctl restart unbound || abort "cannot start unbound -abort"
 
-    install -m 750 -o root -g root "$script_dir/core/pydns.py" "$core_dir/pydns.py"
+    install -m 750 -o root -g root "$script_dir/core/pydns.py" "$core_dir/pydns.py" \
+        || abort "cannot install pydns.py -abort"
 
     # Deploy tools
-    mkdir -p "$install_dir/tools"
-    chown root:root "$install_dir/tools"
-    chmod 755 "$install_dir/tools"
+    mkdir -p "$install_dir/tools" \
+        && chown root:root "$install_dir/tools" \
+        && chmod 755 "$install_dir/tools" \
+        || abort "cannot prepare $install_dir/tools -abort"
 
     verify_source "$script_dir/tools/pydhcpenv.sh"
-    install -m 644 -o root -g root "$script_dir/tools/pydhcpenv.sh" "$install_dir/tools/pydhcpenv.sh"
+    install -m 644 -o root -g root "$script_dir/tools/pydhcpenv.sh" "$install_dir/tools/pydhcpenv.sh" \
+        || abort "cannot install pydhcpenv.sh -abort"
     info "updated tools/pydhcpenv.sh"
 
     for tool_script in pyleases.sh pywebmin.sh pybk.sh; do
         if [ -f "$script_dir/tools/$tool_script" ]; then
             verify_source "$script_dir/tools/$tool_script"
-            cp "$script_dir/tools/$tool_script" "$install_dir/tools/$tool_script"
+            cp "$script_dir/tools/$tool_script" "$install_dir/tools/$tool_script" \
+                || abort "cannot install $tool_script -abort"
             info "updated tools/$tool_script"
-            chown root:root "$install_dir/tools/$tool_script"
-            chmod 750 "$install_dir/tools/$tool_script"
+            chown root:root "$install_dir/tools/$tool_script" \
+                && chmod 750 "$install_dir/tools/$tool_script" \
+                || abort "cannot install $tool_script -abort"
         fi
     done
 
@@ -2445,30 +2448,36 @@ DNS_DEFAULTS
 
     # Deploy systemd service
     verify_source "$script_dir/service/pydhcpd.service"
-    cp "$script_dir/service/pydhcpd.service" "$service_file"
+    cp "$script_dir/service/pydhcpd.service" "$service_file" \
+        || abort "cannot install pydhcpd.service -abort"
     info "updated pydhcpd.service"
-    chown root:root "$service_file"
-    chmod 644 "$service_file"
+    chown root:root "$service_file" \
+        && chmod 644 "$service_file" \
+        || abort "cannot install pydhcpd.service -abort"
 
     for dns_unit in pydhcp-dns.service pydhcp-dns.path pydhcp-dns.timer; do
         install -m 644 -o root -g root "$script_dir/service/$dns_unit" \
-            "/etc/systemd/system/$dns_unit"
+            "/etc/systemd/system/$dns_unit" \
+            || abort "cannot install $dns_unit -abort"
     done
 
     # Deploy init.d wrapper
     verify_source "$script_dir/init.d/pydhcpd"
-    cp "$script_dir/init.d/pydhcpd" "$init_file"
+    cp "$script_dir/init.d/pydhcpd" "$init_file" \
+        || abort "cannot install init.d/pydhcpd -abort"
     info "updated init.d/pydhcpd"
-    chown root:root "$init_file"
-    chmod 750 "$init_file"
+    chown root:root "$init_file" \
+        && chmod 750 "$init_file" \
+        || abort "cannot install init.d/pydhcpd -abort"
 
     # Create log file if it does not exist, ensure correct ownership/permissions
-    [ -f "$pydhcp_log_file" ] || touch "$pydhcp_log_file"
-    chown "$daemon_owner":"$daemon_owner" "$pydhcp_log_file"
-    chmod 640 "$pydhcp_log_file"
+    { [ -f "$pydhcp_log_file" ] || touch "$pydhcp_log_file"; } \
+        && chown "$daemon_owner":"$daemon_owner" "$pydhcp_log_file" \
+        && chmod 640 "$pydhcp_log_file" \
+        || abort "cannot prepare pydhcp.log -abort"
 
     # Deploy logrotate config
-    cat > /etc/logrotate.d/pydhcp << 'EOF'
+    cat > /etc/logrotate.d/pydhcp << 'EOF' || abort "cannot write logrotate config -abort"
 /var/log/pydhcp.log {
     weekly
     rotate 7
@@ -2482,27 +2491,30 @@ DNS_DEFAULTS
     endscript
 }
 EOF
-    chmod 644 /etc/logrotate.d/pydhcp
-    chown root:root /etc/logrotate.d/pydhcp
+    chmod 644 /etc/logrotate.d/pydhcp \
+        && chown root:root /etc/logrotate.d/pydhcp \
+        || abort "cannot write logrotate config -abort"
 
     repair_install_permissions
 
     # Enable and start service
     info "updated /etc/logrotate.d/pydhcp"
-    systemctl daemon-reload
-    systemctl enable --force pydhcpd
+    systemctl daemon-reload \
+        && systemctl enable --force pydhcpd \
+        || abort "cannot enable pydhcpd -abort"
     systemctl start pydhcpd || true
     sleep 1
     if ! systemctl is-active --quiet pydhcpd; then
         { err "[1/2] pydhcpd failed to start"; abort "[2/2] see: journalctl -u pydhcpd -n 50 -abort"; }
     fi
 
-    systemctl enable --now pydhcp-dns.path pydhcp-dns.timer
+    systemctl enable --now pydhcp-dns.path pydhcp-dns.timer \
+        || abort "cannot enable pydhcp-dns timer -abort"
     systemctl start pydhcp-dns.service || abort "cannot publish DNS names -abort"
     info "pydhcpd installed and running"
-    info "Configuration : $core_dir/pydhcpd.conf"
-    info "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"
-    info "Leases : $core_dir/pydhcpd.leases"
+    echo "Configuration : $core_dir/pydhcpd.conf"
+    echo "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"
+    echo "Leases : $core_dir/pydhcpd.leases"
 }
 
 # ------------------------------------------------------------------------------
@@ -2523,23 +2535,7 @@ do_status() {
     echo ""
     echo "=== DHCP Port ==="
     local port_listeners
-    if ! port_listeners=$(python3 - udp 67 <<'PY'
-import subprocess
-import sys
-
-try:
-    result = subprocess.run(
-        ["ss", "-lnH", f"--{sys.argv[1]}", f"sport = :{sys.argv[2]}"],
-        capture_output=True,
-        text=True,
-    )
-except OSError:
-    sys.exit(1)
-if result.returncode != 0 or result.stderr.strip():
-    sys.exit(1)
-sys.stdout.write(result.stdout)
-PY
-    ); then
+    if ! port_listeners=$(query_port_listeners udp 67); then
         echo ":67/udp UNKNOWN"
     elif [ -n "$port_listeners" ]; then
         echo ":67/udp OPEN"

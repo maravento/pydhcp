@@ -204,9 +204,16 @@ sudo bash pysetup.sh --help   # or -h
 
 ---
 
-> **Legend:** ✅ same behaviour · ⚠️ works, with a difference · ⛔ not implemented
->
-> **Leyenda:** ✅ mismo comportamiento · ⚠️ funciona, con una diferencia · ⛔ no implementado
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      <b>Legend:</b> ✅ same behaviour · ⚠️ works, with a difference · ⛔ not implemented
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      <b>Leyenda:</b> ✅ mismo comportamiento · ⚠️ funciona, con una diferencia · ⛔ no implementado
+    </td>
+  </tr>
+</table>
 
 ### Protocol and architecture
 
@@ -278,10 +285,10 @@ sudo bash pysetup.sh --help   # or -h
 
 | isc-dhcp-server | pydhcp | Description | Descripción |
 |---|---|---|---|
-| `DHCPREQUEST for 192.168.0.50 (192.168.0.2) from aa:bb:cc:dd:ee:ff via enpXsX`<br>`DHCPACK on 192.168.0.50 to aa:bb:cc:dd:ee:ff (FOO) via enpXsX` | `REQUEST from aa:bb:cc:dd:ee:ff (FOO)`<br>`ACK aa:bb:cc:dd:ee:ff → 192.168.0.50 lease 2592000s` | Authorized client with static IP (renewal) | Cliente autorizado con dirección IP fija (renovación) |
-| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX`<br>`DHCPOFFER on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPREQUEST for 192.168.0.230 (192.168.0.2) from bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPACK on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`OFFER bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`REQUEST from bb:cc:dd:ee:ff:aa (BAR)`<br>`ACK bb:cc:dd:ee:ff:aa → 192.168.0.230 lease 60s` | Unknown client entering the block pool | Cliente desconocido ingresando al pool de bloqueo |
-| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`No IP for bb:cc:dd:ee:ff:aa -skip` | Pool exhausted | Pool agotado |
-| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER from bb:cc:dd:ee:ff:aa (BAR)`<br>`Blocked bb:cc:dd:ee:ff:aa -skip` | Blocked client — `isc-dhcp-server` reports it as a full pool | Cliente bloqueado — `isc-dhcp-server` lo reporta como pool lleno |
+| `DHCPREQUEST for 192.168.0.50 (192.168.0.2) from aa:bb:cc:dd:ee:ff via enpXsX`<br>`DHCPACK on 192.168.0.50 to aa:bb:cc:dd:ee:ff (FOO) via enpXsX` | `REQUEST aa:bb:cc:dd:ee:ff FOO`<br>`ACK aa:bb:cc:dd:ee:ff → 192.168.0.50 lease 2592000s` | Authorized client with static IP (renewal) | Cliente autorizado con dirección IP fija (renovación) |
+| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX`<br>`DHCPOFFER on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPREQUEST for 192.168.0.230 (192.168.0.2) from bb:cc:dd:ee:ff:aa (BAR) via enpXsX`<br>`DHCPACK on 192.168.0.230 to bb:cc:dd:ee:ff:aa (BAR) via enpXsX` | `DISCOVER bb:cc:dd:ee:ff:aa BAR`<br>`OFFER bb:cc:dd:ee:ff:aa → 192.168.0.230`<br>`REQUEST bb:cc:dd:ee:ff:aa BAR`<br>`ACK bb:cc:dd:ee:ff:aa → 192.168.0.230 lease 60s` | Unknown client entering the block pool | Cliente desconocido ingresando al pool de bloqueo |
+| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER bb:cc:dd:ee:ff:aa BAR`<br>`No IP for bb:cc:dd:ee:ff:aa -skip` | Pool exhausted | Pool agotado |
+| `DHCPDISCOVER from bb:cc:dd:ee:ff:aa via enpXsX: network 192.168.0.0/24: no free leases` | `DISCOVER bb:cc:dd:ee:ff:aa BAR`<br>`Blocked bb:cc:dd:ee:ff:aa -skip` | Blocked client — `isc-dhcp-server` reports it as a full pool | Cliente bloqueado — `isc-dhcp-server` lo reporta como pool lleno |
 
 > A pool with `deny members of "blockdhcp"` becomes invisible to that class, so `isc-dhcp-server` sees no lease available and logs the same message as a genuinely full pool. `pydhcpd` logs the real cause: `Blocked` or `No IP`.
 >
@@ -296,16 +303,9 @@ sudo bash pysetup.sh --help   # or -h
 | REQUEST selecting another server | PyDHCP ignores a REQUEST whose server identifier names another server, including in authoritative mode | PyDHCP ignora un REQUEST que identifica a otro servidor, incluso en modo autoritativo |
 | REQUEST for an unavailable address | PyDHCP can send NAK in authoritative mode. In non-authoritative mode it stays silent | PyDHCP puede responder NAK en modo autoritativo. En modo no autoritativo guarda silencio |
 
-<table width="100%">
-  <tr>
-    <td style="width: 50%; vertical-align: top;">
-      When migrating, explicitly use <code>not authoritative;</code> if this server must remain non-authoritative. PyDHCP handles the requests addressed to this server.
-    </td>
-    <td style="width: 50%; vertical-align: top;">
-      Durante la migración, añada <code>not authoritative;</code> si necesita conservar el modo no autoritativo. PyDHCP atiende las solicitudes dirigidas a este servidor.
-    </td>
-  </tr>
-</table>
+> When migrating, explicitly use `not authoritative;` if this server must remain non-authoritative. PyDHCP handles the requests addressed to this server.
+>
+> Durante la migración, añada `not authoritative;` si necesita conservar el modo no autoritativo. PyDHCP atiende las solicitudes dirigidas a este servidor.
 
 ### Pool leases per client
 
@@ -408,32 +408,36 @@ sudo bash pysetup.sh --help   # or -h
 
 ### Installer file handling
 
-| File | `--update` | `--uninstall` |
-|------|-----------|------------|
-| `pydhcpd.py` | ✅ overwritten | ✅ removed |
-| `pydns.py` | ✅ overwritten | ✅ removed |
-| `pydhcp-dns.service` | ✅ overwritten | ✅ removed |
-| `pydhcp-dns.path` | ✅ overwritten | ✅ removed |
-| `pydhcp-dns.timer` | ✅ overwritten | ✅ removed |
-| `pydhcpd.service` | ✅ overwritten | ✅ removed |
-| `init.d/pydhcpd` | ✅ overwritten | ✅ removed |
-| `tools/pybk.sh` | ✅ overwritten | ✅ removed (its cron entry is deregistered first) |
-| `tools/pyleases.sh` | ✅ overwritten | ✅ removed |
-| `tools/pydhcpenv.sh` | ✅ overwritten | ✅ removed |
-| `tools/pywebmin.sh` | ✅ overwritten | ✅ removed (also uninstalls the Webmin module, if installed) |
-| `pydhcpd.conf` | ⛔ preserved | ✅ removed |
-| `pydhcpd.leases` | ⛔ preserved | ✅ removed |
-| `pydhcp.env` | ⛔ preserved | ✅ removed |
-| `/var/log/pydhcp.log` (shared by the daemon, `tools/pyleases.sh` and `tools/pybk.sh`; `pysetup.sh` only creates it) | ⛔ preserved | ✅ removed |
-| `/etc/logrotate.d/pydhcp` | ✅ policy refreshed | ✅ removed |
-| system user/group `pydhcpd` | ⛔ preserved | ✅ removed |
-| `/etc/pydhcp/acl/blockdhcp.txt` (pydhcp's own block list) | ⛔ preserved; owner and mode repaired | ⛔ preserved |
-| `core/pydhcpd.conf.webmin.bak` (Webmin rollback copy) | ⛔ preserved | ✅ removed |
-| `/etc/bak/` (project backups written by `tools/pybk.sh`) | ⛔ preserved | ⛔ preserved |
-| `/etc/acl/` (administrator's own ACL lists) | ⛔ preserved; owner and mode of the folder and `mac-*.txt` repaired | ⛔ preserved |
-| `/var/www/wpad/wpad.pac` | ⛔ preserved | ✅ removed |
-| `wpad.conf` (Apache site) and its Listen line in `ports.conf` | ⛔ preserved | ✅ removed |
-| APT packages (installer packages and Apache) | ✅ missing ones installed | ⛔ preserved |
+| File | `--update` | `--uninstall` | Description | Descripción |
+|---|---|---|---|---|
+| `pydhcpd.py` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `pydns.py` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `pydhcp-dns.service` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `pydhcp-dns.path` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `pydhcp-dns.timer` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `pydhcpd.service` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `init.d/pydhcpd` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `tools/pybk.sh` | ✅ | ✅ | Overwritten on update; removed on uninstall, after its cron entry | Se sobrescribe al actualizar; se elimina al desinstalar, después de su entrada de cron |
+| `tools/pyleases.sh` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `tools/pydhcpenv.sh` | ✅ | ✅ | Overwritten on update; removed on uninstall | Se sobrescribe al actualizar; se elimina al desinstalar |
+| `tools/pywebmin.sh` | ✅ | ✅ | Overwritten on update; removed on uninstall, which also uninstalls the Webmin module if installed | Se sobrescribe al actualizar; se elimina al desinstalar, y también desinstala el módulo Webmin si existe |
+| `pydhcpd.conf` | ⛔ | ✅ | Preserved on update; removed on uninstall | Se conserva al actualizar; se elimina al desinstalar |
+| `pydhcpd.leases` | ⛔ | ✅ | Preserved on update; removed on uninstall | Se conserva al actualizar; se elimina al desinstalar |
+| `pydhcp.env` | ⛔ | ✅ | Preserved on update; removed on uninstall | Se conserva al actualizar; se elimina al desinstalar |
+| `/var/log/pydhcp.log` | ⛔ | ✅ | Shared by the daemon, `tools/pyleases.sh` and `tools/pybk.sh`; `pysetup.sh` only creates it. Preserved on update; removed on uninstall | Lo comparten el demonio, `tools/pyleases.sh` y `tools/pybk.sh`; `pysetup.sh` solo lo crea. Se conserva al actualizar; se elimina al desinstalar |
+| `/etc/logrotate.d/pydhcp` | ✅ | ✅ | Policy rewritten on update; removed on uninstall | La política se reescribe al actualizar; se elimina al desinstalar |
+| System user and group `pydhcpd` | ⛔ | ✅ | Preserved on update; removed on uninstall | Se conservan al actualizar; se eliminan al desinstalar |
+| `/etc/pydhcp/acl/blockdhcp.txt` | ⛔ | ⛔ | pydhcp's own block list. Preserved on update, with owner and mode repaired; preserved on uninstall | Lista de bloqueo propia de pydhcp. Se conserva al actualizar, con propietario y permisos reparados; se conserva al desinstalar |
+| `core/pydhcpd.conf.webmin.bak` | ⛔ | ✅ | Webmin rollback copy. Preserved on update; removed on uninstall | Copia de restauración de Webmin. Se conserva al actualizar; se elimina al desinstalar |
+| `/etc/bak/` | ⛔ | ⛔ | Project backups written by `tools/pybk.sh`. Always preserved | Respaldos del proyecto escritos por `tools/pybk.sh`. Siempre se conservan |
+| `/etc/acl/` | ⛔ | ⛔ | Administrator's own ACL lists. Preserved on update, with owner and mode of the folder and `mac-*.txt` repaired; preserved on uninstall | Listas ACL del administrador. Se conservan al actualizar, con propietario y permisos de la carpeta y de `mac-*.txt` reparados; se conservan al desinstalar |
+| `/var/www/wpad/wpad.pac` | ⛔ | ✅ | Preserved on update; removed on uninstall | Se conserva al actualizar; se elimina al desinstalar |
+| `wpad.conf` and its `Listen` line | ⛔ | ✅ | Apache site and its `Listen` line in `ports.conf`. Preserved on update; removed on uninstall | Sitio de Apache y su línea `Listen` en `ports.conf`. Se conservan al actualizar; se eliminan al desinstalar |
+| APT packages | ✅ | ⛔ | Installer packages and Apache. Missing ones are installed on update; preserved on uninstall | Paquetes del instalador y de Apache. Los que faltan se instalan al actualizar; se conservan al desinstalar |
+
+> ✅ the action changes the item: it overwrites, rewrites, installs or removes it. ⛔ the action keeps its content.
+>
+> ✅ la acción modifica el elemento: lo sobrescribe, lo reescribe, lo instala o lo elimina. ⛔ la acción conserva su contenido.
 
 > `/etc/acl` is never touched by `--uninstall`. It holds the administrator's own `mac-*.txt` lists, edited by hand, which `pydhcp` may or may not use depending on whether the optional `tools/pyleases.sh` tool is ever run — `pysetup.sh` creates the directory regardless, so uninstalling the daemon does not assume that data is safe to discard.
 >
@@ -485,10 +489,10 @@ sudo tail -f /var/log/pydhcp.log
 <table width="100%">
   <tr>
     <td style="width: 50%; vertical-align: top;">
-      Before selecting the LAN, the installer aborts if <code>bind9</code>, <code>pdns-recursor</code>, <code>isc-dhcp-server</code>, <code>kea-dhcp4-server</code> or <code>udhcpd</code> is installed, or if UDP 67 is in use. It warns if <code>dnsmasq</code> is installed. It also warns, without aborting, if the WPAD port (TCP 18800) is in use. The installer selects a LAN with an UP link and a global IPv4 address. With one candidate it selects it automatically; with several, it asks which to use and Enter selects the first. If that LAN has several IPv4 addresses, Enter also selects the first. The installer calculates subnet, mask and broadcast from its actual prefix. It then asks for the pool range, DNS1/DNS2 upstream servers, local domain, cleanup interval and optional WPAD deployment. DHCP advertises the selected server IP as DNS.
+      Before selecting the LAN, the installer aborts if <code>bind9</code>, <code>pdns-recursor</code>, <code>isc-dhcp-server</code>, <code>kea-dhcp4-server</code> or <code>udhcpd</code> is installed, or if UDP 67 is in use. It warns if <code>dnsmasq</code> is installed. It also warns, without aborting, if the WPAD port (TCP 18800) is in use. The installer lists the interfaces with an UP link and a global IPv4 address and asks which one is the LAN, even when there is only one. If that LAN has several IPv4 addresses, it asks which one to use. Enter does not select any option; an empty or invalid answer repeats the question. It shows the selected IPv4 settings and asks whether to keep them, or asks for a new static IPv4 and netmask. The installer calculates subnet, mask and broadcast from its actual prefix. It then asks for the pool range, DNS1/DNS2 upstream servers, local domain, cleanup interval and optional WPAD deployment. DHCP advertises the selected server IP as DNS.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Antes de seleccionar la LAN, el instalador aborta si están instalados <code>bind9</code>, <code>pdns-recursor</code>, <code>isc-dhcp-server</code>, <code>kea-dhcp4-server</code> o <code>udhcpd</code>, o si UDP 67 está en uso. Avisa si <code>dnsmasq</code> está instalado. También avisa, sin abortar, si el puerto de WPAD (TCP 18800) está en uso. El instalador selecciona una LAN con enlace UP e IPv4 global. Si existe una candidata, la selecciona automáticamente. Si existen varias, solicita una y Enter selecciona la primera. Si esa LAN tiene varias IPv4, Enter también selecciona la primera. Calcula subred, máscara y difusión desde su prefijo real. Después solicita el rango del pool, DNS1/DNS2 externos, dominio local, intervalo de limpieza y despliegue opcional de WPAD. DHCP anuncia la IP seleccionada del servidor como DNS.
+      Antes de seleccionar la LAN, el instalador aborta si están instalados <code>bind9</code>, <code>pdns-recursor</code>, <code>isc-dhcp-server</code>, <code>kea-dhcp4-server</code> o <code>udhcpd</code>, o si UDP 67 está en uso. Avisa si <code>dnsmasq</code> está instalado. También avisa, sin abortar, si el puerto de WPAD (TCP 18800) está en uso. El instalador enumera las interfaces con enlace UP e IPv4 global y pregunta cuál es la LAN, incluso si solo hay una. Si esa LAN tiene varias IPv4, pregunta cuál utilizar. Enter no selecciona ninguna opción; una respuesta vacía o inválida repite la pregunta. Muestra la configuración IPv4 elegida y pregunta si la conserva, o solicita una nueva IPv4 estática y su máscara. Calcula subred, máscara y difusión desde su prefijo real. Después solicita el rango del pool, DNS1/DNS2 externos, dominio local, intervalo de limpieza y despliegue opcional de WPAD. DHCP anuncia la IP seleccionada del servidor como DNS.
     </td>
   </tr>
 </table>
@@ -641,9 +645,16 @@ sudo ls -ld /etc/pydhcp /etc/pydhcp/core /etc/pydhcp/tools /run/pydhcp
 sudo ls -l /etc/pydhcp/core/ /etc/pydhcp/pydhcp.env /var/log/pydhcp.log
 ```
 
-Both `--install` and `--update` restore the defined ownership and modes. Existing configurations and leases retain their contents. Repairs are logged with `INFO: ... -fixed`. Unbound certificates and private keys retain their own permissions.
-
-Tanto `--install` como `--update` restauran los propietarios y permisos definidos. Las configuraciones y concesiones existentes conservan su contenido. Las reparaciones se registran con `INFO: ... -fixed`. Los certificados y claves privadas de Unbound conservan sus permisos propios.
+<table width="100%">
+  <tr>
+    <td style="width: 50%; vertical-align: top;">
+      Both <code>--install</code> and <code>--update</code> restore the defined ownership and modes. Existing configurations and leases retain their contents. Repairs are logged with <code>INFO: ... -fixed</code>. Unbound certificates and private keys retain their own permissions.
+    </td>
+    <td style="width: 50%; vertical-align: top;">
+      Tanto <code>--install</code> como <code>--update</code> restauran los propietarios y permisos definidos. Las configuraciones y concesiones existentes conservan su contenido. Las reparaciones se registran con <code>INFO: ... -fixed</code>. Los certificados y claves privadas de Unbound conservan sus permisos propios.
+    </td>
+  </tr>
+</table>
 
 | Path | Owner | Mode |
 |---|---|---|
@@ -664,7 +675,7 @@ Tanto `--install` como `--update` restauran los propietarios y permisos definido
 | Restart after failure | The unit uses `Restart=on-failure` and a five-second delay. Its start limit is ten attempts within 120 seconds | La unidad usa `Restart=on-failure` y espera cinco segundos entre intentos. Limita los arranques a diez intentos en 120 segundos |
 | `ping-check` | Enabled in the supplied configuration. Before an OFFER, it checks new dynamic addresses with ICMP. It skips static reservations and the client’s current address. Four workers handle at most 64 pending checks; saturation sends the OFFER without a check | Está activo en la configuración incluida. Antes de un OFFER, comprueba por ICMP las direcciones dinámicas nuevas. Omite reservas estáticas y la dirección actual del cliente. Cuatro hilos atienden hasta 64 comprobaciones pendientes. Si se saturan, envía el OFFER sin comprobar |
 | Ping timeout and cache | Default timeout: one second. Default cache: 120 seconds. If raw ICMP is denied, the daemon tries the system `ping` command | Tiempo de espera predeterminado: un segundo. Caché predeterminada: 120 segundos. Si se deniega ICMP raw, el demonio intenta utilizar el comando `ping` |
-| BPF filter | The daemon attempts to filter DHCP frames in the kernel. If attachment fails, it logs `BPF attach failed` and retains its userspace protocol and port checks | El demonio intenta filtrar las tramas DHCP en el kernel. Si falla, registra `BPF attach failed` y conserva las comprobaciones de protocolo y puerto en su bucle de recepción |
+| BPF filter | The daemon attempts to filter DHCP frames in the kernel. If attachment fails, it logs `WARNING: BPF attach failed, userspace filter -fallback` and retains its userspace protocol and port checks | El demonio intenta filtrar las tramas DHCP en el kernel. Si falla, registra `WARNING: BPF attach failed, userspace filter -fallback` y conserva las comprobaciones de protocolo y puerto en su bucle de recepción |
 | Cleanup | `cleanup-interval` schedules removal of expired records. Default: 60 seconds; values below five are raised to five. Address selection already excludes expired leases when checking whether an address is occupied | `cleanup-interval` programa la eliminación de registros vencidos. Su valor predeterminado es 60 segundos. Los valores inferiores a cinco se ajustan a cinco. La selección de direcciones ya ignora las concesiones vencidas al comprobar si una IP está ocupada |
 | Pool lease duration | The supplied pool uses 60 seconds. The installer asks for `CLEANUP_INTERVAL` and uses it for cleanup and all three pool lease timers. The generator does the same. Manually managed configurations can set these directives separately | El pool incluido utiliza 60 segundos. El instalador solicita `CLEANUP_INTERVAL`. Lo utiliza para la limpieza y los tres tiempos del pool. El generador hace lo mismo. Una configuración manual permite ajustar esas directivas por separado |
 | Quarantine | `abandon-lease-time` defaults to 60 seconds. It excludes an address after a positive ping check or an accepted DECLINE. DECLINE is ignored in the supplied configuration because `deny declines;` is set | `abandon-lease-time` utiliza 60 segundos por defecto. Excluye una dirección tras una respuesta ICMP positiva o un DECLINE aceptado. La configuración incluida ignora DECLINE porque contiene `deny declines;` |
@@ -815,7 +826,7 @@ sudo bash tools/pyleases.sh
       Creates <code>pybk_&lt;TIMESTAMP&gt;.zip</code> in <code>BACKUP_DIR</code>, which must be <code>/etc/bak/pydhcp</code>. It includes the installation tree, administrator MAC lists, pydhcp's blocked-MAC list, systemd units (<code>pydhcpd</code>, <code>pydhcp-dns</code>), Unbound configuration (<code>/etc/unbound</code>, <code>/etc/default/unbound</code>), DNS state (<code>/var/lib/pydhcp-dns</code>), init.d script, logrotate configuration, cron file and Webmin module. It also includes existing WPAD files and Apache’s <code>ports.conf</code>. Missing paths are skipped. The archive uses paths relative to <code>/</code>. It reads <code>BACKUP_DIR</code> from <code>pydhcp.env</code>. Any other value aborts before anything is created, written or deleted. The directory is exclusive to <code>pybk.sh</code>. After publishing the archive, the script deletes entries whose names do not match <code>pybk_*.zip</code> and keeps the three most recent archives.
     </td>
     <td style="width: 50%; vertical-align: top;">
-      Crea <code>pybk_&lt;TIMESTAMP&gt;.zip</code> en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la instalación, las listas MAC del administrador, la lista de MAC bloqueadas de pydhcp, la unidades systemd (<code>pydhcpd</code>, <code>pydhcp-dns</code>), la configuración de Unbound (<code>/etc/unbound</code>, <code>/etc/default/unbound</code>), el estado DNS (<code>/var/lib/pydhcp-dns</code>), el script init.d, logrotate, cron y el módulo Webmin. También incluye los archivos WPAD existentes y <code>ports.conf</code> de Apache. Omite las rutas ausentes. El comprimido utiliza rutas relativas a <code>/</code>. Lee <code>BACKUP_DIR</code> de <code>pydhcp.env</code>. Cualquier otro valor aborta antes de crear, escribir o borrar nada. El directorio es exclusivo de <code>pybk.sh</code>. Tras publicar el comprimido, el script elimina las entradas cuyo nombre no coincida con <code>pybk_*.zip</code> y conserva los tres comprimidos más recientes.
+      Crea <code>pybk_&lt;TIMESTAMP&gt;.zip</code> en <code>BACKUP_DIR</code>, que debe ser <code>/etc/bak/pydhcp</code>. Incluye la instalación, las listas MAC del administrador, la lista de MAC bloqueadas de pydhcp, las unidades systemd (<code>pydhcpd</code>, <code>pydhcp-dns</code>), la configuración de Unbound (<code>/etc/unbound</code>, <code>/etc/default/unbound</code>), el estado DNS (<code>/var/lib/pydhcp-dns</code>), el script init.d, logrotate, cron y el módulo Webmin. También incluye los archivos WPAD existentes y <code>ports.conf</code> de Apache. Omite las rutas ausentes. El comprimido utiliza rutas relativas a <code>/</code>. Lee <code>BACKUP_DIR</code> de <code>pydhcp.env</code>. Cualquier otro valor aborta antes de crear, escribir o borrar nada. El directorio es exclusivo de <code>pybk.sh</code>. Tras publicar el comprimido, el script elimina las entradas cuyo nombre no coincida con <code>pybk_*.zip</code> y conserva los tres comprimidos más recientes.
     </td>
   </tr>
 </table>
@@ -867,7 +878,7 @@ sudo bash tools/pyleases.sh
 
 | Feature | Description | Descripción |
 |---------|--------------|-------------|
-| **Installer messages** | The installer prints its messages to the terminal. | El instalador muestra sus mensajes en la terminal. |
+| **Installer messages** | The installer prints its messages to the terminal and writes them to `pywebmin.log`, beside the script. | El instalador muestra sus mensajes en la terminal y los escribe en `pywebmin.log`, junto al script. |
 | **Service control** | Buttons to start, stop, restart or reload the `pydhcpd` service. | Botones para iniciar, detener, reiniciar o recargar el servicio `pydhcpd`. |
 | **Active leases table** | Shows each active lease's IP address, MAC address, hostname, expiry and binding state. | Muestra la IP, la dirección MAC, el nombre de host, la fecha de expiración y el estado de cada concesión activa. |
 | **Config editor** | Edits `pydhcpd.conf` in the browser and validates it with `pydhcpd.py -t -cf` before saving. Changes with syntax errors are rejected. Before replacing the file, it attempts a backup as `pydhcpd.conf.webmin.bak`. The save proceeds after the backup attempt. Reload the daemon after saving. | Permite editar `pydhcpd.conf` desde el navegador y valida la sintaxis con `pydhcpd.py -t -cf` antes de guardar. Rechaza los cambios si hay errores. Antes de reemplazar el archivo, intenta crear `pydhcpd.conf.webmin.bak`. El guardado continúa después del intento de respaldo. Recargue el demonio después de guardar. |
@@ -982,7 +993,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 | `ERROR: absent.conf file not found -abort` | The configured file is missing. Startup aborts. | El archivo configurado no existe. El arranque se detiene. |
 | `ERROR: [1/2] host 02:00:00:00:00:01`<br>`ERROR: [2/2] invalid IP 999.999.999.999 -abort` | A static reservation contains an invalid IPv4 address. The first line identifies the MAC; the second gives the cause and aborts startup. | Una reserva fija contiene una dirección IPv4 inválida. La primera línea identifica la MAC; la segunda muestra la causa y detiene el arranque. |
 | `ERROR: DNS servers: 64 configured, max 63 -abort` | More than 63 DNS servers are configured. Startup aborts. | Hay más de 63 servidores DNS configurados. El arranque se detiene. |
-| `ERROR: [1/2] pool lease 61/60/60`<br>`ERROR: [2/2] require 0<min<=default<=max<2^32 -abort` | Pool lease times violate the minimum, default and maximum bounds. Startup aborts. | Los tiempos del pool incumplen los límites mínimo, predeterminado y máximo. El arranque se detiene. |
+| `ERROR: [1/2] pool lease-time 61/60/60`<br>`ERROR: [2/2] require 0<min<=default<=max<2^32 -abort` | Pool lease times violate the minimum, default and maximum bounds. Startup aborts. | Los tiempos del pool incumplen los límites mínimo, predeterminado y máximo. El arranque se detiene. |
 | `ERROR: server-identifier missing in config -abort` | `pydhcpd.conf` has no `server-identifier` | `pydhcpd.conf` no tiene `server-identifier` |
 | `ERROR: pydhcpd.leases: No space left on device -abort` | Disk full. Without saving leases no client gets an IP, so the daemon stops. Checked at startup and on every cleanup cycle | Disco lleno. Sin guardar concesiones ningún cliente recibe IP, así que el demonio se detiene. Se comprueba al arrancar y en cada ciclo de limpieza |
 | `ERROR: pydhcpd.leases: Read-only file system -abort` | Disk mounted read-only. Same check and same stop | Disco montado como solo lectura. Misma comprobación y misma parada |
@@ -1009,8 +1020,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 > Peticiones descartadas: una petición que el demonio no puede procesar se descarta. Solo ese cliente queda sin respuesta; los demás no se ven afectados. El motivo es uno de `missing field`, `invalid value`, `truncated packet` o `unexpected data`. Si las líneas se repiten, revise ese dispositivo.
 
 ```text
-2026-11-12 10:05:00 INFO: request from 11:22:33:44:55:66 discarded -skip
-2026-11-12 10:05:00 INFO: request discarded: missing field
+2026-11-12 10:05:00 INFO: 11:22:33:44:55:66 discarded: missing field -skip
 ```
 
 #### Client name limits
@@ -1043,7 +1053,7 @@ iptables -A OUTPUT -o $lan -p udp --sport 67 --dport 68 -j ACCEPT
 /etc/pydhcp/core/pydhcpd.leases                  # Active leases database
 /var/lib/pydhcp-dns/records.json                 # Managed local DNS records
 /var/lib/pydhcp-dns/publish.lock                 # DNS synchronization lock
-/etc/unbound/unbound.conf.d/forward.conf.bak     # Previous DNS configuration when --configure changes it
+/etc/unbound/unbound.conf.d/forward.conf.pydns.bak # Previous DNS configuration when --configure changes it
 /run/pydhcp/pydhcpd.pid                          # PID file, written by the daemon
                                                  # (systemd creates the directory)
 /etc/bak/pydhcp/pybk_<TIMESTAMP>.zip             # Selected paths archived by tools/pybk.sh, up to 3 kept
