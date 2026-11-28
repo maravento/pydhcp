@@ -22,15 +22,15 @@
 
 set -euo pipefail
 
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
+
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
 
 # Source directory (where this script lives) -- needed by the logging block
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -157,6 +157,74 @@ log() {
 # pydhcpd.py when it cannot open a raw ICMP socket. Installed by
 # install_deps in --install and --update.
 apt_deps=(python3-yaml python3 iproute2 passwd util-linux coreutils grep sed iputils-ping systemd findutils libc-bin zip cron curl logrotate perl ncurses-bin unbound openssl diffutils)
+
+# check ipv4 interfaces
+list_ifaces() {
+    ip -br link show 2>/dev/null | awk '$1 != "lo" {sub(/@.*/, "", $1); printf "%s %s\n", $1, ($2 == "UP") ? "UP" : "DOWN"}'
+}
+
+list_ipv4_ifaces() {
+    local iface state
+    while read -r iface state; do
+        [ "$state" = UP ] || continue
+        if ip -4 -o addr show dev "$iface" scope global 2>/dev/null \
+            | awk '$4 != "" {found=1} END {exit !found}'; then
+            printf '%s\n' "$iface"
+        fi
+    done < <(list_ifaces)
+}
+
+check_ipv4_interfaces() {
+    local max_attempts=24 attempt=1
+
+    while (( attempt <= max_attempts )); do
+        if [ -n "$(list_ipv4_ifaces)" ]; then
+            return 0
+        fi
+        if (( attempt == 1 )); then
+            log "INFO: waiting for an interface with IPv4..."
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    log "ERROR: no interface with IPv4 -abort"
+    exit 1
+}
+
+# check internet
+check_internet() {
+    local max_attempts=24 attempt=1
+
+    while (( attempt <= max_attempts )); do
+        if getent hosts www.google.com >/dev/null 2>&1; then
+            return 0
+        fi
+        if (( attempt == 1 )); then
+            log "INFO: waiting for internet..."
+        fi
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    log "ERROR: no internet connection -abort"
+    exit 1
+}
+
+check_static_lan() {
+    case "$(lan_ipv4_condition "$1" "$2")" in
+        static) return 0 ;;
+        dynamic)
+            err "[1/2] LAN $1: $2 uses DHCP"
+            err "[2/2] configure a static LAN IPv4 -abort"
+            ;;
+        *)
+            err "[1/2] LAN $1: $2"
+            err "[2/2] cannot verify persistent static IPv4 -abort"
+            ;;
+    esac
+    exit 1
+}
 
 # ------------------------------------------------------------------------------
 # VARIABLES
@@ -1029,59 +1097,6 @@ warn_wpad_port() {
     fi
 }
 
-# check ipv4 interfaces
-list_ifaces() {
-    ip -br link show 2>/dev/null | awk '$1 != "lo" {sub(/@.*/, "", $1); printf "%s %s\n", $1, ($2 == "UP") ? "UP" : "DOWN"}'
-}
-
-list_ipv4_ifaces() {
-    local iface state
-    while read -r iface state; do
-        [ "$state" = UP ] || continue
-        if ip -4 -o addr show dev "$iface" scope global 2>/dev/null \
-            | awk '$4 != "" {found=1} END {exit !found}'; then
-            printf '%s\n' "$iface"
-        fi
-    done < <(list_ifaces)
-}
-
-check_ipv4_interfaces() {
-    local max_attempts=24 attempt=1
-
-    while (( attempt <= max_attempts )); do
-        if [ -n "$(list_ipv4_ifaces)" ]; then
-            return 0
-        fi
-        if (( attempt == 1 )); then
-            log "INFO: waiting for an interface with IPv4..."
-        fi
-        attempt=$((attempt + 1))
-        sleep 5
-    done
-
-    log "ERROR: no interface with IPv4 -abort"
-    exit 1
-}
-
-# check internet
-check_internet() {
-    local max_attempts=24 attempt=1
-
-    while (( attempt <= max_attempts )); do
-        if getent hosts www.google.com >/dev/null 2>&1; then
-            return 0
-        fi
-        if (( attempt == 1 )); then
-            log "INFO: waiting for internet..."
-        fi
-        attempt=$((attempt + 1))
-        sleep 5
-    done
-
-    log "ERROR: no internet connection -abort"
-    exit 1
-}
-
 # DEPENDENCIES
 # Install the missing packages of apt_deps
 install_deps() {
@@ -1122,7 +1137,8 @@ choose_lan_interface() {
     (( ${#lan_candidates[@]} > 0 )) || {
         abort "no LAN interface available -abort"
     }
-    echo "Available LAN interfaces:"
+    echo ""
+    echo "==== Available LAN Interfaces ===="
     for iface_index in "${!lan_candidates[@]}"; do
         iface_name="${lan_candidates[$iface_index]}"
         iface_state=$(ip -br link show "$iface_name" | awk '{print $2}')
@@ -1133,6 +1149,7 @@ choose_lan_interface() {
         read -r -p "Select LAN Interface [1-${#lan_candidates[@]}]: " iface_choice || {
             abort "cannot read LAN interface selection -abort"
         }
+        echo ""
         if [[ "$iface_choice" =~ $UH_UINT ]] && [ "${#iface_choice}" -le 5 ] \
            && [ "$iface_choice" -ge 1 ] && [ "$iface_choice" -le "${#lan_candidates[@]}" ]; then
             lan_iface_answer="${lan_candidates[$((iface_choice - 1))]}"
@@ -1293,20 +1310,6 @@ lan_ipv4_condition() {
     printf 'unverified'
 }
 
-check_static_lan() {
-    case "$(lan_ipv4_condition "$1" "$2")" in
-        static) return 0 ;;
-        dynamic)
-            err "[1/2] LAN $1: $2 uses DHCP"
-            err "[2/2] configure a static LAN IPv4 -abort"
-            ;;
-        *)
-            err "[1/2] LAN $1: $2"
-            err "[2/2] cannot verify persistent static IPv4 -abort"
-            ;;
-    esac
-    exit 1
-}
 describe_lan_ipv4() {
     local cidr
     while read -r cidr; do
@@ -1834,7 +1837,8 @@ read_lan_ipv4() {
         lan_cidr_answer="${lan_addresses[0]}"
         return 0
     fi
-    echo "IPv4 addresses on LAN '$selected_iface':"
+    echo ""
+    echo "==== IPv4 Addresses on LAN '$selected_iface' ===="
     for ipv4_index in "${!lan_addresses[@]}"; do
         printf ' [%d] %s (%s)\n' "$((ipv4_index + 1))" \
             "${lan_addresses[$ipv4_index]}" \
@@ -1845,6 +1849,7 @@ read_lan_ipv4() {
         read -r -p "Select LAN IPv4 number: " ipv4_choice || {
             abort "cannot read LAN IPv4 selection -abort"
         }
+        echo ""
         if [[ "$ipv4_choice" =~ $UH_UINT ]] && [ "${#ipv4_choice}" -le 5 ] \
            && [ "$ipv4_choice" -ge 1 ] && [ "$ipv4_choice" -le "${#lan_addresses[@]}" ]; then
             lan_cidr_answer="${lan_addresses[$((ipv4_choice - 1))]}"
@@ -2512,9 +2517,9 @@ EOF
         || abort "cannot enable pydhcp-dns timer -abort"
     systemctl start pydhcp-dns.service || abort "cannot publish DNS names -abort"
     info "pydhcpd installed and running"
-    echo "Configuration : $core_dir/pydhcpd.conf"
-    echo "Interface : $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"
-    echo "Leases : $core_dir/pydhcpd.leases"
+    info "configuration in $core_dir/pydhcpd.conf"
+    info "interface $(grep INTERFACESv4 "$install_dir/pydhcp.env" | cut -d= -f2 | tr -d '"')"
+    info "leases in $core_dir/pydhcpd.leases"
 }
 
 # ------------------------------------------------------------------------------
@@ -2571,15 +2576,14 @@ show_menu() {
     local menu_option
     while true; do
         echo ""
-        echo "pydhcp installer"
-        echo "----------------"
+        echo "==== PyDHCP Installation Menu ===="
         echo "1) Install"
         echo "2) Update"
         echo "3) Uninstall"
         echo "4) Status"
         echo "5) Exit"
-        echo ""
         read -p "Select option [5]: " menu_option
+        echo ""
         menu_option="${menu_option:-5}"
         case "$menu_option" in
             1) do_install; break ;;

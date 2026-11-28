@@ -20,15 +20,15 @@
 
 set -euo pipefail
 
-# ------------------------------------------------------------------------------
-# REQUIREMENTS
-# ------------------------------------------------------------------------------
-
 # root check
 if [ "$(id -u)" != "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: This script must be run as root -abort" >&2
     exit 1
 fi
+
+# ------------------------------------------------------------------------------
+# REQUIREMENTS
+# ------------------------------------------------------------------------------
 
 # Help exits before logging
 show_usage() {
@@ -136,7 +136,7 @@ detect_local_user() {
 if ! local_user=$(detect_local_user); then
     abort "no local user; create one with sudo access -abort"
 fi
-log "INFO: using local user $local_user"
+info "using local user $local_user"
 
 # ------------------------------------------------------------------------------
 # VARIABLES
@@ -789,12 +789,12 @@ ICONEOF
         for webmin_account in root "$local_user"; do
             [ -z "$webmin_account" ] && continue
             if ! grep -qE "^${webmin_account}:" /etc/webmin/webmin.acl; then
-                log "INFO: no ${webmin_account} entry in webmin.acl -skip"
+                info "no ${webmin_account} entry in webmin.acl -skip"
                 continue
             fi
             grep -qE "^${webmin_account}:.*\b${module_name}\b" /etc/webmin/webmin.acl && continue
             sed -i "s/\(^${webmin_account}:.*\)/\1 ${module_name}/" /etc/webmin/webmin.acl
-            log "INFO: added module to webmin.acl for ${webmin_account}"
+            info "added module to webmin.acl for ${webmin_account}"
         done
         unset webmin_account
     else
@@ -807,16 +807,14 @@ ICONEOF
         warn "Webmin restart failed, reload it -alert"
     fi
 
-    log "INFO: PyDHCP Webmin module installed"
-    echo "module path $module_dir"
-    echo "config path $module_conf_dir"
-    echo "log out and back into Webmin to see module"
-    echo "module URL https://localhost:10000/pydhcp/"
+    info "module installed in $module_dir"
+    info "module config in $module_conf_dir"
+    info "module URL https://localhost:10000/pydhcp/"
 }
 
 uninstall_module() {
     if [ ! -d "$module_dir" ]; then
-        log "INFO: PyDHCP Webmin module is not installed"
+        info "PyDHCP Webmin module is not installed"
         return 0
     fi
 
@@ -843,7 +841,7 @@ uninstall_module() {
         warn "Webmin restart failed, reload it -alert"
     fi
 
-    log "INFO: PyDHCP Webmin module uninstalled"
+    info "PyDHCP Webmin module uninstalled"
 }
 
 # ------------------------------------------------------------------------------
@@ -851,16 +849,11 @@ uninstall_module() {
 # ------------------------------------------------------------------------------
 
 show_menu() {
-    clear
-    echo "============================================================"
-    echo "PyDHCP - WEBMIN MODULE"
-    echo "Installation Menu"
-    echo "============================================================"
     echo ""
+    echo "==== PyDHCP Webmin Installation Menu ===="
     echo "1) Install module"
     echo "2) Uninstall module"
     echo "3) Exit"
-    echo ""
     echo -n "Select an option [1-3] [3]: "
 }
 
@@ -893,6 +886,7 @@ main() {
     while true; do
         show_menu
         read -r menu_option
+        echo ""
         menu_option="${menu_option//[[:space:]]/}"
         [[ -z "$menu_option" ]] && menu_option="3"
         case $menu_option in
